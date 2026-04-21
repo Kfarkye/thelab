@@ -243,8 +243,8 @@ async function queryCandidateMatches(identifier: string, limit: number): Promise
 
   return rows
     .map((row: any) => toResolverMatch(exactIdentifier, row.toJSON() as Record<string, unknown>))
-    .filter((entry) => entry.candidate_id.length > 0)
-    .sort((a, b) => b.confidence - a.confidence);
+    .filter((entry: any) => entry.candidate_id.length > 0)
+    .sort((a: any, b: any) => b.confidence - a.confidence);
 }
 
 export function resolveBaseUrlFromHeaders(headers: Pick<Headers, "get">): string | null {
