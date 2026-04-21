@@ -2805,29 +2805,33 @@ function LeftPanel({
                                 </span>
                               </>
                             )}
-                            {item.rcThreadUrl && (
-                              <a
-                                href={item.rcThreadUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="aya-rc-badge"
-                                onClick={e => e.stopPropagation()}
-                                title="Open SMS Thread"
-                              >
-                                SMS ↗
-                              </a>
-                            )}
-                            {item.outlookThreadUrl && (
-                              <a
-                                href={item.outlookThreadUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="aya-outlook-badge"
-                                onClick={e => e.stopPropagation()}
-                                title="Open Outlook Thread"
-                              >
-                                Email ↗
-                              </a>
+                            {(item.rcThreadUrl || item.outlookThreadUrl) && (
+                              <div className="aya-card-badges">
+                                {item.rcThreadUrl && (
+                                  <a
+                                    href={item.rcThreadUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="aya-rc-badge"
+                                    onClick={e => e.stopPropagation()}
+                                    title="Open SMS Thread"
+                                  >
+                                    SMS ↗
+                                  </a>
+                                )}
+                                {item.outlookThreadUrl && (
+                                  <a
+                                    href={item.outlookThreadUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="aya-outlook-badge"
+                                    onClick={e => e.stopPropagation()}
+                                    title="Open Outlook Thread"
+                                  >
+                                    Email ↗
+                                  </a>
+                                )}
+                              </div>
                             )}
                           </div>
                           {/* Ghost action bar — visible on hover */}

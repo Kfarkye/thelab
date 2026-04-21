@@ -2533,9 +2533,15 @@ body {
   cursor: not-allowed;
 }
 
-.aya-rc-badge {
-  display: inline-block;
+.aya-card-badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
   margin-top: 4px;
+}
+
+.aya-rc-badge {
+  display: inline-flex;
   padding: 2px 6px;
   background-color: rgba(65, 137, 246, 0.1);
   color: #4189f6;
@@ -2544,7 +2550,6 @@ body {
   font-size: 10px;
   font-weight: 600;
   text-decoration: none;
-  width: fit-content;
   transition: all 0.2s ease;
 }
 
@@ -2554,9 +2559,7 @@ body {
 }
 
 .aya-outlook-badge {
-  display: inline-block;
-  margin-top: 4px;
-  margin-left: 6px;
+  display: inline-flex;
   padding: 2px 6px;
   background-color: rgba(0, 120, 212, 0.1);
   color: #0078d4;
@@ -2565,7 +2568,6 @@ body {
   font-size: 10px;
   font-weight: 600;
   text-decoration: none;
-  width: fit-content;
   transition: all 0.2s ease;
 }
 
