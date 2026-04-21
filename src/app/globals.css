@@ -2533,6 +2533,26 @@ body {
   cursor: not-allowed;
 }
 
+.aya-rc-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 6px;
+  background-color: rgba(65, 137, 246, 0.1);
+  color: #4189f6;
+  border: 1px solid rgba(65, 137, 246, 0.2);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-decoration: none;
+  width: fit-content;
+  transition: all 0.2s ease;
+}
+
+.aya-rc-badge:hover {
+  background-color: rgba(65, 137, 246, 0.2);
+  color: #fff;
+}
+
 /* ── Center Header (simplified) ─── */
 .c-header {
   display: flex;
