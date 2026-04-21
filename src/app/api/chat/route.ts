@@ -1823,7 +1823,7 @@ candidate_name="${resolvedName}"
 candidate_email="${resolvedEmail}"
 current_bucket="${currentBucket}"
 context_source="${contextSource}"
-If the user requests a write action, use candidate_id directly before any name lookup.]`;
+CRITICAL: When candidate_id is provided above, you MUST pass it directly to write tools (update_candidate_status, add_candidate_note, create_com_draft_email, update_candidate_profession). Do NOT call access_hub first — the candidate is already resolved. Call the write tool immediately with candidate_id="${authoritativeCandidateId}".]`;
     }
 
     // Inject grounded UI context if available (thread or inferred candidate)
