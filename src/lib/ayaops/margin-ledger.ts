@@ -388,13 +388,20 @@ function buildMarginObjectIdentity(input: {
   rowIndex: number;
   recordPhase: RecordPhase;
 }): { objectId: string; sourceRecordType: string; confidence: number } {
-  // Job phase: no candidate, identity is purely job-based
+  // Job phase: no candidate, identity is purely job-based, but must respect multiple margins per job
   if (input.recordPhase === "job") {
+    if (input.marginId) {
+      return {
+        objectId: `AYA.OBJ.JOB.${toToken(input.jobId || "NO_JOB")}.MARGIN.${toToken(input.marginId)}`,
+        sourceRecordType: "job_margin_listing",
+        confidence: 1,
+      };
+    }
     if (input.jobId) {
       return {
         objectId: `AYA.OBJ.JOB.${toToken(input.jobId)}`,
         sourceRecordType: "job_listing",
-        confidence: 1,
+        confidence: 0.95,
       };
     }
     if (input.facilityName && input.profession) {

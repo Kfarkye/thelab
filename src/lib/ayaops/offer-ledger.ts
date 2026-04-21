@@ -283,6 +283,7 @@ function parseNovaProfileUrl(
 }
 
 function buildOfferIdentity(input: {
+  nativeOfferId: string | null;
   candidateId: string | null;
   candidateName: string | null;
   jobId: string | null;
@@ -291,18 +292,28 @@ function buildOfferIdentity(input: {
   profession: string | null;
   rowIndex: number;
 }): { offerId: string; confidence: number; sourceRecordType: string } {
-  if (input.candidateId && input.jobId) {
+  if (input.nativeOfferId) {
     return {
-      offerId: `AYA.OBJ.OFFER.${toToken(input.candidateId)}.${toToken(input.jobId)}`,
+      offerId: `AYA.OBJ.OFFER.${toToken(input.nativeOfferId)}`,
       confidence: 1,
-      sourceRecordType: "candidate_job",
+      sourceRecordType: "native_offer_id",
     };
   }
+
+  // A specific Margin ID is attached to the Offer, making it more specific than Job ID.
   if (input.candidateId && input.marginId) {
     return {
       offerId: `AYA.OBJ.OFFER.${toToken(input.candidateId)}.${toToken(input.marginId)}`,
-      confidence: 0.98,
+      confidence: 0.99,
       sourceRecordType: "candidate_margin",
+    };
+  }
+
+  if (input.candidateId && input.jobId) {
+    return {
+      offerId: `AYA.OBJ.OFFER.${toToken(input.candidateId)}.${toToken(input.jobId)}`,
+      confidence: 0.98,
+      sourceRecordType: "candidate_job",
     };
   }
   if (input.candidateName && input.facilityName && input.profession) {
@@ -411,6 +422,7 @@ function normalizeOfferRow(record: Record<string, unknown>, rowIndex: number): N
   const novaProfileUrl = parseNovaProfileUrl(record, candidateId);
 
   const identity = buildOfferIdentity({
+    nativeOfferId: readString(record.offer_id || record.offerId || record.id) || null,
     candidateId,
     candidateName,
     jobId,
