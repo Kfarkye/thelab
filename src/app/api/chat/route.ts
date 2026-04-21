@@ -131,7 +131,12 @@ The user is in Pacific Time (PT / America/Los_Angeles).
 Your expertise: travel nurse assignments, candidate compliance status, facility credentialing, pay packages, assignment timelines, specialty matching, and recruiter workflows.
 
 READ PATH (default):
-- Candidate reads and summaries are grounded from canonical URL data sources (for example: /c/{candidateId} pages indexed by Vertex AI Search).
+- Candidate reads and summaries are grounded from URL sources, not ad-hoc candidate search.
+- Dynamic resolver hub:
+  - /api/grounding/c/{id_or_name} → canonical candidate grounding payload.
+  - /api/grounding/search?q={name} → disambiguation list when name matches multiple candidates.
+- Candidate profile page:
+  - /c/{candidateId} → canonical human-readable page for the same record.
 - Prefer grounded URL facts/citations over assumptions.
 - Do not ask the user to paste raw JSON if grounded candidate context is available.
 
@@ -144,18 +149,22 @@ WRITE PATH (mutation only):
 
 MANDATORY RULES:
 1. Reads come from grounded URL retrieval. Writes go through write tools.
-2. Never simulate tool calls. If a write is requested, execute the real write tool.
-3. For status-change requests, call update_candidate_status and ground confirmation in returned write payload.
-4. For note/save/log requests, call add_candidate_note and ground confirmation in returned write payload.
-5. Only call create_com_draft_email when the user explicitly asks to save/log/store a draft in-system.
+2. Resolve identity via URL hub before asking the user for IDs:
+   - Try /api/grounding/c/{id_or_name} first.
+   - If ambiguous, use /api/grounding/search?q={name} and present options.
+   - Once resolved, reuse candidate_id for all tools in that turn.
+3. If selected candidate context is present, treat it as authoritative unless user names a different candidate.
+4. If candidate context is active and user says "him/her/them", reuse that candidate context for writes.
+5. Never simulate tool calls. If a write is requested, execute the real write tool.
+6. For status-change requests, call update_candidate_status and ground confirmation in returned write payload.
+7. For note/save/log requests, call add_candidate_note and ground confirmation in returned write payload.
+8. Only call create_com_draft_email when the user explicitly asks to save/log/store a draft in-system.
    If they only want wording/copy, return plain draft text with no write tool.
-6. For profession/specialty changes, call update_candidate_profession and ground confirmation in returned write payload.
-7. If selected candidate context is present, treat it as authoritative unless user names a different candidate.
-8. If candidate context is active and user says "him/her/them", reuse that candidate context for writes.
-9. For copy/paste-ready drafts, never use markdown blockquotes (">") and do not wrap draft text in quotation marks.
-10. Unless user asks for variants, provide one best draft.
-11. When RingCentral SMS thread payload is provided, treat it as communications ingest and preserve raw thread details in write summary.
-12. Use markdown formatting. Be direct and operational.`,
+9. For profession/specialty changes, call update_candidate_profession and ground confirmation in returned write payload.
+10. For copy/paste-ready drafts, never use markdown blockquotes (">") and do not wrap draft text in quotation marks.
+11. Unless user asks for variants, provide one best draft.
+12. When RingCentral SMS thread payload is provided, treat it as communications ingest and preserve raw thread details in write summary.
+13. Use markdown formatting. Be direct and operational.`,
 };
 
 const WORLDCUP_WRITEUP_BASE_URL = String(process.env.WORLDCUP_WRITEUP_BASE_URL || "https://thedrip.bet/worldcup")
@@ -840,6 +849,8 @@ function inferCandidateUrlInput(input: {
   if (selected) return selected;
   const fromUi = readString(input.uiContext?.candidateId);
   if (fromUi) return fromUi;
+  const fromUiName = readString(input.uiContext?.candidateName);
+  if (fromUiName) return fromUiName;
   const promptText = String(input.prompt || "");
 
   const uuidMatch = promptText.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i);
@@ -848,10 +859,35 @@ function inferCandidateUrlInput(input: {
   const novaMatch = promptText.match(/\b\d{6,10}\b/);
   if (novaMatch) return novaMatch[0];
 
+  const fromPromptName = inferCandidateNameFromPrompt(promptText);
+  if (fromPromptName) return fromPromptName;
+
   const fromHistory = inferCandidateInputFromHistory(input.history);
   if (fromHistory) return fromHistory;
 
   return "";
+}
+
+function inferCandidateNameFromPrompt(prompt: string): string {
+  const normalized = readString(prompt)?.replace(/\s+/g, " ") || "";
+  if (!normalized) return "";
+
+  const byVerb = normalized.match(
+    /\b(?:look up|pull up|find|get|show|summarize|open|status(?: of)?|move|update|draft)\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on)\b|[?.!,]|$)/i,
+  );
+  const byCandidate = normalized.match(
+    /\bcandidate\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on)\b|[?.!,]|$)/i,
+  );
+
+  const candidatePhrase = readString(byVerb?.[1] || byCandidate?.[1]) || "";
+  if (!candidatePhrase) return "";
+
+  const lowered = candidatePhrase.toLowerCase();
+  if (["him", "her", "them", "this candidate", "that candidate", "candidate"].includes(lowered)) {
+    return "";
+  }
+
+  return candidatePhrase;
 }
 
 function inferCandidateInputFromHistory(history?: { role: string; text: string }[]): string {
@@ -889,14 +925,21 @@ function inferCandidateInputFromHistory(history?: { role: string; text: string }
   return "";
 }
 
-function buildCanonicalCandidateSourceUrl(request: NextRequest, candidateInput: string): string | null {
+function buildCandidateGroundingResolverUrl(request: NextRequest, candidateInput: string): string | null {
+  const host = readString(request.headers.get("x-forwarded-host")) || readString(request.headers.get("host"));
+  if (!host) return null;
+  const protocol = readString(request.headers.get("x-forwarded-proto")) || "https";
+  return `${protocol}://${host}/api/grounding/c/${encodeURIComponent(candidateInput)}`;
+}
+
+function buildCandidateGroundingPageUrl(request: NextRequest, candidateInput: string): string | null {
   const host = readString(request.headers.get("x-forwarded-host")) || readString(request.headers.get("host"));
   if (!host) return null;
   const protocol = readString(request.headers.get("x-forwarded-proto")) || "https";
   return `${protocol}://${host}/c/${encodeURIComponent(candidateInput)}`;
 }
 
-function extractCandidateGroundingJson(html: string): string | null {
+function extractCandidateGroundingJsonFromPage(html: string): string | null {
   const match = html.match(/<script[^>]*id=["']candidate-grounding-json["'][^>]*>([\s\S]*?)<\/script>/i);
   if (!match) return null;
   const parsed = readString(match[1]);
@@ -904,6 +947,20 @@ function extractCandidateGroundingJson(html: string): string | null {
   try {
     JSON.parse(parsed);
     return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function extractCandidateGroundingJsonFromHub(payload: unknown): string | null {
+  const parsed = asJsonRecord(payload);
+  const candidate = asJsonRecord(parsed?.candidate);
+  if (!candidate) return null;
+  const serialized = JSON.stringify(candidate);
+  if (!serialized) return null;
+  try {
+    JSON.parse(serialized);
+    return serialized;
   } catch {
     return null;
   }
@@ -1767,32 +1824,81 @@ Rule: If the user asks to "draft a reply", "update status", or references "this 
         prompt,
         history,
       });
-      const candidateSourceUrl =
+      const candidateResolverUrl =
         candidateUrlInput.length > 0
-          ? buildCanonicalCandidateSourceUrl(request, candidateUrlInput)
+          ? buildCandidateGroundingResolverUrl(request, candidateUrlInput)
           : null;
 
-      if (candidateSourceUrl) {
+      if (candidateResolverUrl) {
         try {
-          const sourceResponse = await fetch(candidateSourceUrl, {
+          const resolverResponse = await fetch(candidateResolverUrl, {
             cache: "no-store",
             headers: { "User-Agent": "thelab-candidate-grounding-fetch/1.0" },
           });
-          if (sourceResponse.ok) {
-            const sourceHtml = await sourceResponse.text();
-            const sourceJson = extractCandidateGroundingJson(sourceHtml);
+
+          if (resolverResponse.ok) {
+            const resolverPayload = (await resolverResponse.json()) as Record<string, unknown>;
+            const sourceJson = extractCandidateGroundingJsonFromHub(resolverPayload);
+            const resolvedIdentifier = asJsonRecord(resolverPayload.resolved_identifier);
+            const resolvedCandidateId = readString(resolvedIdentifier?.candidate_id) || "";
+            const resolvedName = readString(resolvedIdentifier?.display_name) || "";
+            const actionUrl = readString(resolverPayload.action_url) || "";
             if (sourceJson) {
               fullPrompt = `${fullPrompt}
 
-[System note: Canonical candidate URL grounding was loaded for this turn.
-source_url="${candidateSourceUrl}"
+[System note: Dynamic candidate grounding hub resolved candidate context for this turn.
+resolver_url="${candidateResolverUrl}"
+resolved_candidate_id="${resolvedCandidateId}"
+resolved_candidate_name="${resolvedName}"
+action_url="${actionUrl}"
 Use this JSON as authoritative candidate read context:
 ${sourceJson}]`;
             }
+          } else if (resolverResponse.status === 409) {
+            const resolverPayload = (await resolverResponse.json()) as Record<string, unknown>;
+            const candidates = Array.isArray(resolverPayload.candidates)
+              ? resolverPayload.candidates
+                  .map((entry) => {
+                    const record = asJsonRecord(entry);
+                    const name = readString(record?.display_name) || "Unknown Candidate";
+                    const candidateId = readString(record?.candidate_id) || "";
+                    const novaId = readString(record?.nova_id) || "";
+                    return `${name}${candidateId ? ` (candidate_id: ${candidateId})` : ""}${novaId ? ` (nova_id: ${novaId})` : ""}`;
+                  })
+                  .filter(Boolean)
+                  .slice(0, 5)
+              : [];
+            if (candidates.length > 0) {
+              fullPrompt = `${fullPrompt}
+
+[System note: Candidate resolver found multiple matches for "${candidateUrlInput}".
+Do not guess. Ask the user to pick one of these:
+- ${candidates.join("\n- ")}]`;
+            }
           } else {
             console.warn(
-              `[candidate_url_grounding] non-200 response for ${candidateSourceUrl}: ${sourceResponse.status}`,
+              `[candidate_url_grounding] non-200 response for ${candidateResolverUrl}: ${resolverResponse.status}`,
             );
+
+            const candidatePageUrl = buildCandidateGroundingPageUrl(request, candidateUrlInput);
+            if (candidatePageUrl) {
+              const pageResponse = await fetch(candidatePageUrl, {
+                cache: "no-store",
+                headers: { "User-Agent": "thelab-candidate-grounding-fetch/1.0" },
+              });
+              if (pageResponse.ok) {
+                const pageHtml = await pageResponse.text();
+                const pageJson = extractCandidateGroundingJsonFromPage(pageHtml);
+                if (pageJson) {
+                  fullPrompt = `${fullPrompt}
+
+[System note: Canonical candidate URL grounding was loaded from page fallback.
+source_url="${candidatePageUrl}"
+Use this JSON as authoritative candidate read context:
+${pageJson}]`;
+                }
+              }
+            }
           }
         } catch (sourceErr) {
           console.warn("[candidate_url_grounding] fetch failed:", sourceErr);

@@ -79,6 +79,24 @@ The system has abandoned complex custom RAG pipelines in favor of a strictly sim
 4. **AI Grounds**: Vertex AI Website Data Store natively crawls those URLs and implicitly grounds the chat model context.
 5. **Agent Completes**: The browser agent saves task outcomes/evidence back to the Chat/DB.
 
+### URL Hub — Universal Resource Resolver (New Architecture)
+The Lab operates as a **Headless Operating System**. The AI does not query databases — it navigates a RESTful Knowledge Graph via `access_hub`.
+
+**Design principles:**
+- **URL > Database**: Every entity (candidate, template, facility, job) has a canonical URL. The URL is the product.
+- **One discovery tool**: `access_hub({ path: "candidates/Fontaine" })` resolves any entity. No entity-specific query tools.
+- **Five consumers**: LLM (grounding), Browser Agent (clicks), Human (UI links), Public (SEO), Other Bots (APIs).
+- **HATEOAS links**: Every resolved resource returns action links that tell the AI what execution tools to call next.
+- **Browser Agent bridge**: The Google commercial browser agent navigates Nova and external systems via URLs returned by the Hub. It does not distinguish between The Lab and Aya's system — the URL is the seamless bridge.
+
+**See `AGENTS.md` for hard rules, tool schema, and response format.**
+
+**Key files:**
+- `src/lib/resolver/index.ts` — Core resolve router
+- `src/lib/resolver/candidate-resolver.ts` — Spanner fuzzy match + identity block
+- `src/lib/resolver/template-resolver.ts` — Template catalog resolution
+- `src/app/api/hub/route.ts` — POST endpoint backing `access_hub`
+
 
 ```
 src/
@@ -115,7 +133,14 @@ src/
 │   ├── ayaops/
 │   │   ├── margin-ledger.ts           ← Margin/job-board billing engine
 │   │   ├── offer-ledger.ts            ← Offer lifecycle management
-│   │   └── ringcentral-ledger.ts      ← Call/SMS tracking
+│   │   ├── ringcentral-ledger.ts      ← Call/SMS tracking
+│   │   └── template-catalog.ts        ← Template registry + validation + extraction
+│   ├── resolver/                       ← URL Hub resolution layer
+│   │   ├── index.ts                   ← Core resolve(entity, identifier) router
+│   │   ├── candidate-resolver.ts      ← Spanner fuzzy match + identity block
+│   │   ├── template-resolver.ts       ← Template catalog search
+│   │   ├── facility-resolver.ts       ← Facility resolution
+│   │   └── links.ts                   ← HATEOAS link generator
 │   ├── licensing/
 │   │   ├── fee-ledger.ts              ← Licensing fee tracking
 │   │   ├── research-ledger.ts         ← State licensing research engine
@@ -307,14 +332,14 @@ These files were modified/created in this session and are NOT yet committed:
 
 ## Top Tasks (Priority Order)
 
-1. **Commit + push** all uncommitted changes to clean the working tree
-2. **Apply DDL** — run `threads-ingest.sql` then `candidates-patch.sql` against recruitingdb
-3. **Build the manual review UI** for threads with `status: ambiguous`
-4. **Migrate legacy `spanner.ts` callers** to use `spanner-pool.ts`
-5. **Decompose `page.tsx`** — extract `LeftPanel`, `GameCard`, `WorldCupAccordion`, `ChatMessages`
-6. **Reconcile CSS** — remove dead `gx-*` block, consolidate under card geometry system
-7. **AyaOps write tools** — `update_candidate_status`, `add_compliance_note` with scoped IAM
-8. **Mobile breakpoints** — sweep stale responsive rules in `globals.css`
+1. **Build URL Hub** — `src/lib/resolver/` + `src/app/api/hub/route.ts` + `access_hub` tool declaration in `route.ts`
+2. **Wire candidate resolution** — Spanner fuzzy match in `candidate-resolver.ts`, return Nova URLs + identity blocks
+3. **Wire template resolution** — Search template catalog via Hub path
+4. **UI Sync** — `onToolResult` hook in ChatProvider: when `access_hub` resolves a candidate, update the Artifact Canvas
+5. **System prompt restructure** — Change from tool-list to Navigator protocol
+6. **Apply DDL** — run `threads-ingest.sql` then `candidates-patch.sql` against recruitingdb
+7. **Decompose `page.tsx`** — extract `LeftPanel`, `GameCard`, `WorldCupAccordion`, `ChatMessages`
+8. **Migrate legacy `spanner.ts` callers** to use `spanner-pool.ts`
 
 ---
 

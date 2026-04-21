@@ -34,6 +34,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        <link rel="search" type="application/json" href="/api/grounding/search" title="Candidate Hub" />
+        <meta name="ai-grounding-path" content="/api/grounding/c/[identifier]" />
+      </head>
       <body>
         <AuthProvider>
           {children}
