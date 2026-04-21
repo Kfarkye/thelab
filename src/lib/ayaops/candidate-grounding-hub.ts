@@ -204,24 +204,6 @@ async function queryCandidateMatches(identifier: string, limit: number): Promise
 
   const [rows] = await db.run({
     sql: `
-      WITH latest_assignments AS (
-        SELECT
-          candidate_id,
-          status,
-          ROW_NUMBER() OVER (
-            PARTITION BY candidate_id
-            ORDER BY
-              CASE
-                WHEN LOWER(status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
-                WHEN LOWER(status) IN ('completed', 'cancelled') THEN 1
-                ELSE 2
-              END,
-              COALESCE(end_date, '9999-12-31') DESC,
-              COALESCE(start_date, '0001-01-01') DESC,
-              id DESC
-          ) AS rn
-        FROM hc_assignments
-      )
       SELECT
         c.id,
         c.nova_id,
@@ -230,11 +212,22 @@ async function queryCandidateMatches(identifier: string, limit: number): Promise
         c.specialty,
         c.rc_thread_url,
         c.outlook_thread_url,
-        la.status AS assignment_status
+        (
+          SELECT a.status
+          FROM hc_assignments a
+          WHERE a.candidate_id = c.id
+          ORDER BY
+            CASE
+              WHEN LOWER(a.status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
+              WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 1
+              ELSE 2
+            END,
+            COALESCE(a.end_date, '9999-12-31') DESC,
+            COALESCE(a.start_date, '0001-01-01') DESC,
+            a.id DESC
+          LIMIT 1
+        ) AS assignment_status
       FROM hc_candidates c
-      LEFT JOIN latest_assignments la
-        ON la.candidate_id = c.id
-        AND la.rn = 1
       WHERE
         LOWER(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) LIKE @likeIdentifier
         OR LOWER(COALESCE(c.first_name, '')) = @exactIdentifier
