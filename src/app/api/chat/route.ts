@@ -5,6 +5,7 @@ import type { CandidateRecord, RetrievalPolicy, InternalContext } from "@/lib/ty
 import { routeRequest, MODEL_META, type ModelId } from "@/lib/router/model-router";
 import { callClaude } from "@/lib/providers/claude";
 import { DB_TOOL_DECLARATIONS, executeDbTool } from "@/lib/spanner/tools";
+import { resolve as resolveHub } from "@/lib/resolver";
 import { getEvidenceInlineData } from "@/lib/evidence/store";
 import {
   STRICT_TOOL_CALL_SYSTEM_MESSAGE,
@@ -59,6 +60,24 @@ const AYAOPS_WRITE_TOOL_NAMES = new Set([
 const AYAOPS_WRITE_TOOL_DECLARATIONS = DB_TOOL_DECLARATIONS.filter((tool) =>
   AYAOPS_WRITE_TOOL_NAMES.has(String((tool as { name?: unknown }).name || "")),
 );
+
+// ── URL Hub Tool Declaration ────────────────────────────────────
+const ACCESS_HUB_DECLARATION = {
+  name: "access_hub",
+  description:
+    "Access the Data Hub to resolve any entity — candidates, templates, facilities, jobs. Returns identity block + canonical URLs + available actions. Path format: '{entity}/{identifier}' e.g. 'candidates/Fontaine' or 'templates/initial-outreach'. The identifier can be a name, ID, or search term.",
+  parameters: {
+    type: "object" as const,
+    properties: {
+      path: {
+        type: "string" as const,
+        description:
+          "Hub path, e.g. 'candidates/Fontaine', 'templates/initial-outreach', 'facilities/Rush'",
+      },
+    },
+    required: ["path"],
+  },
+};
 
 // --- Context Caching (Gemini only) ---
 const cacheStore = new Map<string, { name: string; expireTime: number }>();
@@ -2625,9 +2644,12 @@ Return only operational summary: save status, link status, and next best action.
           },
         },
         {
-          functionDeclarations: enableAyaopsSandbox
-            ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...SANDBOX_TOOL_DECLARATIONS]
-            : AYAOPS_WRITE_TOOL_DECLARATIONS,
+          functionDeclarations: [
+            ACCESS_HUB_DECLARATION,
+            ...(enableAyaopsSandbox
+              ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...SANDBOX_TOOL_DECLARATIONS]
+              : AYAOPS_WRITE_TOOL_DECLARATIONS),
+          ],
         },
       ];
       if (allowExternalGroundingInAyaops) {
@@ -2824,6 +2846,7 @@ Return only operational summary: save status, link status, and next best action.
               "create_com_draft_email",
             ]);
             const allowedAyaopsTools = new Set<string>([
+              "access_hub",
               ...declaredToolNames,
               ...SANDBOX_TOOL_NAMES,
             ]);
@@ -2962,7 +2985,13 @@ Return only operational summary: save status, link status, and next best action.
                     continue;
                   } else {
                     try {
-                      toolResult = await executeDbTool(name, toolArgs);
+                      if (name === "access_hub") {
+                        const hubPath = typeof toolArgs.path === "string" ? toolArgs.path : "";
+                        const hubResult = await resolveHub(hubPath);
+                        toolResult = { result: hubResult };
+                      } else {
+                        toolResult = await executeDbTool(name, toolArgs);
+                      }
                     } catch (toolErr) {
                       console.error(`[db_tool] ${name} FAILED:`, toolErr);
                       toolResult = {
