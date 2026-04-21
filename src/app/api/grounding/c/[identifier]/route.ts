@@ -58,13 +58,15 @@ export async function GET(
   const { resolution, snapshot } = await loadCandidateSnapshotForIdentifier(identifier, sourceUrl);
 
   if (resolution.status === "not_found" || !snapshot) {
+    const msg = "message" in resolution ? resolution.message : `No candidate found for "${identifier}".`;
+    const cands = "candidates" in resolution ? resolution.candidates : [];
     return noStoreJson(
       {
         ok: false,
         error_code: "CANDIDATE_NOT_FOUND",
-        message: resolution.message,
+        message: msg,
         query: identifier,
-        candidates: resolution.candidates,
+        candidates: cands,
         search_url: searchUrl,
       },
       404,
@@ -72,11 +74,12 @@ export async function GET(
   }
 
   if (resolution.status === "ambiguous") {
+    const msg = "message" in resolution ? resolution.message : `Ambiguous candidate for "${identifier}".`;
     return noStoreJson(
       {
         ok: false,
         error_code: "AMBIGUOUS_CANDIDATE",
-        message: resolution.message,
+        message: msg,
         query: identifier,
         candidates: resolution.candidates,
         search_url: searchUrl,
