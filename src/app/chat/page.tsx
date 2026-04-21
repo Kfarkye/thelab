@@ -4420,6 +4420,44 @@ export default function ChatPage() {
                     },
                   },
                 });
+
+                // ── Reactive left rail update ──────────────────────
+                // When a status write lands, update the matching candidate
+                // card in the left rail immediately — no refresh needed.
+                if (
+                  (parsed.action === "update_candidate_status" || parsed.action === "update_candidate_profession") &&
+                  writePayload &&
+                  summary
+                ) {
+                  const candidateId = String(writePayload.candidate_id || "");
+                  const novaId = String(writePayload.nova_id || "");
+                  if (candidateId || novaId) {
+                    setSummary(prev => {
+                      if (!prev) return prev;
+                      const updatedItems = prev.items.map(item => {
+                        const itemId = item.candidateId || item.id || "";
+                        const itemNovaId = item.novaId || "";
+                        const isMatch =
+                          (candidateId && itemId === candidateId) ||
+                          (novaId && itemNovaId === novaId);
+                        if (!isMatch) return item;
+
+                        const changed = writePayload.changed_fields as Record<string, { to?: string }> | undefined;
+                        const newStatus = changed?.status?.to;
+                        const newProfession = changed?.profession?.to;
+                        const newSpecialty = changed?.specialty?.to;
+
+                        return {
+                          ...item,
+                          ...(newStatus ? { assignmentStatus: newStatus, derivedCurrentStatus: newStatus } : {}),
+                          ...(newProfession ? { profession: newProfession } : {}),
+                          ...(newSpecialty ? { specialty: newSpecialty } : {}),
+                        };
+                      });
+                      return { ...prev, items: updatedItems };
+                    });
+                  }
+                }
               }
             } else if (parsed.type === "error") {
               dispatch({
