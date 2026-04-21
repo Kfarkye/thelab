@@ -1488,7 +1488,8 @@ interface PanelItem {
   novaUrl?: string | null;
   specialty?: string;
   homeState?: string;
-  complianceRisk?: string;
+  rcThreadUrl?: string | null;
+  complianceRisk?: string | null;
   source?: string;
   assignmentStatus?: string | null;
   derivedCurrentStatus?: string | null;
@@ -2802,6 +2803,18 @@ function LeftPanel({
                                   nova/candidate/{item.novaUrl.split('/').pop()}
                                 </span>
                               </>
+                            )}
+                            {item.rcThreadUrl && (
+                              <a
+                                href={item.rcThreadUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="aya-rc-badge"
+                                onClick={e => e.stopPropagation()}
+                                title="Open SMS Thread"
+                              >
+                                SMS ↗
+                              </a>
                             )}
                           </div>
                           {/* Ghost action bar — visible on hover */}

@@ -983,6 +983,7 @@ async function ayaopsSummary() {
       facilityState: candidate.facilityState || null,
       vmsPlatform: candidate.vmsPlatform || null,
       facilityBeds: candidate.facilityBeds || null,
+      rcThreadUrl: candidate.rcThreadUrl || null,
       touchPriorityScore: touchPlan.score,
       touchPriorityLevel: row.priority_level ? String(row.priority_level) : null,
       touchPriorityBand: touchPlan.band,
