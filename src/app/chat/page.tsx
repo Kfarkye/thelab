@@ -1974,6 +1974,7 @@ function LeftPanel({
               <a href="https://nova.ayahealthcare.com/#/recruiting/working-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Working</a>
               <a href="https://nova.ayahealthcare.com/#/recruiting/margins" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Margins</a>
               <a href="https://nova.ayahealthcare.com/#/recruiting/facilities" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Facilities</a>
+              <a href="https://thepulse.ayahealthcare.com/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">The Pulse</a>
             </div>
           </div>
         </div>

@@ -17,6 +17,12 @@ import {
   OPS_REASSIGNMENT_RECIPIENT,
   resolveEmailTemplateId,
 } from "@/lib/ayaops/email-template-routing";
+import {
+  OUTREACH_EMAIL_TEMPLATES,
+  OPS_EMAIL_TEMPLATES,
+  RESPONSE_EMAIL_TEMPLATES,
+  type ExtractedOfferData as TemplateCatalogOfferData,
+} from "@/lib/ayaops/template-catalog";
 import { ingestMarginLedgerCapture } from "@/lib/ayaops/margin-ledger";
 import {
   ingestRingCentralThreadCapture,
@@ -235,7 +241,7 @@ const SANDBOX_TOOL_DECLARATIONS = [
         template_id: {
           type: "string" as const,
           description:
-            "Email template id. v1 supports initial_outreach, pay_package_snippet, ops_reassignment.",
+            "Email template id. Supports outreach, ops, response, and SMS-style template catalog IDs (for example: initial_outreach, pay_package_snippet, ops_reassignment, text_followup).",
         },
         candidate_id: { type: "string" as const, description: "Candidate internal UUID or Nova numeric ID." },
         job_id: { type: "string" as const, description: "Optional job identifier for traceability." },
@@ -901,7 +907,17 @@ function extractCandidateGroundingJson(html: string): string | null {
   }
 }
 
-type EmailTemplateId = "initial_outreach" | "pay_package_snippet" | "ops_reassignment";
+const TEMPLATE_CATALOG = [
+  ...OUTREACH_EMAIL_TEMPLATES,
+  ...OPS_EMAIL_TEMPLATES,
+  ...RESPONSE_EMAIL_TEMPLATES,
+];
+
+const TEMPLATE_CATALOG_ID_LIST = Array.from(new Set(TEMPLATE_CATALOG.map((template) => String(template.id || "").trim())))
+  .filter(Boolean)
+  .sort();
+
+type EmailTemplateId = string;
 
 type RenderedEmailDraft = {
   templateId: EmailTemplateId;
@@ -1185,12 +1201,130 @@ function buildOpsReassignmentDraft(args: Record<string, unknown>): RenderedEmail
   };
 }
 
+function buildTemplateCatalogOfferData(args: Record<string, unknown>): TemplateCatalogOfferData {
+  const candidate = asJsonRecord(args.candidate) || {};
+  const job = asJsonRecord(args.job) || {};
+  const pay = asJsonRecord(args.pay) || {};
+
+  const candidateName =
+    readString(candidate.full_name || candidate.candidate_name || candidate.display_name || args.candidate_name) ||
+    [readString(candidate.first_name), readString(candidate.last_name)].filter(Boolean).join(" ").trim() ||
+    "Candidate";
+
+  const candidateEmail = readString(args.to_email || args.toEmail || candidate.email);
+  const facility = readString(job.facility_name || job.facilityName || args.facility_name || args.facility);
+  const city = readString(job.city || args.city);
+  const state = readString(job.state || args.state);
+  const shiftType = readString(job.shift_type || job.shiftType || args.shift_type || args.shifts) || "Day";
+  const specialty = readString(job.specialty || args.specialty) || "Specialty";
+  const weeklyHours =
+    readNumber(job.weekly_hours ?? job.weeklyHours ?? args.weekly_hours ?? args.hours_per_week) || 36;
+  const startDate = readString(job.start_date || job.startDate || args.start_date) || null;
+  const endDate = readString(job.end_date || job.endDate || args.end_date) || null;
+  const taxableRate = readNumber(pay.taxable_hourly_rate ?? pay.taxableRate ?? args.taxable_rate) || 0;
+  const weeklyStipend = readNumber(
+    pay.total_stipends ?? pay.weekly_stipend_total ?? pay.weeklyStipend ?? args.total_stipends ?? args.weekly_stipend,
+  ) || 0;
+  const grossWeeklyPay = readNumber(pay.gross_weekly_pay ?? pay.grossWeeklyPay ?? args.gross_weekly_pay) || 0;
+  const candidateIdRaw = readString(args.candidate_id || args.candidateId || candidate.nova_id || candidate.novaId);
+  const jobIdRaw = readString(args.job_id || args.jobId || job.job_id || job.jobId);
+  const actualMargin = readNumber(pay.actual_margin ?? pay.actualMargin ?? args.actual_margin);
+
+  return {
+    name: candidateName,
+    email: candidateEmail,
+    facility,
+    city,
+    state,
+    shiftType,
+    weeklyHours,
+    startDate,
+    endDate,
+    taxableRate,
+    weeklyStipend,
+    grossWeeklyPay,
+    specialty,
+    jobId: /^\d+$/.test(jobIdRaw) ? Number(jobIdRaw) : null,
+    candidateId: /^\d+$/.test(candidateIdRaw) ? Number(candidateIdRaw) : null,
+    actualMargin,
+  };
+}
+
+function buildTransferredTemplateDraft(
+  templateId: string,
+  args: Record<string, unknown>,
+): RenderedEmailDraft | { error: string } {
+  const template = TEMPLATE_CATALOG.find((entry) => String(entry.id || "").toLowerCase() === templateId.toLowerCase());
+  if (!template) return { error: `Unsupported template_id '${templateId || "(empty)"}'.` };
+
+  const candidateId = readString(args.candidate_id || args.candidateId);
+  if (!candidateId) {
+    return { error: `${templateId} requires candidate_id.` };
+  }
+
+  const offerData = buildTemplateCatalogOfferData(args);
+  const rendered = template.generateContent(offerData);
+  const toEmail = readString(rendered.to || args.to_email || args.toEmail || offerData.email);
+  if (!toEmail) {
+    return {
+      error: `${templateId} requires to_email (or candidate.email) for draft persistence.`,
+    };
+  }
+  if (!isLikelyEmail(toEmail)) {
+    return {
+      error: `${templateId} requires a valid to_email.`,
+    };
+  }
+
+  const ccFromTemplate = Array.isArray(rendered.cc)
+    ? rendered.cc.map((entry) => readString(entry)).filter(Boolean)
+    : readString(rendered.cc)
+      ? [readString(rendered.cc)]
+      : [];
+  const ccFromArgs = Array.isArray(args.cc)
+    ? args.cc.map((entry) => readString(entry)).filter(Boolean)
+    : [];
+  const cc = Array.from(new Set([...ccFromTemplate, ...ccFromArgs]));
+  const subject = readString(rendered.subject) || `Draft (${templateId})`;
+  const body = readString(rendered.body);
+  if (!body) {
+    return { error: `${templateId} generated an empty draft body.` };
+  }
+
+  const jobId = readString(args.job_id || args.jobId) || undefined;
+  const noteContent = [
+    "Email draft created",
+    `Template: ${templateId}`,
+    `Subject: ${subject}`,
+    `Recipient: ${toEmail}`,
+    "Status: Draft saved",
+  ].join("\n");
+
+  return {
+    templateId,
+    candidateId,
+    jobId,
+    toEmail,
+    cc,
+    subject,
+    body,
+    noteContent,
+    allowSendNow: true,
+  };
+}
+
 function buildTemplateEmailDraft(templateIdInput: string, args: Record<string, unknown>): RenderedEmailDraft | { error: string } {
   const templateId = templateIdInput as EmailTemplateId;
   if (templateId === "initial_outreach") return buildInitialOutreachDraft(args);
   if (templateId === "pay_package_snippet") return buildPayPackageSnippetDraft(args);
   if (templateId === "ops_reassignment") return buildOpsReassignmentDraft(args);
-  return { error: `Unsupported template_id '${templateIdInput || "(empty)"}'. v1 supports initial_outreach, pay_package_snippet, ops_reassignment.` };
+  const transferred = buildTransferredTemplateDraft(templateId, args);
+  if ("error" in transferred) {
+    return {
+      error: `${transferred.error} Supported template_ids: ${TEMPLATE_CATALOG_ID_LIST.join(", ")}.`,
+    };
+  }
+  return transferred;
 }
 
 function toSandboxChunk(
