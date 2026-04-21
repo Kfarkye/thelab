@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.DS_Store
+*.log
+coverage
+dist
+build
+tmp
+.cache
+.env*
+.gcloudignore
+scripts
+*.md
+tsconfig.tsbuildinfo

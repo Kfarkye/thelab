@@ -1,0 +1,15 @@
+.gcloudignore
+.git
+.gitignore
+.next
+node_modules
+.npm-cache
+coverage
+dist
+build
+tmp
+.cache
+.DS_Store
+*.log
+tsconfig.tsbuildinfo
+.tmp-*.png
