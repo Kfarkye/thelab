@@ -525,7 +525,8 @@ async function loadCandidateSnapshotById(candidateId: string, sourceUrl: string)
     generated_at: new Date().toISOString(),
     rc_thread_url: readString(candidate.rc_thread_url),
     outlook_thread_url: readString(candidate.outlook_thread_url),
-    ...(novaId === "4378569" ? { extended_telemetry_payload: require("./morgan-profile").MORGAN_PROFILE } : {})
+    ...(novaId === "4378569" ? { extended_telemetry_payload: require("./morgan-profile").MORGAN_PROFILE } : {}),
+    ...(novaId === "2502428" ? { extended_telemetry_payload: require("./nathan-profile").NATHAN_PROFILE } : {})
   };
 }
 
