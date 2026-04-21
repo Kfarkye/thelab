@@ -54,6 +54,7 @@ export type CandidateSnapshot = {
   source_url: string;
   generated_at: string;
   rc_thread_url: string | null;
+  outlook_thread_url: string | null;
 };
 
 export type CandidateResolverMatch = {
@@ -71,6 +72,7 @@ export type CandidateResolverMatch = {
     | "name_contains";
   confidence: number;
   rc_thread_url: string | null;
+  outlook_thread_url: string | null;
 };
 
 export type CandidateResolveResult =
@@ -173,6 +175,7 @@ function toResolverMatch(
     match_reason: rank.reason,
     confidence: rank.confidence,
     rc_thread_url: readString(row.rc_thread_url),
+    outlook_thread_url: readString(row.outlook_thread_url),
   };
 }
 
@@ -226,6 +229,7 @@ async function queryCandidateMatches(identifier: string, limit: number): Promise
         c.last_name,
         c.specialty,
         c.rc_thread_url,
+        c.outlook_thread_url,
         la.status AS assignment_status
       FROM hc_candidates c
       LEFT JOIN latest_assignments la
@@ -383,7 +387,8 @@ async function loadCandidateSnapshotById(candidateId: string, sourceUrl: string)
         home_state,
         compliance_risk_level,
         source,
-        rc_thread_url
+        rc_thread_url,
+        outlook_thread_url
       FROM hc_candidates
       WHERE id = @candidateId
       LIMIT 1
@@ -519,6 +524,7 @@ async function loadCandidateSnapshotById(candidateId: string, sourceUrl: string)
     source_url: sourceUrl,
     generated_at: new Date().toISOString(),
     rc_thread_url: readString(candidate.rc_thread_url),
+    outlook_thread_url: readString(candidate.outlook_thread_url),
   };
 }
 

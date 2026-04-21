@@ -26,6 +26,7 @@ export interface CandidateRecord {
   vmsPlatform?: string;
   facilityBeds?: number;
   rcThreadUrl?: string;
+  outlookThreadUrl?: string;
 }
 
 // ── Retrieval policy ────────────────────────────────────────────

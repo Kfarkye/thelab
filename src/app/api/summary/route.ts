@@ -939,7 +939,7 @@ async function ayaopsSummary() {
   // Candidates with their current assignment + facility
   const [listRows] = await db.run({
     sql: `SELECT c.id, c.nova_id, c.first_name, c.last_name, c.specialty, c.profession,
-            c.home_state, c.compliance_risk_level, c.source, c.rc_thread_url,
+            c.home_state, c.compliance_risk_level, c.source, c.rc_thread_url, c.outlook_thread_url,
             a.status as assignment_status, a.start_date, a.end_date,
             a.weekly_gross, a.hourly_rate,
             ${priorityScoreExpr} as priority_score,
@@ -984,6 +984,7 @@ async function ayaopsSummary() {
       vmsPlatform: candidate.vmsPlatform || null,
       facilityBeds: candidate.facilityBeds || null,
       rcThreadUrl: candidate.rcThreadUrl || null,
+      outlookThreadUrl: candidate.outlookThreadUrl || null,
       touchPriorityScore: touchPlan.score,
       touchPriorityLevel: row.priority_level ? String(row.priority_level) : null,
       touchPriorityBand: touchPlan.band,

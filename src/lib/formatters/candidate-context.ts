@@ -28,6 +28,7 @@ export function formatCandidateContext(candidate: CandidateRecord): string {
 
   const novaLine = candidate.novaUrl || "N/A";
   const rcThreadLine = candidate.rcThreadUrl || "N/A";
+  const outlookLine = candidate.outlookThreadUrl || "N/A";
 
   return `INTERNAL DATA SOURCE: SECURE_CANDIDATE_RECORD
 RESTRICTION: DO NOT USE EXTERNAL WEB SEARCH. USE ONLY THE FIELDS BELOW.
@@ -43,7 +44,8 @@ Dates: ${dateStr}
 Pay: ${payStr}
 Compliance: ${candidate.complianceRisk ?? "standard"}
 Nova Profile: ${novaLine}
-RingCentral App Link: ${rcThreadLine}${candidate.isStale ? `\nALERT: STALE_RECORD — Status flag "${candidate.assignmentStatus}" does not match date-derived status "${candidate.derivedCurrentStatus}". Proactively mention this discrepancy.` : ""}
+RingCentral App Link: ${rcThreadLine}
+Outlook Link: ${outlookLine}${candidate.isStale ? `\nALERT: STALE_RECORD — Status flag "${candidate.assignmentStatus}" does not match date-derived status "${candidate.derivedCurrentStatus}". Proactively mention this discrepancy.` : ""}
 </CANDIDATE_DATA>
 
 Rules:

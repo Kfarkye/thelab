@@ -44,6 +44,7 @@ export default async function CandidateGroundingPage({ params }: Props) {
           style={{
             display: "inline-block",
             marginBottom: 16,
+            marginRight: 8,
             padding: "4px 10px",
             background: "#2b2b2b",
             color: "#fff",
@@ -56,6 +57,29 @@ export default async function CandidateGroundingPage({ params }: Props) {
           }}
         >
           RingCentral SMS ↗
+        </a>
+      )}
+
+      {snapshot.outlook_thread_url && (
+        <a 
+          href={snapshot.outlook_thread_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-block",
+            marginBottom: 16,
+            padding: "4px 10px",
+            background: "#1e3a8a",
+            color: "#fff",
+            borderRadius: 12,
+            fontSize: 12,
+            textDecoration: "none",
+            fontWeight: 500,
+            border: "1px solid #1e40af",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+          }}
+        >
+          Outlook ↗
         </a>
       )}
 
@@ -76,6 +100,7 @@ export default async function CandidateGroundingPage({ params }: Props) {
         <p>assignment_status: {snapshot.assignment?.status || "unknown"}</p>
         <p>profile_url: {snapshot.profile_url || "none"}</p>
         <p>ring_central_thread_url: {snapshot.rc_thread_url || "none"}</p>
+        <p>outlook_thread_url: {snapshot.outlook_thread_url || "none"}</p>
       </div>
     </main>
   );

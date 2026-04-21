@@ -53,6 +53,7 @@ export function mapCandidateRow(row: Record<string, unknown>): CandidateRecord {
     vmsPlatform: row.vms_platform ? String(row.vms_platform) : undefined,
     facilityBeds: row.facility_beds ? Number(row.facility_beds) : undefined,
     rcThreadUrl: row.rc_thread_url ? String(row.rc_thread_url) : undefined,
+    outlookThreadUrl: row.outlook_thread_url ? String(row.outlook_thread_url) : undefined,
   };
 }
 

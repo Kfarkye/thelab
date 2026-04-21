@@ -1489,6 +1489,7 @@ interface PanelItem {
   specialty?: string;
   homeState?: string;
   rcThreadUrl?: string | null;
+  outlookThreadUrl?: string | null;
   complianceRisk?: string | null;
   source?: string;
   assignmentStatus?: string | null;
@@ -2814,6 +2815,18 @@ function LeftPanel({
                                 title="Open SMS Thread"
                               >
                                 SMS ↗
+                              </a>
+                            )}
+                            {item.outlookThreadUrl && (
+                              <a
+                                href={item.outlookThreadUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="aya-outlook-badge"
+                                onClick={e => e.stopPropagation()}
+                                title="Open Outlook Thread"
+                              >
+                                Email ↗
                               </a>
                             )}
                           </div>
