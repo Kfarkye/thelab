@@ -22,6 +22,7 @@ import {
   OPS_EMAIL_TEMPLATES,
   RESPONSE_EMAIL_TEMPLATES,
   getMissingRequiredFields,
+  extractMarginApprovalFromText,
   type ExtractedOfferData as TemplateCatalogOfferData,
 } from "@/lib/ayaops/template-catalog";
 import { ingestMarginLedgerCapture } from "@/lib/ayaops/margin-ledger";
@@ -1202,6 +1203,40 @@ function buildOpsReassignmentDraft(args: Record<string, unknown>): RenderedEmail
   };
 }
 
+/**
+ * Build raw offer data WITHOUT sentinel defaults — used for validation.
+ * Fields that have no user-provided value stay as empty string / null / 0.
+ */
+function buildRawOfferDataForValidation(args: Record<string, unknown>): Partial<TemplateCatalogOfferData> {
+  const candidate = asJsonRecord(args.candidate) || {};
+  const job = asJsonRecord(args.job) || {};
+  const pay = asJsonRecord(args.pay) || {};
+
+  const candidateName =
+    readString(candidate.full_name || candidate.candidate_name || candidate.display_name || args.candidate_name) ||
+    [readString(candidate.first_name), readString(candidate.last_name)].filter(Boolean).join(" ").trim() ||
+    "";
+
+  return {
+    name: candidateName || undefined,
+    email: readString(args.to_email || args.toEmail || candidate.email) || undefined,
+    facility: readString(job.facility_name || job.facilityName || args.facility_name || args.facility) || undefined,
+    city: readString(job.city || args.city) || undefined,
+    state: readString(job.state || args.state) || undefined,
+    shiftType: readString(job.shift_type || job.shiftType || args.shift_type || args.shifts) || undefined,
+    specialty: readString(job.specialty || args.specialty) || undefined,
+    weeklyHours: readNumber(job.weekly_hours ?? job.weeklyHours ?? args.weekly_hours ?? args.hours_per_week) ?? undefined,
+    startDate: readString(job.start_date || job.startDate || args.start_date) || undefined,
+    endDate: readString(job.end_date || job.endDate || args.end_date) || undefined,
+    taxableRate: readNumber(pay.taxable_hourly_rate ?? pay.taxableRate ?? args.taxable_rate) ?? undefined,
+    weeklyStipend: readNumber(pay.total_stipends ?? pay.weekly_stipend_total ?? pay.weeklyStipend ?? args.total_stipends ?? args.weekly_stipend) ?? undefined,
+    grossWeeklyPay: readNumber(pay.gross_weekly_pay ?? pay.grossWeeklyPay ?? args.gross_weekly_pay) ?? undefined,
+  };
+}
+
+/**
+ * Build full offer data WITH sentinel defaults — used for template rendering.
+ */
 function buildTemplateCatalogOfferData(args: Record<string, unknown>): TemplateCatalogOfferData {
   const candidate = asJsonRecord(args.candidate) || {};
   const job = asJsonRecord(args.job) || {};
@@ -1229,7 +1264,12 @@ function buildTemplateCatalogOfferData(args: Record<string, unknown>): TemplateC
   const grossWeeklyPay = readNumber(pay.gross_weekly_pay ?? pay.grossWeeklyPay ?? args.gross_weekly_pay) || 0;
   const candidateIdRaw = readString(args.candidate_id || args.candidateId || candidate.nova_id || candidate.novaId);
   const jobIdRaw = readString(args.job_id || args.jobId || job.job_id || job.jobId);
-  const actualMargin = readNumber(pay.actual_margin ?? pay.actualMargin ?? args.actual_margin);
+  const actualMarginStr = readString(pay.actual_margin ?? pay.actualMargin ?? args.actual_margin);
+  
+  // Unstructured freeform extraction fallback for margin
+  const unstructuredText = typeof args.context_text === "string" ? args.context_text : "";
+  const freeformMargin = extractMarginApprovalFromText(unstructuredText);
+  const actualMargin = readNumber(actualMarginStr) ?? readNumber(freeformMargin.marginPercentage);
 
   return {
     name: candidateName,
@@ -1265,7 +1305,9 @@ function buildTransferredTemplateDraft(
 
   const offerData = buildTemplateCatalogOfferData(args);
 
-  const missing = getMissingRequiredFields(offerData, template);
+  // Validate against RAW data (no sentinel defaults) so missing fields are actually detected
+  const rawData = buildRawOfferDataForValidation(args);
+  const missing = getMissingRequiredFields(rawData, template);
   if (missing.length > 0) {
     return {
       error: `Review needed: Missing fields [${missing.join(", ")}]. Please provide these details to generate the draft.`,
