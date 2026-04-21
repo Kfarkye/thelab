@@ -297,7 +297,7 @@ export async function resolveCandidateIdentifier(
     if (directRows.length > 1) {
       const matches = directRows
         .map((row: any) => toResolverMatch(identifier.toLowerCase(), row.toJSON() as Record<string, unknown>))
-        .filter((entry) => entry.candidate_id.length > 0);
+        .filter((entry: any) => entry.candidate_id.length > 0);
       return {
         status: "ambiguous",
         candidates: matches,
@@ -315,7 +315,7 @@ export async function resolveCandidateIdentifier(
     };
   }
 
-  const byFull = matches.filter((entry) => entry.match_reason === "full_name_exact");
+  const byFull = matches.filter((entry: any) => entry.match_reason === "full_name_exact");
   if (byFull.length === 1) {
     const winner = byFull[0];
     return {
@@ -329,7 +329,7 @@ export async function resolveCandidateIdentifier(
     };
   }
 
-  const byFirst = matches.filter((entry) => entry.match_reason === "first_name_exact");
+  const byFirst = matches.filter((entry: any) => entry.match_reason === "first_name_exact");
   if (byFirst.length === 1) {
     const winner = byFirst[0];
     return {

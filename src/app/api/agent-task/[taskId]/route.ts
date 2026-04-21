@@ -9,7 +9,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 async function readTaskId(
-  paramsInput: { taskId: string } | Promise<{ taskId: string }>,
+  paramsInput: Promise<{ taskId: string }>,
 ): Promise<string> {
   const params = await paramsInput;
   return decodeURIComponent(String(params.taskId || "").trim());
@@ -17,7 +17,7 @@ async function readTaskId(
 
 export async function GET(
   _request: NextRequest,
-  context: { params: { taskId: string } | Promise<{ taskId: string }> },
+  context: { params: Promise<{ taskId: string }> },
 ) {
   const taskId = await readTaskId(context.params);
   if (!taskId) {
@@ -40,7 +40,7 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  context: { params: { taskId: string } | Promise<{ taskId: string }> },
+  context: { params: Promise<{ taskId: string }> },
 ) {
   const taskId = await readTaskId(context.params);
   if (!taskId) {

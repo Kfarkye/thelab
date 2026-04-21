@@ -11,7 +11,7 @@ function pretty(value: unknown): string {
   }
 }
 
-async function readTaskId(paramsInput: { taskId: string } | Promise<{ taskId: string }>): Promise<string> {
+async function readTaskId(paramsInput: Promise<{ taskId: string }>): Promise<string> {
   const params = await paramsInput;
   return decodeURIComponent(String(params.taskId || "").trim());
 }
@@ -19,7 +19,7 @@ async function readTaskId(paramsInput: { taskId: string } | Promise<{ taskId: st
 export default async function AgentTaskPage({
   params,
 }: {
-  params: { taskId: string } | Promise<{ taskId: string }>;
+  params: Promise<{ taskId: string }>;
 }) {
   const taskId = await readTaskId(params);
   const task = await getAgentHandoffTask(taskId);
