@@ -1582,7 +1582,7 @@ async function updateCandidateStatus(
     await db.runTransactionAsync(async (tx: any) => {
       await tx.runUpdate({
         sql: `INSERT INTO hc_assignments (id, candidate_id, status, created_at, updated_at) 
-              VALUES (GENERATE_UUID(), @candidateId, @newStatus, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())`,
+              VALUES (GENERATE_UUID(), @candidateId, @newStatus, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`,
         params: { candidateId, newStatus },
       });
       await tx.commit();
