@@ -21,6 +21,7 @@ import {
   OUTREACH_EMAIL_TEMPLATES,
   OPS_EMAIL_TEMPLATES,
   RESPONSE_EMAIL_TEMPLATES,
+  getMissingRequiredFields,
   type ExtractedOfferData as TemplateCatalogOfferData,
 } from "@/lib/ayaops/template-catalog";
 import { ingestMarginLedgerCapture } from "@/lib/ayaops/margin-ledger";
@@ -1263,16 +1264,24 @@ function buildTransferredTemplateDraft(
   }
 
   const offerData = buildTemplateCatalogOfferData(args);
+
+  const missing = getMissingRequiredFields(offerData, template);
+  if (missing.length > 0) {
+    return {
+      error: `Review needed: Missing fields [${missing.join(", ")}]. Please provide these details to generate the draft.`,
+    };
+  }
+
   const rendered = template.generateContent(offerData);
   const toEmail = readString(rendered.to || args.to_email || args.toEmail || offerData.email);
   if (!toEmail) {
     return {
-      error: `${templateId} requires to_email (or candidate.email) for draft persistence.`,
+      error: `${templateId} requires a target recipient (to_email).`,
     };
   }
-  if (!isLikelyEmail(toEmail)) {
+  if (!isLikelyEmail(toEmail) && template.messageType !== 'sms') {
     return {
-      error: `${templateId} requires a valid to_email.`,
+      error: `${templateId} requires a valid email address.`,
     };
   }
 
@@ -1292,13 +1301,24 @@ function buildTransferredTemplateDraft(
   }
 
   const jobId = readString(args.job_id || args.jobId) || undefined;
-  const noteContent = [
-    "Email draft created",
-    `Template: ${templateId}`,
-    `Subject: ${subject}`,
-    `Recipient: ${toEmail}`,
-    "Status: Draft saved",
-  ].join("\n");
+  
+  const isSms = template.messageType === 'sms';
+  const labelPrefix = isSms ? "SMS" : "Email";
+  const noteContent = isSms
+    ? [
+        `${labelPrefix} draft created`,
+        `Template: ${templateId}`,
+        `Excerpt: ${body.substring(0, 45).replace(/\n/g, ' ')}...`,
+        `Recipient: ${toEmail}`,
+        "Status: Draft ready for SMS dispatch",
+      ].join("\n")
+    : [
+        `${labelPrefix} draft created`,
+        `Template: ${templateId}`,
+        `Subject: ${subject}`,
+        `Recipient: ${toEmail}`,
+        "Status: Draft saved",
+      ].join("\n");
 
   return {
     templateId,
