@@ -2940,6 +2940,35 @@ function LeftPanel({
               });
             }
 
+            if (mode === "code") {
+              return filtered.map((item) => (
+                <button
+                  key={item.id}
+                  className={`lp-item lp-item-code ${selectedItemId === item.id ? "lp-active" : ""}`}
+                  onClick={() => onItemClick(item)}
+                  title={item.label}
+                >
+                  <span className="lp-item-label">{item.label}</span>
+                  {item.category && <span className="lp-item-meta">{item.category} ({item.status})</span>}
+
+                  {/* Browser Agent Payload - Grounding Target */}
+                  <div className="sr-only"
+                    data-grounding-type="ARCHITECTURE_VERDICT"
+                    data-verdict-id={item.id}
+                    data-agent={item.agent || ""}
+                    data-status={item.status || ""}
+                    data-risk-zones={(item.riskZones || []).join(",")}
+                  >
+                    [VERDICT]: {item.label}
+                    Agent: {item.agent}
+                    Status: {item.status}
+                    Preview: {item.preview}
+                    Use the 'verdicts' tools to write or list decisions.
+                  </div>
+                </button>
+              ));
+            }
+
             // Other non-sports modes: flat list
             return filtered.map((item) => (
               <button
@@ -4171,6 +4200,7 @@ export default function ChatPage() {
         uiContext: {
           candidateId: selectedCandidateContext?.candidate_id || null,
           candidateName: selectedCandidateContext?.candidate_name || null,
+          activeItems: state.mode === "code" ? summary?.items : undefined,
         },
       };
 

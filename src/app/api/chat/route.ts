@@ -1712,7 +1712,7 @@ export async function POST(request: NextRequest) {
       selectedCandidateContext?: Record<string, unknown>;
       selectedMarginContext?: Record<string, unknown>;
       modelOverride?: ModelId;
-      uiContext?: { threadId?: string; candidateId?: string; candidateName?: string };
+      uiContext?: { threadId?: string; candidateId?: string; candidateName?: string; activeItems?: Array<Record<string, unknown>> };
     };
 
     if (!prompt || typeof prompt !== "string") {
@@ -1834,6 +1834,19 @@ If the user requests a write action, use candidate_id directly before any name l
 [System note: GROUNDED UI CONTEXT (authoritative)
 ${ctxJson}
 Rule: If the user asks to "draft a reply", "update status", or references "this candidate", strictly use the IDs from this context block. Do not search for other candidates.]`;
+    }
+    
+    if (activeMode === "code" && uiContext?.activeItems && Array.isArray(uiContext.activeItems)) {
+      fullPrompt = `${fullPrompt}
+
+[System note: LIVE ARCHITECTURE LEDGER
+The following are the active architecture decisions and system rules dynamically loaded from the state ledger:
+${JSON.stringify(uiContext.activeItems.map((item) => ({
+  verdict: item.label,
+  details: item.preview,
+  status: item.status,
+})), null, 2)}
+Rule: Use this active context as the single source of truth for architectural constraints and repo conventions.]`;
     }
 
     if (activeMode === "ayaops") {
