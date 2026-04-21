@@ -2,7 +2,7 @@
 // Resolves templates by ID or search term against the template catalog.
 
 import {
-  TEMPLATE_CATALOG,
+  OUTREACH_EMAIL_TEMPLATES,
   OPS_EMAIL_TEMPLATES,
   RESPONSE_EMAIL_TEMPLATES,
   type EmailTemplate,
@@ -12,7 +12,7 @@ import type { HubResponse } from "./candidate-resolver";
 
 // Merge all template pools for search
 const ALL_TEMPLATES: EmailTemplate[] = [
-  ...TEMPLATE_CATALOG,
+  ...OUTREACH_EMAIL_TEMPLATES,
   ...OPS_EMAIL_TEMPLATES,
   ...RESPONSE_EMAIL_TEMPLATES,
 ];
