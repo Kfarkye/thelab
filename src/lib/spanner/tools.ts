@@ -1578,7 +1578,27 @@ async function updateCandidateStatus(
   });
 
   if (rows.length === 0) {
-    throw new Error(`No assignment found for candidate ${candidateId}`);
+    const writeTimestamp = new Date().toISOString();
+    await db.runTransactionAsync(async (tx: any) => {
+      await tx.runUpdate({
+        sql: `INSERT INTO hc_assignments (id, candidate_id, status, created_at, updated_at) 
+              VALUES (GENERATE_UUID(), @candidateId, @newStatus, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())`,
+        params: { candidateId, newStatus },
+      });
+      await tx.commit();
+    });
+    
+    return {
+      object_type: "assignment_status",
+      candidate_id: candidateId,
+      nova_id: identity.nova_id,
+      action: "update_candidate_status",
+      write_timestamp: writeTimestamp,
+      rows_updated: 1,
+      changed_fields: { status: { from: "none", to: newStatus } },
+      target_assignment: { start_date: null, end_date: null, facility_id: null },
+      outcome: "updated",
+    };
   }
 
   const row = rows[0].toJSON();

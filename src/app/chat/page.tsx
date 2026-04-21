@@ -2817,14 +2817,21 @@ function LeftPanel({
                               {item.specialty || item.profession}
                               {item.homeState && ` · ${item.homeState}`}
                             </span>
-                            {item.novaUrl && (
+                            {item.novaId ? (
+                              <>
+                                <span className="sr-only">URL: {item.novaUrl}</span>
+                                <span className="aya-card-url" aria-hidden="true">
+                                  nova/candidate/{item.novaId}
+                                </span>
+                              </>
+                            ) : item.novaUrl ? (
                               <>
                                 <span className="sr-only">URL: {item.novaUrl}</span>
                                 <span className="aya-card-url" aria-hidden="true">
                                   nova/candidate/{item.novaUrl.split('/').pop()}
                                 </span>
                               </>
-                            )}
+                            ) : null}
                             {(item.rcThreadUrl || item.outlookThreadUrl || item.novaId) && (
                               <div className="aya-card-badges">
                                 {item.novaId && (
