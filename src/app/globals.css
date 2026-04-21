@@ -2576,6 +2576,29 @@ body {
   color: #fff;
 }
 
+.aya-hub-badge {
+  display: inline-flex;
+  padding: 2px 6px;
+  background-color: rgba(87, 87, 87, 0.1);
+  color: #6b6b6b;
+  border: 1px solid rgba(87, 87, 87, 0.2);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.aya-hub-badge:hover {
+  background-color: rgba(87, 87, 87, 0.2);
+  color: #000;
+}
+
+.aya-outlook-badge:hover {
+  background-color: rgba(0, 120, 212, 0.2);
+  color: #fff;
+}
+
 /* ── Center Header (simplified) ─── */
 .c-header {
   display: flex;

@@ -2825,8 +2825,20 @@ function LeftPanel({
                                 </span>
                               </>
                             )}
-                            {(item.rcThreadUrl || item.outlookThreadUrl) && (
+                            {(item.rcThreadUrl || item.outlookThreadUrl || item.novaId) && (
                               <div className="aya-card-badges">
+                                {item.novaId && (
+                                  <a
+                                    href={`/c/${item.novaId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="aya-hub-badge"
+                                    onClick={e => e.stopPropagation()}
+                                    title="Open Internal Profile"
+                                  >
+                                    File ↗
+                                  </a>
+                                )}
                                 {item.rcThreadUrl && (
                                   <a
                                     href={item.rcThreadUrl}
@@ -2846,7 +2858,7 @@ function LeftPanel({
                                     rel="noopener noreferrer"
                                     className="aya-outlook-badge"
                                     onClick={e => e.stopPropagation()}
-                                    title="Open Outlook Thread"
+                                    title="Open Email Thread"
                                   >
                                     Email ↗
                                   </a>
