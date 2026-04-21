@@ -6,6 +6,7 @@ import { routeRequest, MODEL_META, type ModelId } from "@/lib/router/model-route
 import { callClaude } from "@/lib/providers/claude";
 import { DB_TOOL_DECLARATIONS, executeDbTool } from "@/lib/spanner/tools";
 import { resolve as resolveHub } from "@/lib/resolver";
+import { interceptGroundedWrite } from "@/lib/ayaops/grounded-write-interceptor";
 import { getEvidenceInlineData } from "@/lib/evidence/store";
 import {
   STRICT_TOOL_CALL_SYSTEM_MESSAGE,
@@ -2564,6 +2565,38 @@ Return only operational summary: save status, link status, and next best action.
       fullPrompt = `${fullPrompt}
 
 [System note: ingest_nova_profile already executed successfully before this turn. Candidate is now persisted in the internal DB. Use candidate_id "${canonicalCandidateId}"${novaId ? ` (nova_id "${novaId}")` : ""} for any follow-up add_candidate_note or create_com_draft_email action.]`;
+    }
+
+    // ── Grounded Write Interceptor ─────────────────────────────────
+    // Detects write intents from the raw prompt, resolves entities,
+    // executes writes directly — BEFORE the LLM runs. No tool calling.
+    if (activeMode === "ayaops" && !preIngestExecuted) {
+      try {
+        const selectedCandidateIdForInterceptor = selectedContext?.candidate_id || null;
+        const groundedWrite = await interceptGroundedWrite(prompt, selectedCandidateIdForInterceptor);
+
+        if (groundedWrite.intercepted) {
+          preIngestWriteEvent = {
+            type: "write_result",
+            outcome: (groundedWrite.result as any).outcome || "updated",
+            action: groundedWrite.action,
+            objectType: "grounded_write",
+            rowsUpdated: (groundedWrite.result as any).rows_updated ?? 1,
+            code: null,
+            payload: groundedWrite.result,
+          };
+          preIngestExecuted = true;
+          requireFollowupWriteAfterIngest = false;
+
+          fullPrompt = `${fullPrompt}\n\n${groundedWrite.groundingText}`;
+
+          console.log(
+            `[grounded_write] action=${groundedWrite.action} candidate=${groundedWrite.displayName} candidate_id=${groundedWrite.candidateId}`,
+          );
+        }
+      } catch (groundedErr) {
+        console.warn("[grounded_write] interceptor failed, falling through to LLM:", groundedErr);
+      }
     }
 
     // ══════════════════════════════════════════════════════════════
