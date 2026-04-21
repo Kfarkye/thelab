@@ -36,6 +36,29 @@ export default async function CandidateGroundingPage({ params }: Props) {
         Canonical URL payload for AI grounding. Source URL: <a href={snapshot.source_url}>{snapshot.source_url}</a>
       </p>
 
+      {snapshot.rc_thread_url && (
+        <a 
+          href={snapshot.rc_thread_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-block",
+            marginBottom: 16,
+            padding: "4px 10px",
+            background: "#2b2b2b",
+            color: "#fff",
+            borderRadius: 12,
+            fontSize: 12,
+            textDecoration: "none",
+            fontWeight: 500,
+            border: "1px solid #444",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+          }}
+        >
+          RingCentral SMS ↗
+        </a>
+      )}
+
       <script
         id="candidate-grounding-json"
         type="application/json"
@@ -52,6 +75,7 @@ export default async function CandidateGroundingPage({ params }: Props) {
         <p>specialty_title: {snapshot.specialty_title || "unknown"}</p>
         <p>assignment_status: {snapshot.assignment?.status || "unknown"}</p>
         <p>profile_url: {snapshot.profile_url || "none"}</p>
+        <p>ring_central_thread_url: {snapshot.rc_thread_url || "none"}</p>
       </div>
     </main>
   );

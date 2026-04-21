@@ -2941,7 +2941,9 @@ function LeftPanel({
             }
 
             if (mode === "code") {
-              return filtered.map((item) => (
+              return filtered.map((item) => {
+                const asCodeItem = item as any;
+                return (
                 <button
                   key={item.id}
                   className={`lp-item lp-item-code ${selectedItemId === item.id ? "lp-active" : ""}`}
@@ -2949,24 +2951,24 @@ function LeftPanel({
                   title={item.label}
                 >
                   <span className="lp-item-label">{item.label}</span>
-                  {item.category && <span className="lp-item-meta">{item.category} ({item.status})</span>}
+                  {asCodeItem.category && <span className="lp-item-meta">{asCodeItem.category} ({item.status})</span>}
 
                   {/* Browser Agent Payload - Grounding Target */}
                   <div className="sr-only"
                     data-grounding-type="ARCHITECTURE_VERDICT"
                     data-verdict-id={item.id}
-                    data-agent={item.agent || ""}
+                    data-agent={asCodeItem.agent || ""}
                     data-status={item.status || ""}
-                    data-risk-zones={(item.riskZones || []).join(",")}
+                    data-risk-zones={(asCodeItem.riskZones || []).join(",")}
                   >
                     [VERDICT]: {item.label}
-                    Agent: {item.agent}
+                    Agent: {asCodeItem.agent}
                     Status: {item.status}
-                    Preview: {item.preview}
+                    Preview: {asCodeItem.preview}
                     Use the 'verdicts' tools to write or list decisions.
                   </div>
                 </button>
-              ));
+              )});
             }
 
             // Other non-sports modes: flat list

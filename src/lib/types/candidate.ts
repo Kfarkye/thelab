@@ -25,6 +25,7 @@ export interface CandidateRecord {
   novaUrl?: string;
   vmsPlatform?: string;
   facilityBeds?: number;
+  rcThreadUrl?: string;
 }
 
 // ── Retrieval policy ────────────────────────────────────────────

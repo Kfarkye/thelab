@@ -52,6 +52,7 @@ export function mapCandidateRow(row: Record<string, unknown>): CandidateRecord {
     novaUrl: novaId ? `${NOVA_BASE}/${novaId}/new-profile/about` : undefined,
     vmsPlatform: row.vms_platform ? String(row.vms_platform) : undefined,
     facilityBeds: row.facility_beds ? Number(row.facility_beds) : undefined,
+    rcThreadUrl: row.rc_thread_url ? String(row.rc_thread_url) : undefined,
   };
 }
 
