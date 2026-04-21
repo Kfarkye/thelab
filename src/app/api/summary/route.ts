@@ -4,6 +4,7 @@ import type { CandidateRecord } from "@/lib/types/candidate";
 import { queryMarginLedger, queryJobBoard } from "@/lib/ayaops/margin-ledger";
 import { getDb } from "@/lib/spanner-pool";
 import type { Spanner } from "@google-cloud/spanner";
+import { listVerdicts } from "@/lib/verdicts/verdict-ledger";
 
 let priorityColumnPresence: { score: boolean; level: boolean } | null = null;
 
@@ -558,18 +559,59 @@ async function sportsSummary() {
   });
 }
 
-function codeSummary() {
-  return Response.json({
-    pulse: {
-      tools: 2,
-      capabilities: 3,
-    },
-    items: [
-      { id: "code-exec", label: "Code Execution", description: "Gemini writes and runs Python to verify answers" },
-      { id: "search", label: "Google Search", description: "Real-time web grounding for current information" },
-      { id: "structured", label: "JSON Mode", description: "Controlled generation with strict schema enforcement" },
-    ],
-  });
+async function codeSummary() {
+  try {
+    const verdicts = await listVerdicts({ limit: 100 });
+
+    const statusCounts = { proposed: 0, accepted: 0, rejected: 0, superseded: 0 };
+    const agentCounts: Record<string, number> = {};
+
+    for (const v of verdicts) {
+      if (v.status in statusCounts) {
+        statusCounts[v.status as keyof typeof statusCounts]++;
+      }
+      agentCounts[v.agent_source] = (agentCounts[v.agent_source] || 0) + 1;
+    }
+
+    const items = verdicts.map((v) => ({
+      id: v.verdict_id,
+      label: v.title,
+      agent: v.agent_source,
+      category: v.category,
+      status: v.status,
+      riskZones: v.risk_zones,
+      filesTouched: v.files_touched,
+      refs: v.refs,
+      supersededBy: v.superseded_by,
+      createdAt: v.created_at,
+      updatedAt: v.updated_at,
+      // First 200 chars of body as preview
+      preview: v.body.length > 200 ? v.body.slice(0, 200) + "..." : v.body,
+    }));
+
+    return Response.json({
+      pulse: {
+        verdicts: verdicts.length,
+        proposed: statusCounts.proposed,
+        accepted: statusCounts.accepted,
+        agents: agentCounts,
+      },
+      items,
+    });
+  } catch (err) {
+    // Graceful fallback if verdicts table doesn't exist yet
+    console.warn("[summary] Verdicts query failed (table may not exist):", err);
+    return Response.json({
+      pulse: {
+        verdicts: 0,
+        proposed: 0,
+        accepted: 0,
+        agents: {},
+        note: "Verdicts table not yet created. Run: scripts/ddl/verdicts.sql",
+      },
+      items: [],
+    });
+  }
 }
 
 async function worldcupSummary() {
