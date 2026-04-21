@@ -1959,9 +1959,15 @@ function LeftPanel({
           <div className="aya-ops-link-group">
             <span className="aya-ops-group-label">Communications</span>
             <div className="aya-ops-group-items">
-              <a href="https://app.ringcentral.com/sms/direct/all" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">RingCentral SMS</a>
-              <a href="https://teams.microsoft.com/v2/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Microsoft Teams</a>
-              <a href="https://outlook.cloud.microsoft/mail/AAMkADA5OTc3NDAxLWM2ZWQtNGNmMC04YzAzLThkOWMwMjk0MjBiMgAuAAAAAAALwSBcifhYRJ2lBsq4Iy%2B0AQAEE5rXW9aUTreCVwiNgefzAAPN4aivAAA%3D" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Outlook Mail</a>
+              <a href="https://app.ringcentral.com/sms/direct/all" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                RingCentral SMS<span className="sr-only">URL: https://app.ringcentral.com/sms/direct/all</span>
+              </a>
+              <a href="https://teams.microsoft.com/v2/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Microsoft Teams<span className="sr-only">URL: https://teams.microsoft.com/v2/</span>
+              </a>
+              <a href="https://outlook.cloud.microsoft/mail/AAMkADA5OTc3NDAxLWM2ZWQtNGNmMC04YzAzLThkOWMwMjk0MjBiMgAuAAAAAAALwSBcifhYRJ2lBsq4Iy%2B0AQAEE5rXW9aUTreCVwiNgefzAAPN4aivAAA%3D" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Outlook Mail<span className="sr-only">URL: https://outlook.cloud.microsoft/mail/...</span>
+              </a>
             </div>
           </div>
 
@@ -1970,13 +1976,27 @@ function LeftPanel({
           <div className="aya-ops-link-group">
             <span className="aya-ops-group-label">Recruiting Infrastructure</span>
             <div className="aya-ops-group-items">
-              <a href="https://nova.ayahealthcare.com/#/recruiting/live-nurses-new" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Live List</a>
-              <a href="https://ssrsreports-ayahealthcare.msappproxy.net/Reports/report/Recruiting/MyAya%20Interested%20Clicks" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Interested Clicks</a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/prestart-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Prestart</a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/working-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Working</a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/margins" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Margins</a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/facilities" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">Facilities</a>
-              <a href="https://thepulse.ayahealthcare.com/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">The Pulse</a>
+              <a href="https://nova.ayahealthcare.com/#/recruiting/live-nurses-new" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Live List<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/live-nurses-new</span>
+              </a>
+              <a href="https://ssrsreports-ayahealthcare.msappproxy.net/Reports/report/Recruiting/MyAya%20Interested%20Clicks" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Interested Clicks<span className="sr-only">URL: https://ssrsreports-ayahealthcare.msappproxy.net/...</span>
+              </a>
+              <a href="https://nova.ayahealthcare.com/#/recruiting/prestart-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Prestart<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/prestart-candidates</span>
+              </a>
+              <a href="https://nova.ayahealthcare.com/#/recruiting/working-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Working<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/working-candidates</span>
+              </a>
+              <a href="https://nova.ayahealthcare.com/#/recruiting/margins" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Margins<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/margins</span>
+              </a>
+              <a href="https://nova.ayahealthcare.com/#/recruiting/facilities" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                Facilities<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/facilities</span>
+              </a>
+              <a href="https://thepulse.ayahealthcare.com/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
+                The Pulse<span className="sr-only">URL: https://thepulse.ayahealthcare.com/</span>
+              </a>
             </div>
           </div>
         </div>
