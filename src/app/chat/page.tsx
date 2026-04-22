@@ -3987,7 +3987,7 @@ export default function ChatPage() {
   const handleProcessCredential = async (image: SavedImage) => {
     dispatch({
       type: "APPEND_MESSAGES",
-      payload: [{ id: String(Date.now()), role: "assistant", text: `🔄 Processing credential OCR for image: ${image.imageId}...`, sources: [] }],
+      payload: [{ id: String(Date.now()), role: "assistant", text: `🔄 Processing credential OCR for image: ${image.imageId}...`, timestamp: new Date() }],
     });
     try {
       const res = await fetch("/api/credentials/intake", {
@@ -3999,7 +3999,7 @@ export default function ChatPage() {
       if (res.ok) {
         dispatch({
           type: "APPEND_MESSAGES",
-          payload: [{ id: String(Date.now() + 1), role: "assistant", text: `✅ Credential Verified:\n\`\`\`json\n${JSON.stringify(data.extracted, null, 2)}\n\`\`\``, sources: [] }],
+          payload: [{ id: String(Date.now() + 1), role: "assistant", text: `✅ Credential Verified:\n\`\`\`json\n${JSON.stringify(data.extracted, null, 2)}\n\`\`\``, timestamp: new Date() }],
         });
       } else {
         throw new Error(data.error || "Failed to process");
@@ -4007,7 +4007,7 @@ export default function ChatPage() {
     } catch (e) {
       dispatch({
         type: "APPEND_MESSAGES",
-        payload: [{ id: String(Date.now() + 1), role: "assistant", text: `❌ Credential Processing Failed: ${e instanceof Error ? e.message : "Unknown error"}`, sources: [] }],
+        payload: [{ id: String(Date.now() + 1), role: "assistant", text: `❌ Credential Processing Failed: ${e instanceof Error ? e.message : "Unknown error"}`, timestamp: new Date() }],
       });
     }
   };
