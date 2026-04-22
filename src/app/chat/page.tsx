@@ -2397,20 +2397,16 @@ function LeftPanel({
                                 {item.vmsPlatform ? ` · ${item.vmsPlatform}` : ""}
                               </span>
                               {(item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl) && (
-                                <>
-                                  <span className="sr-only">URL: {item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl}</span>
-                                  <span className="aya-card-url" aria-hidden="true">
-                                    {(item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl)?.replace(/^https?:\/\/(www\.)?/, '') || `nova/facility/${(item.facilityId || item.id).split('-').pop()}`}
-                                  </span>
-                                </>
-                              )}
-                              {!(item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl) && (
-                                <>
-                                  <span className="sr-only">URL: nova/facility/{item.facilityId || item.id}</span>
-                                  <span className="aya-card-url" aria-hidden="true">
-                                    nova/facility/{(item.facilityId || item.id).split('-').pop()}
-                                  </span>
-                                </>
+                                <a
+                                  className="aya-nova-btn"
+                                  href={item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl || "#"}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={e => e.stopPropagation()}
+                                  title={item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl || ""}
+                                >
+                                  Nova
+                                </a>
                               )}
                             </div>
                             <div className="fac-card-icons">
@@ -2773,21 +2769,18 @@ function LeftPanel({
                               {item.specialty || item.profession}
                               {item.homeState && ` · ${item.homeState}`}
                             </span>
-                            {item.novaId ? (
-                              <>
-                                <span className="sr-only">URL: {item.novaUrl}</span>
-                                <span className="aya-card-url" aria-hidden="true">
-                                  nova/candidate/{item.novaId}
-                                </span>
-                              </>
-                            ) : item.novaUrl ? (
-                              <>
-                                <span className="sr-only">URL: {item.novaUrl}</span>
-                                <span className="aya-card-url" aria-hidden="true">
-                                  nova/candidate/{item.novaUrl.split('/').pop()}
-                                </span>
-                              </>
-                            ) : null}
+                            {(item.novaId || item.novaUrl) && (
+                              <a
+                                href={item.novaUrl || `/c/${item.novaId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="aya-nova-btn"
+                                onClick={e => e.stopPropagation()}
+                                title={item.novaUrl || `nova/candidate/${item.novaId}`}
+                              >
+                                Nova
+                              </a>
+                            )}
                             {(item.rcThreadUrl || item.outlookThreadUrl || item.novaId) && (
                               <div className="aya-card-badges">
                                 {item.novaId && (
@@ -4622,20 +4615,15 @@ export default function ChatPage() {
                     {selectedWorkspaceItem.vmsPlatform ? ` · ${selectedWorkspaceItem.vmsPlatform}` : ""}
                   </p>
                   {(selectedWorkspaceItem.facilityProfileUrl || selectedWorkspaceItem.facilityNovaUrl || selectedWorkspaceItem.novaUrl) && (
-                    <>
-                      <span className="sr-only">URL: {selectedWorkspaceItem.facilityProfileUrl || selectedWorkspaceItem.facilityNovaUrl || selectedWorkspaceItem.novaUrl}</span>
-                      <span className="aya-card-url c-workspace-detail-url" aria-hidden="true">
-                        {(selectedWorkspaceItem.facilityProfileUrl || selectedWorkspaceItem.facilityNovaUrl || selectedWorkspaceItem.novaUrl)?.replace(/^https?:\/\/(www\.)?/, '') || `nova/facility/${(selectedWorkspaceItem.facilityId || selectedWorkspaceItem.id).split('-').pop()}`}
-                      </span>
-                    </>
-                  )}
-                  {!(selectedWorkspaceItem.facilityProfileUrl || selectedWorkspaceItem.facilityNovaUrl || selectedWorkspaceItem.novaUrl) && (
-                    <>
-                      <span className="sr-only">URL: nova/facility/{selectedWorkspaceItem.facilityId || selectedWorkspaceItem.id}</span>
-                      <span className="aya-card-url c-workspace-detail-url" aria-hidden="true">
-                        nova/facility/{(selectedWorkspaceItem.facilityId || selectedWorkspaceItem.id).split('-').pop()}
-                      </span>
-                    </>
+                    <a
+                      className="aya-nova-btn"
+                      href={selectedWorkspaceItem.facilityProfileUrl || selectedWorkspaceItem.facilityNovaUrl || selectedWorkspaceItem.novaUrl || "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={selectedWorkspaceItem.facilityProfileUrl || selectedWorkspaceItem.facilityNovaUrl || selectedWorkspaceItem.novaUrl || ""}
+                    >
+                      Nova
+                    </a>
                   )}
                 </div>
                 <div className="c-workspace-profile-link-wrap">
