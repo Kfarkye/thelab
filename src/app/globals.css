@@ -4043,6 +4043,63 @@ body {
   gap: 24px;
 }
 
+.c-margin-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.c-margin-action-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 24px;
+  background: #111827;
+  color: #f9fafb;
+  border: none;
+  border-radius: 10px;
+  font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  letter-spacing: 0.01em;
+  min-width: 140px;
+}
+
+.c-margin-action-primary:hover {
+  background: #1f2937;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.c-margin-action-primary:active {
+  transform: translateY(0);
+  background: #030712;
+}
+
+.c-margin-action-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 16px;
+  background: transparent;
+  color: #374151;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.c-margin-action-secondary:hover {
+  background: #f9fafb;
+  border-color: rgba(0,0,0,0.12);
+}
+
 .c-margin-premium-header {
   display: flex;
   flex-direction: column;
@@ -4298,9 +4355,6 @@ body {
   font-family: 'IBM Plex Mono', 'SF Mono', monospace;
   font-size: 11px !important;
   word-break: break-all;
-}
-  text-transform: none;
-  letter-spacing: 0;
 }
 
 .c-workspace-profile-link-wrap {

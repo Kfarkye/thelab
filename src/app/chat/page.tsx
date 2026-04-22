@@ -4706,29 +4706,82 @@ export default function ChatPage() {
           </section>
         )}
 
-        {state.mode === "margins" && selectedWorkspaceItem && (
-          <section className="c-margin-premium-card">
+        {state.mode === "margins" && selectedWorkspaceItem && (() => {
+          const pkg = selectedWorkspaceItem;
+          const copyPackageText = () => {
+            const lines = [
+              `📋 Pay Package — ${pkg.specialty || pkg.profession || "Assignment"}`,
+              ``,
+              `📍 ${pkg.facilityName || "Facility"}${(pkg.facilityCity || pkg.facilityState) ? ` · ${[pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ")}` : ""}`,
+              `📅 ${formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}`,
+              ``,
+              `💰 ${formatMoney(pkg.weeklyGross)}/wk gross`,
+              `   ${formatMoney(pkg.basePayRate)}/hr base`,
+              `   ${formatMoney(pkg.weeklyStipends)}/wk stipends`,
+              `⏰ ${formatShiftCadence(pkg.weeklyHours, pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}`,
+              `   ${formatShiftWindow(pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}`,
+              ``,
+              `Interested? Reply YES and I'll get you started! 🚀`,
+            ];
+            navigator.clipboard.writeText(lines.join("\n"));
+          };
+          return (
+          <section className="c-margin-premium-card" id="margin-outreach-card">
+            {/* ── Action Bar: primary outreach actions ── */}
+            <div className="c-margin-actions">
+              <button
+                type="button"
+                className="c-margin-action-primary"
+                onClick={() => {
+                  copyPackageText();
+                  const btn = document.getElementById("copy-pkg-btn");
+                  if (btn) { btn.textContent = "✓ Copied!"; setTimeout(() => { btn.textContent = "Copy Package"; }, 1800); }
+                }}
+                id="copy-pkg-btn"
+              >
+                Copy Package
+              </button>
+              {pkg.rcThreadUrl && (
+                <a
+                  className="c-margin-action-secondary"
+                  href={pkg.rcThreadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open SMS →
+                </a>
+              )}
+              {pkg.outlookThreadUrl && (
+                <a
+                  className="c-margin-action-secondary"
+                  href={pkg.outlookThreadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open Email →
+                </a>
+              )}
+            </div>
+
+            {/* ── Headline: Specialty + Location ── */}
             <div className="c-margin-premium-header">
               <div className="c-margin-premium-title-group">
-                <h2 className="c-margin-premium-name">{selectedWorkspaceItem.candidateName || selectedWorkspaceItem.label}</h2>
-                {(selectedWorkspaceItem.specialty || selectedWorkspaceItem.profession) && (
+                <h2 className="c-margin-premium-name">{pkg.specialty || pkg.profession || pkg.label}</h2>
+                {(pkg.facilityCity || pkg.facilityState) && (
                   <span className="c-margin-premium-badge">
-                    {selectedWorkspaceItem.specialty || selectedWorkspaceItem.profession}
+                    {[pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ")}
                   </span>
                 )}
               </div>
-              
+
               <div className="c-margin-premium-location">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                {selectedWorkspaceItem.facilityName || "--"}
-                {(selectedWorkspaceItem.facilityCity || selectedWorkspaceItem.facilityState)
-                  ? ` · ${[selectedWorkspaceItem.facilityCity, selectedWorkspaceItem.facilityState].filter(Boolean).join(", ")}`
-                  : ""}
+                {pkg.facilityName || "--"}
               </div>
 
               <div className="c-margin-premium-dates">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                {formatAssignmentWindow(selectedWorkspaceItem.assignmentStart, selectedWorkspaceItem.assignmentEnd)}
+                {formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}
               </div>
             </div>
 
@@ -4741,69 +4794,72 @@ export default function ChatPage() {
               </div>
             )}
 
+            {/* ── Financial Grid: Screenshot-friendly pay layout ── */}
             <div className="c-margin-premium-financials">
               <div className="c-margin-premium-hero">
                 <div className="c-margin-premium-gross">
-                  <span className="c-margin-premium-gross-val">{formatMoney(selectedWorkspaceItem.weeklyGross)}</span>
+                  <span className="c-margin-premium-gross-val">{formatMoney(pkg.weeklyGross)}</span>
                   <span className="c-margin-premium-gross-lbl">/wk gross</span>
                 </div>
-                
-                <details className="c-margin-premium-hidden">
-                  <summary>Show Margins</summary>
-                  <div className="c-margin-premium-hidden-data">
-                    <span>Actual: <strong>{formatPct(selectedWorkspaceItem.actualMarginPct)}</strong></span>
-                    <span>Target: <strong>{formatPct(selectedWorkspaceItem.targetMarginPct)}</strong></span>
-                  </div>
-                </details>
               </div>
 
               <div className="c-margin-premium-breakdown-row">
                 <div className="c-margin-premium-breakdown-item">
-                  <span className="c-margin-premium-kpi-lbl">Base Pay</span>
-                  <span className="c-margin-premium-kpi-val">{formatMoney(selectedWorkspaceItem.basePayRate)}<small>/hr</small></span>
+                  <span className="c-margin-premium-kpi-lbl">Base</span>
+                  <span className="c-margin-premium-kpi-val">{formatMoney(pkg.basePayRate)}<small>/hr</small></span>
                 </div>
                 <div className="c-margin-premium-breakdown-item">
                   <span className="c-margin-premium-kpi-lbl">Stipends</span>
-                  <span className="c-margin-premium-kpi-val">{formatMoney(selectedWorkspaceItem.weeklyStipends)}<small>/wk</small></span>
+                  <span className="c-margin-premium-kpi-val">{formatMoney(pkg.weeklyStipends)}<small>/wk</small></span>
                 </div>
                 <div className="c-margin-premium-breakdown-item">
-                  <span className="c-margin-premium-kpi-lbl">Cadence</span>
-                  <span className="c-margin-premium-kpi-val">{formatShiftCadence(selectedWorkspaceItem.weeklyHours, selectedWorkspaceItem.shiftType, selectedWorkspaceItem.shiftStart, selectedWorkspaceItem.shiftEnd) || "--"}</span>
+                  <span className="c-margin-premium-kpi-lbl">Shift</span>
+                  <span className="c-margin-premium-kpi-val">{formatShiftCadence(pkg.weeklyHours, pkg.shiftType, pkg.shiftStart, pkg.shiftEnd) || "--"}</span>
                 </div>
               </div>
             </div>
 
+            {/* ── Internal: Margins + Metadata (hidden by default) ── */}
             <details className="c-margin-premium-meta-details">
-              <summary>View internal metadata</summary>
+              <summary>Internal Details</summary>
               <div className="c-margin-premium-metadata-grid">
                 <div className="c-margin-premium-meta">
-                  <span>Weekly hours</span>
-                  <strong>{selectedWorkspaceItem.weeklyHours ?? "--"}</strong>
+                  <span>Actual TM%</span>
+                  <strong>{formatPct(pkg.actualMarginPct)}</strong>
                 </div>
                 <div className="c-margin-premium-meta">
-                  <span>Shift window</span>
-                  <strong>{formatShiftWindow(selectedWorkspaceItem.shiftType, selectedWorkspaceItem.shiftStart, selectedWorkspaceItem.shiftEnd)}</strong>
+                  <span>Target TM%</span>
+                  <strong>{formatPct(pkg.targetMarginPct)}</strong>
                 </div>
                 <div className="c-margin-premium-meta">
-                  <span>Last synced</span>
-                  <strong title={selectedWorkspaceItem.lastSeenAt || undefined}>{formatRelativeTime(selectedWorkspaceItem.lastSeenAt)}</strong>
+                  <span>Shift Window</span>
+                  <strong>{formatShiftWindow(pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}</strong>
                 </div>
                 <div className="c-margin-premium-meta">
-                  <span>Job reference</span>
-                  <strong>{selectedWorkspaceItem.jobId || "--"}</strong>
+                  <span>Weekly Hours</span>
+                  <strong>{pkg.weeklyHours ?? "--"}</strong>
                 </div>
                 <div className="c-margin-premium-meta">
-                  <span>Calc reference</span>
-                  <strong>{selectedWorkspaceItem.marginId || "--"}</strong>
+                  <span>Last Synced</span>
+                  <strong title={pkg.lastSeenAt || undefined}>{formatRelativeTime(pkg.lastSeenAt)}</strong>
                 </div>
                 <div className="c-margin-premium-meta">
-                  <span>Ledger record</span>
-                  <strong className="c-margin-mono">{selectedWorkspaceItem.marginObjectId || selectedWorkspaceItem.id}</strong>
+                  <span>Job Ref</span>
+                  <strong>{pkg.jobId || "--"}</strong>
+                </div>
+                <div className="c-margin-premium-meta">
+                  <span>Calc Ref</span>
+                  <strong>{pkg.marginId || "--"}</strong>
+                </div>
+                <div className="c-margin-premium-meta">
+                  <span>Ledger ID</span>
+                  <strong className="c-margin-mono">{pkg.marginObjectId || pkg.id}</strong>
                 </div>
               </div>
             </details>
           </section>
-        )}
+          );
+        })()}
 
         <div className="c-scroll">
           <div className="c-messages">
