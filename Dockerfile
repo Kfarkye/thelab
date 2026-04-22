@@ -24,6 +24,7 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV GOOGLE_CLOUD_PROJECT=workflowos-a0fbf
 ENV VERTEX_AI_AYAOPS_URL_DATASTORE=projects/1049576459547/locations/global/collections/default_collection/dataStores/ayaops-candidate-urls-basic-v1
+ENV GOOGLE_MAPS_API_KEY=AIzaSyDmpKrf4fuxvuMUOYWH8RPEgEHA3FPlY6I
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs

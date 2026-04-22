@@ -3307,6 +3307,39 @@ export default function ChatPage() {
     [state.mode, selectedWorkspaceItem],
   );
 
+  const [marginDistance, setMarginDistance] = useState<{ distance: string; duration: string } | null>(null);
+  useEffect(() => {
+    if (state.mode !== "margins" || !selectedWorkspaceItem) {
+      setMarginDistance(null);
+      return;
+    }
+    const pkg = selectedWorkspaceItem;
+    const origin = pkg.homeState || null;
+    const dest = [pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ");
+    if (!origin || !dest) {
+      setMarginDistance(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/distance", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ origin, destination: dest }),
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json() as { status: string; distance?: string; duration?: string };
+        if (!cancelled && data.status === "ok") {
+          setMarginDistance({ distance: data.distance || "--", duration: data.duration || "--" });
+        }
+      } catch {
+        // Distance is supplementary — silent failure is acceptable.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [state.mode, selectedWorkspaceItem]);
+
   const formatMoney = useCallback((value: number | null | undefined) => {
     if (typeof value !== "number" || !Number.isFinite(value)) return "--";
     return new Intl.NumberFormat("en-US", {
@@ -4775,6 +4808,12 @@ export default function ChatPage() {
                   <span className="c-pkg-field-label">Location</span>
                   <span className="c-pkg-field-value">{[pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ") || "--"}</span>
                 </div>
+                {marginDistance && (
+                  <div className="c-pkg-row">
+                    <span className="c-pkg-field-label">Distance</span>
+                    <span className="c-pkg-field-value">{marginDistance.distance} · {marginDistance.duration}</span>
+                  </div>
+                )}
                 <div className="c-pkg-row">
                   <span className="c-pkg-field-label">Dates</span>
                   <span className="c-pkg-field-value">{formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}</span>
