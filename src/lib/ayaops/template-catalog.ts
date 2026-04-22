@@ -534,21 +534,20 @@ export const OPS_EMAIL_TEMPLATES: EmailTemplate[] = [
     internalOnly: true,
     requiredFields: ['name'],
     generateContent: (d) => {
-      const novaUrl = d.candidateId
-        ? `https://nova.ayahealthcare.com/#/recruiting/candidates/${d.candidateId}/new-profile/about`
-        : 'Not Available';
-
+      const signature = `Kofi Farkye\nSenior Recruiter, Fulfillment Specialist\nP: 858-529-7267 Ext: 17017`;
+      
       return {
         to: 'reassignments@ayahealthcare.com',
-        subject: `Reassignment Request – ${d.name}`,
+        subject: `Please Reassign - ${d.name}`,
         body: `Hi Team,
 
-Can we please reassign ${d.name}?
+Can we please reassign ${d.name}
 
 Email: ${d.email || 'Not Available'}
-Nova Profile: ${novaUrl}
 
-Thank you!`,
+Thank you!
+
+${signature}`,
       };
     },
   },
