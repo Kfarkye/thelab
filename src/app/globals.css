@@ -4357,6 +4357,81 @@ body {
   word-break: break-all;
 }
 
+/* ── Pay Package: Structured Section Layout ── */
+.c-pkg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.c-pkg-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  padding: 0 0 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
+}
+
+.c-pkg-section-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.c-pkg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+}
+
+.c-pkg-row:last-child {
+  border-bottom: none;
+}
+
+.c-pkg-row-highlight {
+  background: #fafafa;
+  margin: 0 -24px;
+  padding: 12px 24px;
+  border-radius: 0;
+}
+
+.c-pkg-field-label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+  font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
+}
+
+.c-pkg-field-value {
+  font-size: 14px;
+  color: #111827;
+  font-weight: 500;
+  font-family: 'IBM Plex Mono', 'SF Mono', monospace;
+  text-align: right;
+}
+
+.c-pkg-field-value small {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-left: 2px;
+  font-weight: 400;
+}
+
+.c-pkg-field-primary {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
+}
+
+.c-pkg-field-primary small {
+  font-size: 13px;
+}
+
 .c-workspace-profile-link-wrap {
   flex-shrink: 0;
   padding-top: 2px;
