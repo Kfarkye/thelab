@@ -21,7 +21,7 @@ interface DistanceResult {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!MAPS_API_KEY) {
     return NextResponse.json(
-      { status: "error", error: "GOOGLE_MAPS_API_KEY not configured" } satisfies DistanceResult,
+      { status: "error" as const, distance: "--", duration: "--", origin: "", destination: "", error: "GOOGLE_MAPS_API_KEY not configured" },
       { status: 500 },
     );
   }
@@ -35,13 +35,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     destination = String(body.destination || "").trim();
     if (!origin || !destination) {
       return NextResponse.json(
-        { status: "error", error: "origin and destination are required" } satisfies Partial<DistanceResult>,
+        { status: "error" as const, distance: "--", duration: "--", origin: "", destination: "", error: "origin and destination are required" },
         { status: 400 },
       );
     }
   } catch {
     return NextResponse.json(
-      { status: "error", error: "Invalid JSON body" } satisfies Partial<DistanceResult>,
+      { status: "error" as const, distance: "--", duration: "--", origin: "", destination: "", error: "Invalid JSON body" },
       { status: 400 },
     );
   }
