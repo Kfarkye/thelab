@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 Return EXACTLY a JSON block enclosed in \`\`\`json ... \`\`\`.`;
 
     const token = await getVertexToken();
-    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/gemini-1.5-pro:generateContent`;
+    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/gemini-3.0-pro:generateContent`;
 
     const payload = {
       contents: [
