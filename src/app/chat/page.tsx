@@ -2769,20 +2769,20 @@ function LeftPanel({
                               {item.specialty || item.profession}
                               {item.homeState && ` · ${item.homeState}`}
                             </span>
-                            {(item.novaId || item.novaUrl) && (
-                              <a
-                                href={item.novaUrl || `/c/${item.novaId}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="aya-nova-btn"
-                                onClick={e => e.stopPropagation()}
-                                title={item.novaUrl || `nova/candidate/${item.novaId}`}
-                              >
-                                Nova
-                              </a>
-                            )}
-                            {(item.rcThreadUrl || item.outlookThreadUrl || item.novaId) && (
+                            {(item.rcThreadUrl || item.outlookThreadUrl || item.novaId || item.novaUrl) && (
                               <div className="aya-card-badges">
+                                {(item.novaId || item.novaUrl) && (
+                                  <a
+                                    href={item.novaUrl || `/c/${item.novaId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="aya-nova-btn"
+                                    onClick={e => e.stopPropagation()}
+                                    title={item.novaUrl || `nova/candidate/${item.novaId}`}
+                                  >
+                                    Nova
+                                  </a>
+                                )}
                                 {item.novaId && (
                                   <a
                                     href={`/c/${item.novaId}`}

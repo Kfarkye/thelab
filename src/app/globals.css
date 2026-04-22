@@ -2623,6 +2623,10 @@ body {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 
+.aya-card-badges .aya-nova-btn {
+  margin-top: 0;
+}
+
 .aya-nova-btn:active {
   transform: translateY(0);
   background: #030712;
