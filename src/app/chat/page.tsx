@@ -1212,50 +1212,6 @@ function assignmentProgress(start: string | null | undefined, end: string | null
   };
 }
 
-function buildMarginDealRead(item: PanelItem): { title: string; detail: string; prompt: string; tone: "default" | "attention" | "positive" } {
-  const formatUsd = (value: number) =>
-    new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      maximumFractionDigits: 0,
-    }).format(value);
-  const actual = typeof item.actualMarginPct === "number" ? item.actualMarginPct : null;
-  const target = typeof item.targetMarginPct === "number" ? item.targetMarginPct : null;
-  const delta = marginDeltaPoints(actual, target);
-  const gross = typeof item.weeklyGross === "number" ? item.weeklyGross : null;
-  const marketLabel = [item.specialty || item.profession, item.facilityCity || item.facilityState].filter(Boolean).join(" · ");
-
-  if (delta != null && delta < -0.15) {
-    return {
-      title: "Deal risk: margin is below target",
-      detail: `${gross ? `${formatUsd(gross)}/wk` : "Package"} is ${formatMarginDelta(delta)}. Confirm your floor before candidate negotiation.`,
-      prompt: `What is a defensible negotiation floor for this ${item.specialty || item.profession || "role"} package?`,
-      tone: "attention",
-    };
-  }
-  if (delta != null && delta > 0.15) {
-    return {
-      title: "Deal read: room to negotiate",
-      detail: `${gross ? `${formatUsd(gross)}/wk` : "Package"} sits ${formatMarginDelta(delta)}. Use this as room if the candidate pushes on pay.`,
-      prompt: `How should I position this package to the candidate and still protect margin?`,
-      tone: "positive",
-    };
-  }
-  if (!item.jobId) {
-    return {
-      title: "Execution risk: package not linked yet",
-      detail: `This deal needs a linked job/offer before outreach so terms stay stable${marketLabel ? ` (${marketLabel})` : ""}.`,
-      prompt: "What should I lock first before sending this package?",
-      tone: "attention",
-    };
-  }
-  return {
-    title: "Deal read: balanced package",
-    detail: `${gross ? `${formatUsd(gross)}/wk` : "Package"} is near target margin${marketLabel ? ` for ${marketLabel}` : ""}. Next step is candidate positioning.`,
-    prompt: `Give me a recruiter pitch for this ${item.specialty || item.profession || "role"} package.`,
-    tone: "default",
-  };
-}
 
 function formatTouchPriorityReason(value: string | null | undefined): string | null {
   const raw = readStringSafe(value);
@@ -3342,10 +3298,7 @@ export default function ChatPage() {
     [activeWorkspaceScope, state.messages],
   );
   const todayCards = useMemo(() => buildTodayCards(state.mode, summary), [state.mode, summary]);
-  const marginDealRead = useMemo(
-    () => (state.mode === "margins" && selectedWorkspaceItem ? buildMarginDealRead(selectedWorkspaceItem) : null),
-    [state.mode, selectedWorkspaceItem],
-  );
+
   const marginTimeline = useMemo(
     () =>
       state.mode === "margins" && selectedWorkspaceItem
@@ -4755,22 +4708,6 @@ export default function ChatPage() {
 
         {state.mode === "margins" && selectedWorkspaceItem && (
           <section className="c-workspace-detail c-margin-detail">
-            {marginDealRead && (
-              <div className={`c-margin-risk-banner c-margin-risk-${marginDealRead.tone}`}>
-                <div className="c-margin-risk-copy">
-                  <strong>{marginDealRead.title}</strong>
-                  <p>{marginDealRead.detail}</p>
-                </div>
-                <button
-                  type="button"
-                  className="c-margin-risk-action"
-                  onClick={() => handleTodayCardAction(marginDealRead.prompt)}
-                  disabled={state.loading}
-                >
-                  Read full analysis
-                </button>
-              </div>
-            )}
             <div className="c-workspace-detail-head c-margin-head">
               <h3>
                 {selectedWorkspaceItem.candidateName || selectedWorkspaceItem.label}
@@ -4794,7 +4731,13 @@ export default function ChatPage() {
             </div>
             <div className="c-margin-summary">
               <p>
-                {`${formatMoney(selectedWorkspaceItem.weeklyGross)}/wk gross at ${formatPct(selectedWorkspaceItem.actualMarginPct)} margin`}
+                {formatMoney(selectedWorkspaceItem.weeklyGross)}/wk gross
+                <details className="c-margin-disclosure-inline" style={{ display: "inline-block", marginLeft: "12px" }}>
+                  <summary style={{ cursor: "pointer", color: "var(--color-muted)", userSelect: "none", listStyle: "none" }}>Show Margins</summary>
+                  <span style={{ marginLeft: "4px" }}>
+                    Actual: {formatPct(selectedWorkspaceItem.actualMarginPct)} | Target: {formatPct(selectedWorkspaceItem.targetMarginPct)}
+                  </span>
+                </details>
               </p>
               <p>
                 {`${formatMoney(selectedWorkspaceItem.basePayRate)}/hr base + ${formatMoney(selectedWorkspaceItem.weeklyStipends)} stipends`}
