@@ -4709,23 +4709,25 @@ export default function ChatPage() {
         {state.mode === "margins" && selectedWorkspaceItem && (() => {
           const pkg = selectedWorkspaceItem;
           const copyPackageText = () => {
+            const specialty = pkg.specialty || pkg.profession || "Assignment";
+            const facility = pkg.facilityName || "TBD";
+            const grossNum = typeof pkg.weeklyGross === "number" && Number.isFinite(pkg.weeklyGross)
+              ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(pkg.weeklyGross)
+              : "--";
+            const location = [pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ") || "Location TBD";
+
             const lines = [
-              `Pay Package — ${pkg.specialty || pkg.profession || "Assignment"}`,
+              `${specialty} - ${facility} | ${grossNum}/week`,
               ``,
-              `FACILITY`,
-              `${pkg.facilityName || "TBD"}`,
-              `${[pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ") || "Location TBD"}`,
+              `Location: ${location}`,
+              `Dates: ${formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}`,
+              `Schedule: ${formatShiftCadence(pkg.weeklyHours, pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)} | ${formatShiftWindow(pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}`,
               ``,
-              `ASSIGNMENT`,
-              `${formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}`,
-              `${formatShiftCadence(pkg.weeklyHours, pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)} | ${formatShiftWindow(pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}`,
-              ``,
-              `COMPENSATION`,
-              `Weekly Gross:  ${formatMoney(pkg.weeklyGross)}/wk`,
+              `Weekly Gross:  ${grossNum}/week`,
               `Base Rate:     ${formatMoney(pkg.basePayRate)}/hr`,
               `Stipends:      ${formatMoney(pkg.weeklyStipends)}/wk`,
               ``,
-              `Reply to discuss or call to confirm availability.`,
+              `Let me know if you'd like to discuss this opportunity.`,
             ];
             navigator.clipboard.writeText(lines.join("\n"));
           };
