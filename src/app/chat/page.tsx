@@ -4707,74 +4707,98 @@ export default function ChatPage() {
         )}
 
         {state.mode === "margins" && selectedWorkspaceItem && (
-          <section className="c-workspace-detail c-margin-detail">
-            <div className="c-workspace-detail-head c-margin-head">
-              <h3>
-                {selectedWorkspaceItem.candidateName || selectedWorkspaceItem.label}
-                {(selectedWorkspaceItem.specialty || selectedWorkspaceItem.profession)
-                  ? ` · ${selectedWorkspaceItem.specialty || selectedWorkspaceItem.profession}`
-                  : ""}
-              </h3>
-              <p>
+          <section className="c-margin-premium-card">
+            <div className="c-margin-premium-header">
+              <div className="c-margin-premium-title-group">
+                <h2 className="c-margin-premium-name">{selectedWorkspaceItem.candidateName || selectedWorkspaceItem.label}</h2>
+                {(selectedWorkspaceItem.specialty || selectedWorkspaceItem.profession) && (
+                  <span className="c-margin-premium-badge">
+                    {selectedWorkspaceItem.specialty || selectedWorkspaceItem.profession}
+                  </span>
+                )}
+              </div>
+              
+              <div className="c-margin-premium-location">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
                 {selectedWorkspaceItem.facilityName || "--"}
                 {(selectedWorkspaceItem.facilityCity || selectedWorkspaceItem.facilityState)
                   ? ` · ${[selectedWorkspaceItem.facilityCity, selectedWorkspaceItem.facilityState].filter(Boolean).join(", ")}`
                   : ""}
-              </p>
-              <p>{formatAssignmentWindow(selectedWorkspaceItem.assignmentStart, selectedWorkspaceItem.assignmentEnd)}</p>
-              {marginTimeline && (
-                <div className="c-assignment-progress" role="img" aria-label={marginTimeline.label}>
-                  <div className="c-assignment-progress-bar" style={{ width: `${marginTimeline.pct}%` }} />
-                  <span>{marginTimeline.label}</span>
+              </div>
+
+              <div className="c-margin-premium-dates">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                {formatAssignmentWindow(selectedWorkspaceItem.assignmentStart, selectedWorkspaceItem.assignmentEnd)}
+              </div>
+            </div>
+
+            {marginTimeline && (
+              <div className="c-margin-premium-timeline">
+                <div className="c-margin-premium-timeline-bar">
+                  <div className="c-margin-premium-timeline-fill" style={{ width: `${marginTimeline.pct}%` }} />
                 </div>
-              )}
-            </div>
-            <div className="c-margin-summary">
-              <p>
-                {formatMoney(selectedWorkspaceItem.weeklyGross)}/wk gross
-                <details className="c-margin-disclosure-inline" style={{ display: "inline-block", marginLeft: "12px" }}>
-                  <summary style={{ cursor: "pointer", color: "var(--color-muted)", userSelect: "none", listStyle: "none" }}>Show Margins</summary>
-                  <span style={{ marginLeft: "4px" }}>
-                    Actual: {formatPct(selectedWorkspaceItem.actualMarginPct)} | Target: {formatPct(selectedWorkspaceItem.targetMarginPct)}
-                  </span>
+                <span className="c-margin-premium-timeline-lbl">{marginTimeline.label}</span>
+              </div>
+            )}
+
+            <div className="c-margin-premium-financials">
+              <div className="c-margin-premium-hero">
+                <div className="c-margin-premium-gross">
+                  <span className="c-margin-premium-gross-val">{formatMoney(selectedWorkspaceItem.weeklyGross)}</span>
+                  <span className="c-margin-premium-gross-lbl">/wk gross</span>
+                </div>
+                
+                <details className="c-margin-premium-hidden">
+                  <summary>Show Margins</summary>
+                  <div className="c-margin-premium-hidden-data">
+                    <span>Actual: <strong>{formatPct(selectedWorkspaceItem.actualMarginPct)}</strong></span>
+                    <span>Target: <strong>{formatPct(selectedWorkspaceItem.targetMarginPct)}</strong></span>
+                  </div>
                 </details>
-              </p>
-              <p>
-                {`${formatMoney(selectedWorkspaceItem.basePayRate)}/hr base + ${formatMoney(selectedWorkspaceItem.weeklyStipends)} stipends`}
-                {` · ${formatShiftCadence(
-                  selectedWorkspaceItem.weeklyHours,
-                  selectedWorkspaceItem.shiftType,
-                  selectedWorkspaceItem.shiftStart,
-                  selectedWorkspaceItem.shiftEnd,
-                )}`}
-              </p>
+              </div>
+
+              <div className="c-margin-premium-breakdown-row">
+                <div className="c-margin-premium-breakdown-item">
+                  <span className="c-margin-premium-kpi-lbl">Base Pay</span>
+                  <span className="c-margin-premium-kpi-val">{formatMoney(selectedWorkspaceItem.basePayRate)}<small>/hr</small></span>
+                </div>
+                <div className="c-margin-premium-breakdown-item">
+                  <span className="c-margin-premium-kpi-lbl">Stipends</span>
+                  <span className="c-margin-premium-kpi-val">{formatMoney(selectedWorkspaceItem.weeklyStipends)}<small>/wk</small></span>
+                </div>
+                <div className="c-margin-premium-breakdown-item">
+                  <span className="c-margin-premium-kpi-lbl">Cadence</span>
+                  <span className="c-margin-premium-kpi-val">{formatShiftCadence(selectedWorkspaceItem.weeklyHours, selectedWorkspaceItem.shiftType, selectedWorkspaceItem.shiftStart, selectedWorkspaceItem.shiftEnd) || "--"}</span>
+                </div>
+              </div>
             </div>
-            <details className="c-margin-details">
-              <summary>View pay breakdown</summary>
-              <div className="c-workspace-detail-grid c-margin-detail-grid">
-                <div>
+
+            <details className="c-margin-premium-meta-details">
+              <summary>View internal metadata</summary>
+              <div className="c-margin-premium-metadata-grid">
+                <div className="c-margin-premium-meta">
                   <span>Weekly hours</span>
                   <strong>{selectedWorkspaceItem.weeklyHours ?? "--"}</strong>
                 </div>
-                <div>
+                <div className="c-margin-premium-meta">
                   <span>Shift window</span>
                   <strong>{formatShiftWindow(selectedWorkspaceItem.shiftType, selectedWorkspaceItem.shiftStart, selectedWorkspaceItem.shiftEnd)}</strong>
                 </div>
-                <div>
+                <div className="c-margin-premium-meta">
                   <span>Last synced</span>
                   <strong title={selectedWorkspaceItem.lastSeenAt || undefined}>{formatRelativeTime(selectedWorkspaceItem.lastSeenAt)}</strong>
                 </div>
-                <div>
+                <div className="c-margin-premium-meta">
                   <span>Job reference</span>
                   <strong>{selectedWorkspaceItem.jobId || "--"}</strong>
                 </div>
-                <div>
+                <div className="c-margin-premium-meta">
                   <span>Calc reference</span>
                   <strong>{selectedWorkspaceItem.marginId || "--"}</strong>
                 </div>
-                <div>
+                <div className="c-margin-premium-meta">
                   <span>Ledger record</span>
-                  <strong>{selectedWorkspaceItem.marginObjectId || selectedWorkspaceItem.id}</strong>
+                  <strong className="c-margin-mono">{selectedWorkspaceItem.marginObjectId || selectedWorkspaceItem.id}</strong>
                 </div>
               </div>
             </details>
