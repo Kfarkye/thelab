@@ -3022,6 +3022,7 @@ function RightPanel({
   onUseImage,
   onTogglePin,
   onLinkCandidate,
+  onProcessCredential,
   selectedCandidateId,
   onClose,
 }: {
@@ -3032,6 +3033,7 @@ function RightPanel({
   onUseImage: (image: SavedImage) => void;
   onTogglePin: (image: SavedImage) => void;
   onLinkCandidate: (image: SavedImage) => void;
+  onProcessCredential?: (image: SavedImage) => void;
   selectedCandidateId: string | null;
   onClose: () => void;
 }) {
@@ -3153,6 +3155,14 @@ function RightPanel({
                       >
                         Link to candidate
                       </button>
+                      {onProcessCredential && (
+                        <button
+                          className="rp-image-action"
+                          onClick={() => onProcessCredential(image)}
+                        >
+                          Verify Credential
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3971,6 +3981,34 @@ export default function ChatPage() {
       void fetchRecentImages();
     } catch {
       // Non-blocking UI action.
+    }
+  };
+
+  const handleProcessCredential = async (image: SavedImage) => {
+    dispatch({
+      type: "APPEND_MESSAGES",
+      payload: [{ id: String(Date.now()), role: "assistant", text: `🔄 Processing credential OCR for image: ${image.imageId}...`, sources: [] }],
+    });
+    try {
+      const res = await fetch("/api/credentials/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageId: image.imageId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        dispatch({
+          type: "APPEND_MESSAGES",
+          payload: [{ id: String(Date.now() + 1), role: "assistant", text: `✅ Credential Verified:\n\`\`\`json\n${JSON.stringify(data.extracted, null, 2)}\n\`\`\``, sources: [] }],
+        });
+      } else {
+        throw new Error(data.error || "Failed to process");
+      }
+    } catch (e) {
+      dispatch({
+        type: "APPEND_MESSAGES",
+        payload: [{ id: String(Date.now() + 1), role: "assistant", text: `❌ Credential Processing Failed: ${e instanceof Error ? e.message : "Unknown error"}`, sources: [] }],
+      });
     }
   };
 
@@ -5176,6 +5214,7 @@ export default function ChatPage() {
           onUseImage={handleUseSavedImage}
           onTogglePin={handleToggleImagePin}
           onLinkCandidate={handleLinkImageCandidate}
+          onProcessCredential={handleProcessCredential}
           selectedCandidateId={state.selectedCandidate?.id || null}
           onClose={() => {
             setRightPanelMode("closed");
