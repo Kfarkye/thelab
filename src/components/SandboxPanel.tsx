@@ -43,6 +43,15 @@ function ApiCallPreview({
   );
 }
 
+function buildOutlookDeepLink(toEmail: string, cc: string[], subject: string, body: string): string {
+  const params = new URLSearchParams();
+  params.set("to", toEmail);
+  if (cc.length > 0) params.set("cc", cc.join(","));
+  params.set("subject", subject);
+  params.set("body", body);
+  return `https://outlook.office.com/mail/deeplink/compose?${params.toString()}`;
+}
+
 function EmailDraftPreview({
   templateId,
   toEmail,
@@ -62,6 +71,7 @@ function EmailDraftPreview({
   jobId?: string;
   noteContent?: string;
 }) {
+  const outlookUrl = buildOutlookDeepLink(toEmail, cc, subject, body);
   return (
     <div className="sb-email">
       <div className="sb-email-meta">
@@ -75,6 +85,33 @@ function EmailDraftPreview({
       <div className="sb-email-body">
         <pre><code>{body}</code></pre>
       </div>
+      <a
+        href={outlookUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="sb-btn sb-btn-outlook"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "6px",
+          marginTop: "8px",
+          background: "#0078d4",
+          color: "#fff",
+          border: "none",
+          borderRadius: "6px",
+          padding: "7px 14px",
+          fontSize: "12px",
+          fontWeight: 600,
+          textDecoration: "none",
+          cursor: "pointer",
+        }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M22 6L12 13L2 6V4L12 11L22 4V6Z" fill="currentColor"/>
+          <path d="M2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+        </svg>
+        Open in Outlook
+      </a>
       {noteContent && (
         <div className="sb-email-note">
           <div className="sb-api-label">Note On Approve</div>
@@ -281,6 +318,20 @@ export function SandboxPanel({
               </button>
               {activeTask.preview.type === "email_draft" ? (
                 <>
+                  <a
+                    href={buildOutlookDeepLink(
+                      activeTask.preview.toEmail,
+                      activeTask.preview.cc,
+                      activeTask.preview.subject,
+                      activeTask.preview.body,
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="sb-btn"
+                    style={{ background: "#0078d4", color: "#fff", textDecoration: "none", textAlign: "center" }}
+                  >
+                    Open in Outlook
+                  </a>
                   <button
                     type="button"
                     className="sb-btn sb-btn-primary"
