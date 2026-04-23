@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/spanner";
+import { getCredentialDb } from "@/lib/spanner-pool";
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing firebase_uid or email" }, { status: 400 });
     }
 
-    const db = getDb();
+    const db = getCredentialDb();
 
     // Check if user already exists
     const [rows] = await db.run({

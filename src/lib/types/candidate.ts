@@ -11,6 +11,7 @@ export interface CandidateRecord {
   facilityName?: string;
   facilityCity?: string;
   facilityState?: string;
+  phone?: string;
   assignmentStatus?: string;      // human-readable from DB ("Starting Soon", "On Assignment")
   derivedCurrentStatus?: string;  // date-computed reality ("On Assignment" if start < today < end)
   isStale?: boolean;              // true when DB status disagrees with date-derived status

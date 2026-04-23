@@ -14,7 +14,7 @@ fi
 
 IMAGE="us-central1-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/cloud-run-source-deploy/gemini3-chat:latest"
 
-echo "1. Building image..."
+echo "1. Building image and resolving Next.js UI edge UI routes..."
 docker build --no-cache --platform linux/amd64 -t $IMAGE .
 
 echo "2. Pushing to Artifact Registry..."

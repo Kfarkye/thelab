@@ -5,6 +5,16 @@
 export function requireEnv(key: string): string {
   const val = process.env[key];
   if (!val) {
+    if (process.env.npm_lifecycle_event === "build") {
+      console.warn(JSON.stringify({
+        severity: "WARNING",
+        module: "env",
+        event: "build_stub_generated",
+        missing_key: key,
+        message: `Missing ${key} during build phase; using stub.`
+      }));
+      return `BUILD_STUB_${key}`;
+    }
     throw new Error(
       `CRITICAL BOOT FAILURE: Missing required environment variable: ${key}`,
     );

@@ -38,6 +38,7 @@ export function mapCandidateRow(row: Record<string, unknown>): CandidateRecord {
     facilityState: row.facility_state ? String(row.facility_state) : undefined,
     assignmentStatus: dbStatus,
     derivedCurrentStatus,
+    phone: row.phone ? String(row.phone) : undefined,
     isStale: !!(derivedCurrentStatus && dbStatus && derivedCurrentStatus !== dbStatus),
     assignmentStart: startDate,
     assignmentEnd: endDate,

@@ -1,109 +1,40 @@
 "use client";
 
 import { useReducer, useRef, useEffect, useCallback, useState, useMemo, FormEvent } from "react";
-import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, Phone, MoreHorizontal, PanelLeft } from "lucide-react";
+import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, UserPlus, Calculator } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import type { CommitAction, SandboxPanelMode, SandboxPreview, SandboxTask } from "@/lib/types/sandbox";
 import { SandboxPanel } from "@/components/SandboxPanel";
 
-// --- Types ---
-interface Citation { title: string; uri: string; }
-interface CodeBlock {
-  code: string;
-  language: string;
-  outcome?: string;
-  output?: string;
-}
 
-type WriteOutcome = "updated" | "inserted" | "no_change" | "failed";
+import type { 
+  Citation, CodeBlock, WriteOutcome, WriteResultMeta, Message, ToolStatus, 
+  SavedImage, SelectedCandidateContextPayload, SelectedMarginContextPayload, 
+  BrowserStep, VisualAssertion, BrowserTask, ConsoleMode, ModelOverride, 
+  ModeConfig, ImageIntent, ChatState, ChatAction,
+  PanelItem, SummaryData, TodayCard
+} from "@/lib/types/chat";
 
-interface WriteResultMeta {
-  outcome: WriteOutcome;
-  action?: string;
-  objectType?: string;
-  rowsUpdated?: number | null;
-  code?: string | null;
-  payload?: Record<string, unknown>;
-}
+import { ChatInput } from "@/components/chat/ChatInput";
+import { ChatMessages } from "@/components/chat/ChatMessages";
+import {
+  formatMarkdown, formatCopyReadyText, isCopyReadyFenceLanguage, isLikelyRawPayloadBlock,
+  buildCopyOnlyMarkdown, buildAssistantDisplayContent, buildUserDisplayContent, formatMessageTimestamp,
+  extractPrimaryCopyBlock, stripFirstCopyReadyFence, saveToStorage, loadFromStorage,
+  workspaceScopeFor, getSavedMode, readStringSafe, readNumberSafe, readPercentDecimal, MODE_KEY, storageKey,
+  formatShortDate, formatLongDate, formatDateTime, marginDeltaPoints, formatMarginDelta,
+  formatRelativeTime, formatShiftWindow, parseTimeToMinutes, formatShiftCadence,
+  formatAssignmentWindow, assignmentProgress, formatTouchPriorityReason, formatSubmissionDifficulty,
+  formatTournamentStage, normalizeStateToCode, inferHealthcareContextFromPrompt,
+  inferHealthcareContextFromLabel, normalizeTextToken, buildLicensingReferenceUrl,
+  resolveHealthcareEntityFromPrompt
+} from "@/lib/chat-utils";
 
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  workspaceScope?: string | null;
-  citations?: Citation[];
-  queries?: string[];
-  codeBlocks?: CodeBlock[];
-  timestamp: Date;
-  isStreaming?: boolean;
-  durationMs?: number;
-  imageUrl?: string;
-  modelProvider?: string;
-  modelId?: string;
-  writeResult?: WriteResultMeta;
-}
 
-interface SavedImage {
-  imageId: string;
-  candidateId: string | null;
-  candidateName: string | null;
-  sourceType: string;
-  screenType: string | null;
-  mode: string | null;
-  createdAt: string;
-  isPinned: boolean;
-  tags: string[];
-  previewUrl: string;
-}
+// ModeConfig is imported from "@/lib/types/chat"
 
-interface SelectedCandidateContextPayload {
-  candidate_id: string | null;
-  nova_id: string | null;
-  candidate_name: string | null;
-  candidate_email: string | null;
-  current_bucket: string | null;
-  source: "left_rail_selected" | "left_rail_inferred";
-}
-
-interface SelectedMarginContextPayload {
-  candidate_name: string | null;
-  profession: string | null;
-  specialty: string | null;
-  facility_name: string | null;
-  facility_city: string | null;
-  facility_state: string | null;
-  assignment_start: string | null;
-  assignment_end: string | null;
-  weekly_gross: number | null;
-  actual_margin_pct: number | null;
-  target_margin_pct: number | null;
-  base_pay_rate: number | null;
-  weekly_stipends: number | null;
-  weekly_hours: number | null;
-  shift_type: string | null;
-  shift_start: string | null;
-  shift_end: string | null;
-}
-
-type ConsoleMode =
-  | "healthcare"
-  | "sports"
-  | "code"
-  | "worldcup"
-  | "ayaops"
-  | "facility"
-  | "margins";
-type ModelOverride = "auto" | "sonnet" | "opus" | "flash" | "pro";
-
-interface ModeConfig {
-  id: ConsoleMode;
-  label: string;
-  suggestions: string[];
-  placeholder: string;
-}
-
-const MODES: Record<ConsoleMode, ModeConfig> = {
+export const MODES: Record<ConsoleMode, ModeConfig> = {
   healthcare: {
     id: "healthcare",
     label: "Healthcare",
@@ -176,6 +107,16 @@ const MODES: Record<ConsoleMode, ModeConfig> = {
     ],
     placeholder: "What's the risk here?",
   },
+  agent: {
+    id: "agent",
+    label: "Agent",
+    suggestions: [
+      "Review the AyaOps facility tab for visual regressions",
+      "Verify the candidate card badges render as SVG icons",
+      "Check if the tool status chips stack correctly on multi-tool calls",
+    ],
+    placeholder: "Describe what the browser agent should check...",
+  },
 };
 
 const CLEAN_COPY_MODES = new Set<ConsoleMode>([
@@ -195,6 +136,7 @@ const MODE_CONTEXT_HINTS: Record<ConsoleMode, string> = {
   ayaops: "Ask about candidates, facilities, rates, deadlines, and message threads.",
   facility: "Ask about submittal rules, cancellation risk, extensions, and facility load.",
   margins: "Ask for the margin read, execution risk, and next best action.",
+  agent: "Describe a browser task — the AI will produce structured steps, selectors, and assertions.",
 };
 
 const CAPABILITY_OPTIONS: { value: ModelOverride; label: string; hint: string }[] = [
@@ -205,45 +147,23 @@ const CAPABILITY_OPTIONS: { value: ModelOverride; label: string; hint: string }[
   { value: "pro", label: "Extended", hint: "long research" },
 ];
 
-// --- State Machine ---
-interface ChatState {
-  messages: Message[];
-  input: string;
-  loading: boolean;
-  copiedId: string | null;
-  pendingImage: string | null;
-  mode: ConsoleMode;
-  selectedCandidate: { id: string; name: string; candidate: Record<string, unknown>; contextText: string } | null;
-}
-
-type ChatAction =
-  | { type: "SET_INPUT"; payload: string }
-  | { type: "SET_PENDING_IMAGE"; payload: string | null }
-  | { type: "ADD_USER_MESSAGE"; payload: { text: string; id: string; imageUrl?: string; workspaceScope?: string | null } }
-  | { type: "ADD_ASSISTANT_MESSAGE"; payload: { text: string; id: string; workspaceScope?: string | null } }
-  | { type: "START_ASSISTANT_STREAM"; payload: { id: string; workspaceScope?: string | null } }
-  | { type: "APPEND_ASSISTANT_CHUNK"; payload: { id: string; textChunk: string } }
-  | { type: "SET_ASSISTANT_WRITE_RESULT"; payload: { id: string; writeResult: WriteResultMeta } }
-  | { type: "SET_ASSISTANT_GROUNDING"; payload: { id: string; citations: Citation[]; queries: string[] } }
-  | { type: "FINISH_ASSISTANT_STREAM"; payload: { id: string; durationMs: number; modelProvider?: string; modelId?: string } }
-  | { type: "ERROR_ASSISTANT_STREAM"; payload: { id: string; error: string; code?: string } }
-  | { type: "ADD_CODE_BLOCK"; payload: { id: string; code: string; language: string } }
-  | { type: "SET_CODE_RESULT"; payload: { id: string; outcome: string; output: string } }
-  | { type: "SET_COPIED"; payload: string | null }
-  | { type: "CLEAR_CHAT" }
-  | { type: "SET_MODE"; payload: ConsoleMode }
-  | { type: "SET_SELECTED_CANDIDATE"; payload: ChatState["selectedCandidate"] }
-  | { type: "HYDRATE"; payload: Message[] };
+const IMAGE_INTENTS: { value: ImageIntent; icon: React.ReactNode; label: string }[] = [
+  { value: "add_candidate", icon: <UserPlus size={13} />, label: "Add Candidate" },
+  { value: "margin_approval", icon: <Calculator size={13} />, label: "Margin Approval" },
+  { value: "analyze", icon: <Search size={13} />, label: "Analyze" },
+];
 
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "SET_INPUT":
       return { ...state, input: action.payload };
     case "SET_PENDING_IMAGE":
-      return { ...state, pendingImage: action.payload };
+      return { ...state, pendingImage: action.payload, imageIntent: action.payload ? state.imageIntent : null };
+    case "SET_IMAGE_INTENT":
+      return { ...state, imageIntent: action.payload };
     case "ADD_USER_MESSAGE":
       return {
-        ...state, input: "", pendingImage: null,
+        ...state, input: "", pendingImage: null, imageIntent: null,
         messages: [
           ...state.messages,
           {
@@ -366,8 +286,38 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
     case "SET_COPIED":
       return { ...state, copiedId: action.payload };
+    case "UPSERT_TOOL_STATUS": {
+      const incomingStatus = action.payload.status;
+      return {
+        ...state,
+        messages: state.messages.map((m) => {
+          if (m.id !== action.payload.id) return m;
+          const currentStatuses = m.toolStatuses || [];
+          const newStatuses = [...currentStatuses];
+          // For "running", always append (supports duplicate tool names in one round).
+          // For "ok"/"failed", find the LAST "running" entry with matching tool name and update it.
+          if (incomingStatus.status === "running") {
+            newStatuses.push(incomingStatus);
+          } else {
+            let lastRunningIdx = -1;
+            for (let i = newStatuses.length - 1; i >= 0; i--) {
+              if (newStatuses[i].tool === incomingStatus.tool && newStatuses[i].status === "running") {
+                lastRunningIdx = i;
+                break;
+              }
+            }
+            if (lastRunningIdx >= 0) {
+              newStatuses[lastRunningIdx] = { ...newStatuses[lastRunningIdx], ...incomingStatus };
+            } else {
+              newStatuses.push(incomingStatus);
+            }
+          }
+          return { ...m, toolStatuses: newStatuses };
+        })
+      };
+    }
     case "CLEAR_CHAT":
-      return { ...state, messages: [], input: "", loading: false, pendingImage: null };
+      return { ...state, messages: [], input: "", loading: false, pendingImage: null, imageIntent: null };
     case "SET_MODE":
       return { ...state, mode: action.payload, selectedCandidate: null };
     case "SET_SELECTED_CANDIDATE":
@@ -454,25 +404,13 @@ function humanizeStreamError(error: string, code?: string): string {
   if (code === "STREAM_ERROR") {
     return "I ran into a temporary stream issue. Please retry.";
   }
+  if (code === "TOOL_EXECUTION_FAILED" && error && error.length > 5) {
+    return `Tool execution failed: ${error}`;
+  }
   return "I couldn’t complete that request. Please try again.";
 }
 
-const writeOutcomeLabel = (outcome: WriteOutcome) => {
-  if (outcome === "updated") return "Saved";
-  if (outcome === "inserted") return "Saved";
-  if (outcome === "no_change") return "Saved";
-  return "Retry";
-};
 
-const writePayloadForDisplay = (writeResult: WriteResultMeta): Record<string, unknown> => {
-  if (writeResult.payload && typeof writeResult.payload === "object") return writeResult.payload;
-  const fallback: Record<string, unknown> = { outcome: writeResult.outcome };
-  if (writeResult.action) fallback.action = writeResult.action;
-  if (writeResult.objectType) fallback.objectType = writeResult.objectType;
-  if (typeof writeResult.rowsUpdated === "number") fallback.rowsUpdated = writeResult.rowsUpdated;
-  if (writeResult.code) fallback.code = writeResult.code;
-  return fallback;
-};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -675,850 +613,10 @@ function normalizeSandboxPreview(
 }
 
 // --- Markdown renderer ---
-function escapeHtml(value: string): string {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
 
-function formatMarkdown(text: string): string {
-  const escaped = escapeHtml(text);
-  let html = escaped
-    .replace(/```(\w*)\n([\s\S]*?)```/g, (_match, _lang, code) => {
-      return `<pre class="c-code"><code>${code}</code></pre>`;
-    })
-    .replace(/^>\s?(.*$)/gm, "$1")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_match, prefix, url) => {
-      return `${prefix}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
-    })
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.*?)\*/g, "<em>$1</em>")
-    .replace(/`([^`]+)`/g, '<code class="c-inline-code">$1</code>')
-    .replace(/^#### (.*$)/gm, '<h4>$1</h4>')
-    .replace(/^### (.*$)/gm, '<h4>$1</h4>')
-    .replace(/^## (.*$)/gm, '<h3>$1</h3>')
-    .replace(/^# (.*$)/gm, '<h3>$1</h3>')
-    .replace(/^\* (.*$)/gm, '<li>$1</li>')
-    .replace(/^- (.*$)/gm, '<li>$1</li>')
-    .replace(/^\d+\.\s(.*$)/gm, '<li>$1</li>')
-    .replace(/\n\n/g, "</p><p>")
-    .replace(/\n/g, "<br/>");
 
-  html = html.replace(/((<li>.*?<\/li>)(\s*<br\/>)?)+/g, (match) => `<ul>${match.replace(/<br\/>/g, "")}</ul>`);
-  return `<p>${html}</p>`;
-}
+// Utils moved to src/lib/chat-utils.ts
 
-function formatCopyReadyText(markdown: string): string {
-  if (!markdown) return "";
-  return markdown
-    .replace(/```[\w-]*\n([\s\S]*?)```/g, (_match, block) => `${String(block || "").trim()}\n\n`)
-    .replace(/^>\s?/gm, "")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/^"\s*/gm, "")
-    .replace(/\s*"$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-const COPY_READY_FENCE_LANGS = new Set(["", "text", "txt", "plain", "plaintext"]);
-
-function isCopyReadyFenceLanguage(language: string): boolean {
-  return COPY_READY_FENCE_LANGS.has(String(language || "").trim().toLowerCase());
-}
-
-function isLikelyRawPayloadBlock(code: string, language: string): boolean {
-  const normalizedLang = String(language || "").trim().toLowerCase();
-  const trimmed = String(code || "").trim();
-  if (!trimmed) return false;
-  if (trimmed.length < 220) return false;
-
-  const looksJsonLike =
-    (trimmed.startsWith("{") || trimmed.startsWith("[")) &&
-    /\"[A-Za-z0-9_ -]+\"\s*:/.test(trimmed);
-  const rawPayloadSignals =
-    /\"(candidate_id|visible_messages|participants|unknowns|latest_inbound_message|latest_outbound_message|profile_status_tags|source|thread_source|raw_payload|event_id|object_id)\"\s*:/.test(
-      trimmed,
-    );
-
-  const looksHtmlLike =
-    /<\/?[a-z][\s\S]*?>/i.test(trimmed) &&
-    /<(div|section|article|header|main|aside|span|p|h[1-6]|table|tbody|tr|td|ul|li|a|img)(\s|>)/i.test(trimmed);
-  const htmlLang = normalizedLang === "html" || normalizedLang === "xml" || normalizedLang === "jsx" || normalizedLang === "tsx";
-
-  if (normalizedLang === "json" && (looksJsonLike || rawPayloadSignals)) return true;
-  if (looksJsonLike && rawPayloadSignals) return true;
-  if ((htmlLang || normalizedLang === "markdown" || normalizedLang === "md") && looksHtmlLike) return true;
-  if (looksHtmlLike && trimmed.length > 380) return true;
-  return false;
-}
-
-function buildCopyOnlyMarkdown(markdown: string): string | null {
-  const lines = String(markdown || "").split(/\r?\n/);
-  if (lines.length === 0) return null;
-
-  const segments: string[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const open = lines[i].match(/^```([\w-]*)\s*$/);
-    if (!open) continue;
-    const lang = String(open[1] || "").trim().toLowerCase();
-    const startIndex = i;
-    const blockLines: string[] = [lines[i]];
-    i += 1;
-    while (i < lines.length) {
-      blockLines.push(lines[i]);
-      if (/^```\s*$/.test(lines[i])) break;
-      i += 1;
-    }
-    if (!isCopyReadyFenceLanguage(lang)) continue;
-
-    let label: string | null = null;
-    for (let j = startIndex - 1; j >= 0; j -= 1) {
-      const candidate = lines[j].trim();
-      if (!candidate) break;
-      if (candidate.startsWith("```")) break;
-      const normalized = candidate.replace(/^>\s*/, "").replace(/^[-*]\s+/, "").trim();
-      if (!normalized) continue;
-      if (normalized.startsWith("{") || normalized.startsWith("[")) continue;
-      if (normalized.length > 140) continue;
-      label = normalized;
-      break;
-    }
-
-    const block = blockLines.join("\n").trim();
-    if (!block) continue;
-    if (label) segments.push(`**${label}**\n${block}`);
-    else segments.push(block);
-  }
-
-  if (segments.length === 0) return null;
-  return segments.join("\n\n").trim();
-}
-
-type AssistantDisplayContent = {
-  visibleMarkdown: string;
-  visibleMarkdownWithoutPrimaryCopyBlock: string;
-  hiddenPayloadBlocks: string[];
-  primaryCopyBlock: string | null;
-  hasCopyBlocks: boolean;
-};
-
-function buildAssistantDisplayContent(markdown: string, mode: ConsoleMode): AssistantDisplayContent {
-  const raw = String(markdown || "");
-  if (!raw.trim()) {
-    return {
-      visibleMarkdown: "",
-      visibleMarkdownWithoutPrimaryCopyBlock: "",
-      hiddenPayloadBlocks: [],
-      primaryCopyBlock: null,
-      hasCopyBlocks: false,
-    };
-  }
-
-  const cleanMode = CLEAN_COPY_MODES.has(mode);
-  if (!cleanMode) {
-    const primaryCopyBlock = extractPrimaryCopyBlock(raw);
-    return {
-      visibleMarkdown: raw,
-      visibleMarkdownWithoutPrimaryCopyBlock: primaryCopyBlock ? stripFirstCopyReadyFence(raw) : raw,
-      hiddenPayloadBlocks: [],
-      primaryCopyBlock,
-      hasCopyBlocks: Boolean(primaryCopyBlock),
-    };
-  }
-
-  const hiddenPayloadBlocks: string[] = [];
-  const fencePattern = /```([\w-]*)\n([\s\S]*?)```/g;
-  let cursor = 0;
-  let visible = "";
-  let match: RegExpExecArray | null = null;
-
-  while ((match = fencePattern.exec(raw)) !== null) {
-    const full = String(match[0] || "");
-    const lang = String(match[1] || "");
-    const code = String(match[2] || "");
-    visible += raw.slice(cursor, match.index);
-    if (isLikelyRawPayloadBlock(code, lang)) {
-      hiddenPayloadBlocks.push(code.trim());
-    } else {
-      visible += full;
-    }
-    cursor = match.index + full.length;
-  }
-  visible += raw.slice(cursor);
-
-  const copyOnly = buildCopyOnlyMarkdown(visible);
-  const visibleMarkdown = (copyOnly || visible).trim() || raw.trim();
-  const primaryCopyBlock = extractPrimaryCopyBlock(visibleMarkdown);
-  const visibleMarkdownWithoutPrimaryCopyBlock = primaryCopyBlock
-    ? stripFirstCopyReadyFence(visibleMarkdown)
-    : visibleMarkdown;
-
-  return {
-    visibleMarkdown,
-    visibleMarkdownWithoutPrimaryCopyBlock,
-    hiddenPayloadBlocks,
-    primaryCopyBlock,
-    hasCopyBlocks: Boolean(primaryCopyBlock),
-  };
-}
-
-type UserDisplayContent = {
-  previewText: string;
-  hiddenText: string | null;
-  collapsed: boolean;
-  charCount: number;
-  lineCount: number;
-};
-
-const USER_COLLAPSE_CHAR_LIMIT = 1200;
-const USER_COLLAPSE_LINE_LIMIT = 18;
-
-function buildUserDisplayContent(text: string): UserDisplayContent {
-  const raw = String(text || "");
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {
-      previewText: "",
-      hiddenText: null,
-      collapsed: false,
-      charCount: 0,
-      lineCount: 0,
-    };
-  }
-
-  const lines = raw.split(/\r?\n/);
-  const lineCount = lines.length;
-  const charCount = raw.length;
-  const hasFence = /```/.test(raw);
-  const shouldCollapse =
-    charCount > USER_COLLAPSE_CHAR_LIMIT ||
-    lineCount > USER_COLLAPSE_LINE_LIMIT ||
-    (hasFence && charCount > 600);
-
-  if (!shouldCollapse) {
-    return {
-      previewText: raw,
-      hiddenText: null,
-      collapsed: false,
-      charCount,
-      lineCount,
-    };
-  }
-
-  const lead = lines
-    .map((line) => line.trim())
-    .find((line) => line.length > 0 && !line.startsWith("```"));
-  const leadText =
-    !lead || lead.startsWith("{") || lead.startsWith("[")
-      ? "Structured payload attached."
-      : lead.length > 180
-        ? `${lead.slice(0, 180).trimEnd()}…`
-        : lead;
-  const contextLine = hasFence
-    ? "Payload details are hidden to keep this thread readable."
-    : "Long request details are hidden to keep this thread readable.";
-  const previewText = `${leadText}\n\n${contextLine}`;
-
-  return {
-    previewText,
-    hiddenText: raw,
-    collapsed: true,
-    charCount,
-    lineCount,
-  };
-}
-
-function formatMessageTimestamp(value: Date): string {
-  const safeDate = value instanceof Date && !Number.isNaN(value.getTime()) ? value : new Date();
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(safeDate);
-}
-
-function extractPrimaryCopyBlock(markdown: string): string | null {
-  if (!markdown) return null;
-  const fencePattern = /```([\w-]*)\n([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null = null;
-  while ((match = fencePattern.exec(markdown)) !== null) {
-    const lang = String(match[1] || "").trim().toLowerCase();
-    if (!isCopyReadyFenceLanguage(lang)) continue;
-    const content = String(match[2] || "").trim();
-    if (content) return content;
-  }
-  return null;
-}
-
-function stripFirstCopyReadyFence(markdown: string): string {
-  if (!markdown) return "";
-  const fencePattern = /```([\w-]*)\n([\s\S]*?)```/gi;
-  let stripped = false;
-  const withoutFirstFence = markdown.replace(fencePattern, (full: string, language: string) => {
-    if (stripped) return full;
-    const lang = String(language || "").trim().toLowerCase();
-    if (!isCopyReadyFenceLanguage(lang)) return full;
-    stripped = true;
-    return "";
-  });
-  if (!stripped) return markdown;
-  return withoutFirstFence.replace(/\n{3,}/g, "\n\n").trim();
-}
-
-// --- Persistence ---
-const storageKey = (mode: ConsoleMode) => `chat-${mode}`;
-const MODE_KEY = "chat-mode";
-
-function saveToStorage(mode: ConsoleMode, messages: Message[]) {
-  try {
-    const serializable = messages.map(m => ({ ...m, timestamp: m.timestamp.toISOString() }));
-    localStorage.setItem(storageKey(mode), JSON.stringify(serializable));
-  } catch { /* quota or SSR */ }
-}
-
-function loadFromStorage(mode: ConsoleMode): Message[] {
-  try {
-    const raw = localStorage.getItem(storageKey(mode));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return parsed.map((m: Record<string, unknown>) => ({
-      ...m,
-      timestamp: new Date(m.timestamp as string),
-      isStreaming: false,
-      workspaceScope: typeof m.workspaceScope === "string" ? m.workspaceScope : null,
-    }));
-  } catch { return []; }
-}
-
-function workspaceScopeFor(mode: ConsoleMode, item: PanelItem | null): string | null {
-  if ((mode !== "facility" && mode !== "margins") || !item?.id) return null;
-  return `${mode}:${item.id}`;
-}
-
-function getSavedMode(): ConsoleMode {
-  try {
-    const raw = localStorage.getItem(MODE_KEY);
-    if (
-      raw === "healthcare" ||
-      raw === "sports" ||
-      raw === "code" ||
-      raw === "worldcup" ||
-      raw === "ayaops" ||
-      raw === "facility" ||
-      raw === "margins"
-    ) {
-      return raw;
-    }
-  } catch { /* SSR */ }
-  return "sports";
-}
-
-function readStringSafe(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return "";
-}
-
-function readNumberSafe(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  const parsed = Number(readStringSafe(value).replace(/[$,%\s,]/g, ""));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function readPercentDecimal(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.abs(value) > 1 ? value / 100 : value;
-  }
-  const raw = readStringSafe(value);
-  if (!raw) return null;
-  const hasPercent = raw.includes("%");
-  const parsed = Number(raw.replace(/[$,%\s,]/g, ""));
-  if (!Number.isFinite(parsed)) return null;
-  return hasPercent || Math.abs(parsed) > 1 ? parsed / 100 : parsed;
-}
-
-function formatShortDate(value: string | null | undefined): string {
-  if (!value) return "--";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "--";
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric",
-  }).format(parsed);
-}
-
-function formatLongDate(value: string | null | undefined): string {
-  if (!value) return "--";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "--";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(parsed);
-}
-
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "--";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "--";
-  return parsed.toLocaleString();
-}
-
-function marginDeltaPoints(actual: number | null | undefined, target: number | null | undefined): number | null {
-  if (typeof actual !== "number" || !Number.isFinite(actual)) return null;
-  if (typeof target !== "number" || !Number.isFinite(target)) return null;
-  return (actual - target) * 100;
-}
-
-function formatMarginDelta(deltaPoints: number | null | undefined): string {
-  if (typeof deltaPoints !== "number" || !Number.isFinite(deltaPoints)) return "Target n/a";
-  const rounded = Math.round(deltaPoints * 100) / 100;
-  if (Math.abs(rounded) < 0.01) return "On target";
-  if (rounded > 0) return `+${rounded.toFixed(2)} over target`;
-  return `${rounded.toFixed(2)} below target`;
-}
-
-function formatRelativeTime(value: string | null | undefined): string {
-  if (!value) return "--";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "--";
-  const diffMs = parsed.getTime() - Date.now();
-  const absMs = Math.abs(diffMs);
-  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ["day", 86_400_000],
-    ["hour", 3_600_000],
-    ["minute", 60_000],
-  ];
-  const formatter = new Intl.RelativeTimeFormat("en-US", { numeric: "auto" });
-  for (const [unit, size] of units) {
-    if (absMs >= size || unit === "minute") {
-      const amount = Math.round(diffMs / size);
-      return formatter.format(amount, unit);
-    }
-  }
-  return "--";
-}
-
-function formatShiftWindow(
-  shiftType: string | null | undefined,
-  shiftStart: string | null | undefined,
-  shiftEnd: string | null | undefined,
-): string {
-  const type = readStringSafe(shiftType);
-  const start = readStringSafe(shiftStart);
-  const end = readStringSafe(shiftEnd);
-  const window = start || end ? `${start || "--"}-${end || "--"}` : "";
-  if (type && window) return `${type} ${window}`;
-  if (window) return window;
-  if (type) return type;
-  return "--";
-}
-
-function parseTimeToMinutes(value: string | null | undefined): number | null {
-  const raw = readStringSafe(value);
-  if (!raw) return null;
-  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-  return hours * 60 + minutes;
-}
-
-function formatShiftCadence(
-  weeklyHours: number | null | undefined,
-  shiftType: string | null | undefined,
-  shiftStart: string | null | undefined,
-  shiftEnd: string | null | undefined,
-): string {
-  const hours = typeof weeklyHours === "number" && Number.isFinite(weeklyHours) ? weeklyHours : null;
-  const type = readStringSafe(shiftType).toLowerCase();
-  const startMins = parseTimeToMinutes(shiftStart);
-  const endMins = parseTimeToMinutes(shiftEnd);
-  let shiftLengthHours: number | null = null;
-  if (startMins != null && endMins != null) {
-    const span = endMins >= startMins ? endMins - startMins : (24 * 60 - startMins) + endMins;
-    if (span > 0) shiftLengthHours = span / 60;
-  }
-  const normalizedType =
-    type === "day" ? "days" :
-      type === "night" ? "nights" :
-        type ? type : "shifts";
-
-  if (hours != null && shiftLengthHours != null && shiftLengthHours > 0) {
-    const shifts = hours / shiftLengthHours;
-    const roundedShifts = Math.round(shifts);
-    if (Math.abs(shifts - roundedShifts) <= 0.15 && roundedShifts > 0) {
-      const roundedShiftLength = Math.round(shiftLengthHours * 10) / 10;
-      const shiftLengthLabel = Number.isInteger(roundedShiftLength)
-        ? String(roundedShiftLength)
-        : roundedShiftLength.toFixed(1);
-      return `${roundedShifts}×${shiftLengthLabel}s ${normalizedType}`;
-    }
-  }
-  if (hours != null) return `${Math.round(hours)} hrs/week`;
-  if (shiftLengthHours != null) {
-    const roundedShiftLength = Math.round(shiftLengthHours * 10) / 10;
-    const shiftLengthLabel = Number.isInteger(roundedShiftLength)
-      ? String(roundedShiftLength)
-      : roundedShiftLength.toFixed(1);
-    return `${shiftLengthLabel}h ${normalizedType}`;
-  }
-  if (type) return normalizedType;
-  return "--";
-}
-
-function formatAssignmentWindow(start: string | null | undefined, end: string | null | undefined): string {
-  if (!start && !end) return "Assignment dates not set";
-  if (start && end) {
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    const hasValidRange =
-      !Number.isNaN(startDate.getTime()) &&
-      !Number.isNaN(endDate.getTime()) &&
-      endDate.getTime() >= startDate.getTime();
-    if (hasValidRange) {
-      const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-      const weeks = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / msPerWeek));
-      return `${weeks} weeks · ${formatLongDate(start)} – ${formatLongDate(end)}`;
-    }
-    return `${formatLongDate(start)} – ${formatLongDate(end)}`;
-  }
-  if (start) return `Starts ${formatLongDate(start)}`;
-  return `Through ${formatLongDate(end)}`;
-}
-
-function assignmentProgress(start: string | null | undefined, end: string | null | undefined): { pct: number; label: string } | null {
-  if (!start || !end) return null;
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) return null;
-  const total = endDate.getTime() - startDate.getTime();
-  const elapsed = Date.now() - startDate.getTime();
-  const pct = Math.max(0, Math.min(100, (elapsed / total) * 100));
-  return {
-    pct,
-    label: `${Math.round(pct)}% through assignment`,
-  };
-}
-
-
-function formatTouchPriorityReason(value: string | null | undefined): string | null {
-  const raw = readStringSafe(value);
-  if (!raw) return null;
-  const lowered = raw.toLowerCase();
-  if (lowered.includes("fallback timing signal") || lowered.includes("no explicit priority score")) {
-    return "Priority inferred from current status and timing.";
-  }
-  return raw;
-}
-
-function formatSubmissionDifficulty(value: "easy" | "moderate" | "hard" | null | undefined): string {
-  if (value === "easy") return "Easy submittal";
-  if (value === "moderate") return "Moderate submittal";
-  if (value === "hard") return "Hard submittal";
-  return "Not configured";
-}
-
-function formatTournamentStage(value?: string | null): string {
-  const map: Record<string, string> = {
-    r32: "Round of 32",
-    qf: "Quarterfinal",
-    sf: "Semifinal",
-    final: "Final",
-    r16: "Round of 16",
-    third_place: "Third Place",
-  };
-  return map[value || ""] || value || "";
-}
-
-function inferHealthcareContextFromPrompt(prompt: string): { state: string | null; profession: string | null } {
-  const input = String(prompt || "").trim();
-  if (!input) return { state: null, profession: null };
-
-  const tellMatch = input.match(/tell me about the\s+(.+?)\s+license in\s+(.+)$/i);
-  if (tellMatch) {
-    return {
-      profession: readStringSafe(tellMatch[1]) || null,
-      state: readStringSafe(tellMatch[2]) || null,
-    };
-  }
-
-  const licenseInMatch = input.match(/license in\s+(.+?)\s+for\s+(.+)$/i);
-  if (licenseInMatch) {
-    return {
-      state: readStringSafe(licenseInMatch[1]) || null,
-      profession: readStringSafe(licenseInMatch[2]) || null,
-    };
-  }
-
-  const efficiencyGuideMatch = input.match(/([A-Za-z][A-Za-z\s]+?)\s+([A-Za-z][A-Za-z\-/\s]+?)\s+Efficiency Guide/i);
-  if (efficiencyGuideMatch) {
-    return {
-      state: readStringSafe(efficiencyGuideMatch[1]) || null,
-      profession: readStringSafe(efficiencyGuideMatch[2]) || null,
-    };
-  }
-
-  const licenseHeaderMatch = input.match(/([A-Za-z][A-Za-z\s]+?)\s+([A-Za-z][A-Za-z\-/\s]+?)\s+license/i);
-  if (licenseHeaderMatch) {
-    return {
-      state: readStringSafe(licenseHeaderMatch[1]) || null,
-      profession: readStringSafe(licenseHeaderMatch[2]) || null,
-    };
-  }
-
-  return { state: null, profession: null };
-}
-
-function inferHealthcareContextFromLabel(label: string): { state: string | null; profession: string | null } {
-  const input = String(label || "").trim();
-  if (!input) return { state: null, profession: null };
-  const byDash = input.match(/^([A-Za-z][A-Za-z\s]+?)\s*[—-]\s*(.+)$/);
-  if (byDash) {
-    return {
-      state: readStringSafe(byDash[1]) || null,
-      profession: readStringSafe(byDash[2]) || null,
-    };
-  }
-  return { state: null, profession: null };
-}
-
-function normalizeTextToken(value: string | null | undefined): string {
-  return readStringSafe(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function buildLicensingReferenceUrl(slugOrId: string | null | undefined): string | null {
-  const slug = readStringSafe(slugOrId).replace(/^\/+|\/+$/g, "");
-  if (!slug) return null;
-  return `https://www.statelicensingreference.com/${encodeURIComponent(slug)}`;
-}
-
-type HealthcareResolvedEntity = {
-  id: string;
-  label: string;
-  state: string | null;
-  profession: string | null;
-  url: string;
-};
-
-function resolveHealthcareEntityFromPrompt(
-  prompt: string,
-  items: PanelItem[],
-  selectedItem: PanelItem | null,
-): HealthcareResolvedEntity | null {
-  const normalizedPrompt = normalizeTextToken(prompt);
-  if (!normalizedPrompt) return null;
-  const rawPrompt = String(prompt || "").toLowerCase();
-
-  const toEntity = (item: PanelItem): HealthcareResolvedEntity | null => {
-    const id = readStringSafe(item.id);
-    const url = buildLicensingReferenceUrl(id);
-    if (!id || !url) return null;
-    return {
-      id,
-      label: readStringSafe(item.label) || id,
-      state: readStringSafe(item.state) || null,
-      profession: readStringSafe(item.profession) || null,
-      url,
-    };
-  };
-
-  const selected = selectedItem ? toEntity(selectedItem) : null;
-  if (selected && selectedItem) {
-    const selectedState = normalizeTextToken(selectedItem.state || "");
-    const selectedProfession = normalizeTextToken(selectedItem.profession || "");
-    const selectedLabel = normalizeTextToken(selectedItem.label || "");
-    const inferredFromPrompt = inferHealthcareContextFromPrompt(prompt);
-    const inferredState = normalizeTextToken(inferredFromPrompt.state || "");
-    const inferredProfession = normalizeTextToken(inferredFromPrompt.profession || "");
-    const selectedMentioned =
-      (selectedLabel && normalizedPrompt.includes(selectedLabel)) ||
-      (selectedState &&
-        selectedProfession &&
-        normalizedPrompt.includes(selectedState) &&
-        normalizedPrompt.includes(selectedProfession)) ||
-      (selectedState &&
-        selectedProfession &&
-        inferredState === selectedState &&
-        (inferredProfession === selectedProfession ||
-          selectedProfession.includes(inferredProfession) ||
-          inferredProfession.includes(selectedProfession)));
-
-    if (selectedMentioned) return selected;
-  }
-
-  for (const item of items) {
-    const slug = readStringSafe(item.id).toLowerCase();
-    if (slug && rawPrompt.includes(slug)) {
-      const entity = toEntity(item);
-      if (entity) return entity;
-    }
-  }
-
-  for (const item of items) {
-    const label = normalizeTextToken(item.label);
-    if (label && normalizedPrompt.includes(label)) {
-      const entity = toEntity(item);
-      if (entity) return entity;
-    }
-  }
-
-  const inferred = inferHealthcareContextFromPrompt(prompt);
-  const inferredState = normalizeTextToken(inferred.state || "");
-  const inferredProfession = normalizeTextToken(inferred.profession || "");
-  if (!inferredState || !inferredProfession) return null;
-
-  for (const item of items) {
-    const state = normalizeTextToken(item.state || "");
-    const profession = normalizeTextToken(item.profession || "");
-    const stateMatches =
-      Boolean(state) && (state === inferredState || state.includes(inferredState) || inferredState.includes(state));
-    const professionMatches =
-      Boolean(profession) &&
-      (profession === inferredProfession ||
-        profession.includes(inferredProfession) ||
-        inferredProfession.includes(profession));
-    if (stateMatches && professionMatches) {
-      const entity = toEntity(item);
-      if (entity) return entity;
-    }
-  }
-
-  return null;
-}
-
-// --- Summary types ---
-interface PanelItem {
-  id: string;
-  label: string;
-  candidateName?: string | null;
-  candidateId?: string | null;
-  candidateEmail?: string | null;
-  description?: string;
-  state?: string;
-  profession?: string;
-  fee?: number;
-  renewalFee?: number;
-  board?: string;
-  compact?: boolean;
-  home?: string;
-  away?: string;
-  homeLogo?: string;
-  awayLogo?: string;
-  date?: string;
-  startTime?: string;
-  status?: string;
-  venue?: string;
-  league?: string;
-  homeRecord?: string | null;
-  awayRecord?: string | null;
-  spread?: number | null;
-  total?: number | null;
-  // World Cup fields
-  homeName?: string;
-  awayName?: string;
-  homeFlag?: string;
-  awayFlag?: string;
-  groupLetter?: string;
-  kickoff?: string;
-  stage?: string;
-  writeupUrl?: string | null;
-  publishedAt?: string | null;
-  city?: string | null;
-  // AyaOps fields
-  novaId?: string | null;
-  novaUrl?: string | null;
-  specialty?: string;
-  homeState?: string;
-  rcThreadUrl?: string | null;
-  outlookThreadUrl?: string | null;
-  complianceRisk?: string | null;
-  source?: string;
-  assignmentStatus?: string | null;
-  derivedCurrentStatus?: string | null;
-  assignmentStart?: string | null;
-  assignmentEnd?: string | null;
-  weeklyGross?: number | null;
-  hourlyRate?: number | null;
-  facilityName?: string | null;
-  facilityCity?: string | null;
-  facilityState?: string | null;
-  vmsPlatform?: string | null;
-  facilityBeds?: number | null;
-  phone?: string | null;
-  facilityId?: string | null;
-  facilitySystemName?: string | null;
-  facilityProfileUrl?: string | null;
-  facilityNovaUrl?: string | null;
-  acceptsLocals?: boolean | null;
-  requiresCompact?: boolean | null;
-  submittalRules?: string | null;
-  submissionDifficulty?: "easy" | "moderate" | "hard" | null;
-  payVsLocalCol?: string | null;
-  parkingCost?: string | null;
-  cancelRatePct?: number | null;
-  extensionRatePct?: number | null;
-  closedAssignments?: number | null;
-  touchPriorityScore?: number | null;
-  touchPriorityLevel?: string | null;
-  touchPriorityBand?: "today" | "this_week" | "monitor" | null;
-  touchPriorityReason?: string | null;
-  touchDaysToEnd?: number | null;
-  touchNoteSeed?: string | null;
-  lastTouchAt?: string | null;
-  unansweredCount?: number | null;
-  // Facility mode fields
-  activeAssignments?: number | null;
-  pendingStartAssignments?: number | null;
-  pipelineAssignments?: number | null;
-  totalAssignments?: number | null;
-  // Margins mode fields
-  marginObjectId?: string | null;
-  marginId?: string | null;
-  jobId?: string | null;
-  targetMarginPct?: number | null;
-  actualMarginPct?: number | null;
-  basePayRate?: number | null;
-  weeklyStipends?: number | null;
-  grossWeeklyPayComputed?: number | null;
-  shiftType?: string | null;
-  shiftStart?: string | null;
-  shiftEnd?: string | null;
-  weeklyHours?: number | null;
-  lastSeenAt?: string | null;
-  isLocal?: boolean | null;
-  isCompact?: boolean | null;
-}
-
-interface SummaryData {
-  pulse: Record<string, number>;
-  items: PanelItem[];
-  supportedLeagues?: { key: string; label: string }[];
-  topProfessions?: { name: string; count: number }[];
-}
-
-interface TodayCard {
-  id: string;
-  title: string;
-  detail: string;
-  prompt: string;
-  actionLabel: string;
-  tone?: "default" | "attention" | "positive";
-}
 
 function isSameLocalDay(left: Date, right: Date): boolean {
   return (
@@ -1646,1372 +744,9 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
   return [];
 }
 
-// --- Left Panel ---
-function LeftPanel({
-  mode,
-  summary,
-  error,
-  loading,
-  filter,
-  selectedItemId,
-  onFilterChange,
-  onItemClick,
-  onModeSwitch,
-  onRetry,
-  onRefreshData,
-  marginSubTab,
-  onMarginSubTabChange,
-  chatLoading,
-  mobileOpen,
-  onMobileClose,
-}: {
-  mode: ConsoleMode;
-  summary: SummaryData | null;
-  error: string | null;
-  loading: boolean;
-  filter: string;
-  selectedItemId: string | null;
-  onFilterChange: (v: string) => void;
-  onItemClick: (item: PanelItem) => void;
-  onModeSwitch: (m: ConsoleMode) => void;
-  onRetry: () => void;
-  onRefreshData: () => void;
-  marginSubTab: "jobs" | "margins";
-  onMarginSubTabChange: (tab: "jobs" | "margins") => void;
-  chatLoading: boolean;
-  mobileOpen: boolean;
-  onMobileClose: () => void;
-}) {
-  const pulse = summary?.pulse;
-  const items = summary?.items || [];
-  const supportedLeagues = summary?.supportedLeagues || [];
-  const itemsScrollRef = useRef<HTMLDivElement>(null);
-  const hasScrolledToday = useRef(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [selectedSpecialty, setSelectedSpecialty] = useState<string | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const [dotsOpen, setDotsOpen] = useState(false);
-  const dotsRef = useRef<HTMLDivElement>(null);
-  const [statusFilter, setStatusFilter] = useState<string>("prospect");
-  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
-  const [professionFilter, setProfessionFilter] = useState<string | null>(null);
-  const [attachJobId, setAttachJobId] = useState<string | null>(null);
-  const [attachName, setAttachName] = useState("");
-  const [attachLoading, setAttachLoading] = useState(false);
-  const [copiedHcUrl, setCopiedHcUrl] = useState<string | null>(null);
-  const topProfessions = summary?.topProfessions || [];
+// LeftPanel moved to src/components/chat/LeftPanel.tsx
+import { LeftPanel } from "@/components/chat/LeftPanel";
 
-  const normalizedFilter = filter.trim().toLowerCase();
-  const filtered = normalizedFilter
-    ? items.filter((item) => {
-      const searchable = [
-        item.label,
-        item.description,
-        item.candidateName,
-        item.profession,
-        item.specialty,
-        item.facilityName,
-        item.facilityCity,
-        item.facilityState,
-        item.state,
-        item.jobId,
-        item.marginId,
-        item.marginObjectId,
-      ];
-      return searchable.some((value) => String(value || "").toLowerCase().includes(normalizedFilter));
-    })
-    : items;
-
-  // Auto-scroll to today's date in Sports + World Cup modes
-  useEffect(() => {
-    if ((mode !== "sports" && mode !== "worldcup") || loading || filtered.length === 0 || hasScrolledToday.current) return;
-    const container = itemsScrollRef.current;
-    if (!container) return;
-
-    // Get today in YYYY-MM-DD (local time)
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-
-    // Find today's day separator, or the nearest future day
-    const allDaySeps = container.querySelectorAll<HTMLElement>('[data-date]');
-    let target: HTMLElement | null = null;
-    for (const el of allDaySeps) {
-      const d = el.getAttribute('data-date') || '';
-      if (d >= todayStr) { target = el; break; }
-    }
-    // Fallback: last available day if all are in the past
-    if (!target && allDaySeps.length > 0) {
-      target = allDaySeps[allDaySeps.length - 1];
-    }
-
-    if (target) {
-      requestAnimationFrame(() => {
-        target!.scrollIntoView({ block: 'start', behavior: 'instant' });
-      });
-      hasScrolledToday.current = true;
-    }
-  }, [mode, loading, filtered]);
-
-  // Reset scroll anchor when mode changes
-  useEffect(() => {
-    hasScrolledToday.current = false;
-  }, [mode]);
-
-  useEffect(() => {
-    if (!dotsOpen) return;
-    const close = (event: MouseEvent) => {
-      if (dotsRef.current && !dotsRef.current.contains(event.target as Node)) {
-        setDotsOpen(false);
-      }
-    };
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [dotsOpen]);
-
-  const pulseLabels: Record<ConsoleMode, { keys: string[]; labels: string[] }> = {
-    healthcare: { keys: ["states", "professions", "total"], labels: ["States", "Professions", "Licenses"] },
-    sports: { keys: ["games", "slates", "previews"], labels: ["Games", "Slates", "Previews"] },
-    code: { keys: ["tools", "capabilities"], labels: ["Tools", "Features"] },
-    worldcup: { keys: ["matches", "groups", "previews"], labels: ["Matches", "Groups", "Previews"] },
-    ayaops: { keys: ["candidates", "facilities", "active", "submittals"], labels: ["Travelers", "Facilities", "Active", "In Pipeline"] },
-    facility: { keys: ["facilities", "active", "pipeline", "tracked"], labels: ["Facilities", "Active", "Pipeline", "Tracked"] },
-    margins: marginSubTab === "jobs"
-      ? { keys: ["total_jobs", "specialties", "facilities"], labels: ["Jobs", "Specialties", "Facilities"] }
-      : { keys: ["avg_margin_pct"], labels: ["Avg Margin"] },
-  };
-
-  const cfg = pulseLabels[mode];
-  const formatPulseValue = (key: string, value: number) => {
-    if (mode === "margins" && key === "avg_margin_pct") return `${value.toFixed(2)}%`;
-    return Number.isFinite(value) ? value.toLocaleString("en-US") : "0";
-  };
-
-  const formatStage = (stage?: string | null) => {
-    const map: Record<string, string> = {
-      r32: "Round of 32",
-      qf: "Quarterfinal",
-      sf: "Semifinal",
-      final: "Final",
-      r16: "Round of 16",
-      third_place: "Third Place",
-    };
-    return map[stage || ""] || stage || "";
-  };
-
-  // --- Resize handle logic ---
-  const shellRef = useRef<HTMLElement>(null);
-  const handleRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-
-  const onResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    handleRef.current?.classList.add("ws-resizing");
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    const onMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const shell = shellRef.current?.closest(".ws-shell") as HTMLElement | null;
-      if (!shell) return;
-      const width = Math.min(600, Math.max(280, ev.clientX));
-      shell.style.setProperty("--left-width", `${width}px`);
-    };
-
-    const onUp = () => {
-      dragging.current = false;
-      handleRef.current?.classList.remove("ws-resizing");
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }, []);
-
-  return (
-    <aside className={`lp-shell ${mobileOpen ? "lp-shell-mobile-open" : ""}`} ref={shellRef} style={{ position: "relative" }}>
-      {/* Drag resize handle */}
-      <div
-        ref={handleRef}
-        className="ws-resize-handle"
-        onMouseDown={onResizeStart}
-      />
-      {/* Mode selector + progressive disclosure search */}
-      <div className="lp-mode-area">
-        <div className="lp-title-row">
-          <div className="lp-dots-wrap" ref={dotsRef}>
-            <button
-              type="button"
-              className="lp-mode-selector-btn"
-              onClick={(event) => {
-                event.stopPropagation();
-                setDotsOpen((open) => !open);
-              }}
-              aria-expanded={dotsOpen}
-              aria-label="Switch workspace"
-            >
-              <span className="lp-active-label">{MODES[mode].label}</span>
-              <ChevronDown size={14} className="lp-mode-chevron" />
-            </button>
-            {dotsOpen && (
-              <div className="lp-dots-menu">
-                {(Object.keys(MODES) as ConsoleMode[]).map((modeKey) => (
-                  <button
-                    key={modeKey}
-                    type="button"
-                    className={`lp-dots-item ${mode === modeKey ? "active" : ""}`}
-                    onClick={() => {
-                      onModeSwitch(modeKey);
-                      setDotsOpen(false);
-                    }}
-                    disabled={chatLoading}
-                  >
-                    {mode === modeKey && <span className="lp-dots-dot" />}
-                    {MODES[modeKey].label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            className="lp-mobile-close"
-            onClick={onMobileClose}
-            aria-label="Close workspace panel"
-          >
-            <X size={14} />
-          </button>
-          <button
-            type="button"
-            className={`lp-search-toggle ${searchOpen ? "active" : ""}`}
-            onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchRef.current?.focus(), 60); }}
-            aria-label="Toggle search"
-          >
-            {searchOpen ? <X size={14} /> : <Search size={14} />}
-          </button>
-        </div>
-
-        {searchOpen && (
-          <div className="lp-search-inline">
-            <Search size={13} className="lp-search-inline-icon" />
-            <input
-              ref={searchRef}
-              className="lp-search-inline-input"
-              placeholder={`Search ${MODES[mode].label.toLowerCase()}...`}
-              value={filter}
-              onChange={(e) => onFilterChange(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Escape") { setSearchOpen(false); onFilterChange(""); } }}
-            />
-          </div>
-        )}
-      </div>
-
-      {mode === "ayaops" && (
-        <div className="aya-ops-links-rail" aria-label="AyaOps Quick Links">
-          <div className="aya-ops-link-group">
-            <span className="aya-ops-group-label">Communications</span>
-            <div className="aya-ops-group-items">
-              <a href="https://app.ringcentral.com/sms/direct/all" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                RingCentral SMS<span className="sr-only">URL: https://app.ringcentral.com/sms/direct/all</span>
-              </a>
-              <a href="https://teams.microsoft.com/v2/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Microsoft Teams<span className="sr-only">URL: https://teams.microsoft.com/v2/</span>
-              </a>
-              <a href="https://outlook.cloud.microsoft/mail/AAMkADA5OTc3NDAxLWM2ZWQtNGNmMC04YzAzLThkOWMwMjk0MjBiMgAuAAAAAAALwSBcifhYRJ2lBsq4Iy%2B0AQAEE5rXW9aUTreCVwiNgefzAAPN4aivAAA%3D" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Outlook Mail<span className="sr-only">URL: https://outlook.cloud.microsoft/mail/...</span>
-              </a>
-            </div>
-          </div>
-
-          <div className="aya-ops-link-divider" />
-
-          <div className="aya-ops-link-group">
-            <span className="aya-ops-group-label">Recruiting Infrastructure</span>
-            <div className="aya-ops-group-items">
-              <a href="https://nova.ayahealthcare.com/#/recruiting/live-nurses-new" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Live List<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/live-nurses-new</span>
-              </a>
-              <a href="https://ssrsreports-ayahealthcare.msappproxy.net/Reports/report/Recruiting/MyAya%20Interested%20Clicks" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Interested Clicks<span className="sr-only">URL: https://ssrsreports-ayahealthcare.msappproxy.net/...</span>
-              </a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/prestart-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Prestart<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/prestart-candidates</span>
-              </a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/working-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Working<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/working-candidates</span>
-              </a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/margins" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Margins<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/margins</span>
-              </a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/facilities" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Facilities<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/facilities</span>
-              </a>
-              <a href="https://thepulse.ayahealthcare.com/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                The Pulse<span className="sr-only">URL: https://thepulse.ayahealthcare.com/</span>
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {cfg.keys.length > 0 && mode !== "ayaops" && mode !== "facility" && mode !== "margins" && (
-        <div
-          className="lp-pulse-strip"
-          aria-label={`${MODES[mode].label} pulse`}
-          style={{ gridTemplateColumns: `repeat(${Math.max(cfg.keys.length, 1)}, minmax(0, 1fr))` }}
-        >
-          {cfg.keys.map((key, idx) => (
-            <div key={key} className="lp-pulse-cell">
-              <span className="lp-pulse-num">{formatPulseValue(key, Number(pulse?.[key] ?? 0))}</span>
-              <span className="lp-pulse-k">{cfg.labels[idx] || key}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {mode === "healthcare" && topProfessions.length > 0 && (
-        <div className="lp-hc-filter-rail" aria-label="Filter by profession">
-          <button
-            type="button"
-            className={`lp-hc-filter-chip ${professionFilter === null ? "active" : ""}`}
-            onClick={() => setProfessionFilter(null)}
-          >
-            All
-          </button>
-          {topProfessions.map((prof) => (
-            <button
-              key={prof.name}
-              type="button"
-              className={`lp-hc-filter-chip ${professionFilter === prof.name ? "active" : ""}`}
-              onClick={() => setProfessionFilter(professionFilter === prof.name ? null : prof.name)}
-            >
-              {prof.name}
-              <span className="lp-hc-filter-count">{prof.count}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {mode === "sports" && items.length > 0 && (() => {
-        // Build today's league list from actual items
-        const nowLocal = new Date();
-        const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
-        const leagueLogoMap: Record<string, string> = {
-          "MLB": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/mlb.png&w=40&h=40",
-          "NBA": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/nba.png&w=40&h=40",
-          "NHL": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/nhl.png&w=40&h=40",
-          "EPL": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/23.png&w=40&h=40",
-          "La Liga": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/15.png&w=40&h=40",
-          "Bundesliga": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/10.png&w=40&h=40",
-          "Serie A": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/12.png&w=40&h=40",
-          "Ligue 1": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/9.png&w=40&h=40",
-          "MLS": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/19.png&w=40&h=40",
-          "Champions League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/2.png&w=40&h=40",
-          "Europa League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/2310.png&w=40&h=40",
-          "Liga MX": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/26.png&w=40&h=40",
-          "Brasileirao": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/85.png&w=40&h=40",
-          "Primeira Liga": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/14.png&w=40&h=40",
-          "Eredivisie": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/11.png&w=40&h=40",
-          "Scottish Premiership": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/24.png&w=40&h=40",
-          "Super Lig": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/18.png&w=40&h=40",
-          "Belgian Pro League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/144.png&w=40&h=40",
-          "Argentina Primera": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/1.png&w=40&h=40",
-        };
-        // Collect leagues that have games today
-        const todayLeagues: { name: string; count: number; logo: string | null }[] = [];
-        const seen = new Set<string>();
-        const counts = new Map<string, number>();
-        for (const item of items) {
-          const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
-          if (d !== todayStr) continue;
-          const league = item.league || "Other";
-          counts.set(league, (counts.get(league) || 0) + 1);
-        }
-        for (const [name, count] of counts) {
-          todayLeagues.push({ name, count, logo: leagueLogoMap[name] || null });
-        }
-        if (todayLeagues.length === 0) return null;
-        return (
-          <div className="lp-league-nav" aria-label="Quick league navigation">
-            {todayLeagues.map((lg) => (
-              <button
-                key={lg.name}
-                type="button"
-                className="lp-league-chip"
-                onClick={() => {
-                  const el = itemsScrollRef.current?.querySelector(`[data-league-id="${todayStr}-${lg.name}"]`);
-                  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-              >
-                {lg.logo && <img src={lg.logo} alt="" className="lp-league-chip-logo" />}
-                <span className="lp-league-chip-label">{lg.name}</span>
-                <span className="lp-league-chip-count">{lg.count}</span>
-              </button>
-            ))}
-          </div>
-        );
-      })()}
-
-      {/* Item list */}
-      <div className="lp-items" ref={itemsScrollRef}>
-        {error ? (
-          <div className="lp-items-empty">
-            <div>{error}</div>
-            <button
-              type="button"
-              className="c-new-btn"
-              style={{ marginTop: 10 }}
-              onClick={onRetry}
-            >
-              Retry
-            </button>
-          </div>
-        ) : loading ? (
-          <>
-            {mode === "margins" && (
-              <div className="margin-sub-tabs">
-                <button
-                  className={`margin-sub-tab ${marginSubTab === "jobs" ? "active" : ""}`}
-                  onClick={() => onMarginSubTabChange("jobs")}
-                >
-                  Jobs
-                </button>
-                <button
-                  className={`margin-sub-tab ${marginSubTab === "margins" ? "active" : ""}`}
-                  onClick={() => onMarginSubTabChange("margins")}
-                >
-                  Margins
-                </button>
-              </div>
-            )}
-            <div className="lp-items-loading">
-              {[1, 2, 3, 4, 5, 6].map((i) => (
-                <div key={i} className="lp-item-skeleton" />
-              ))}
-            </div>
-          </>
-        ) : filtered.length === 0 ? (
-          <>
-            {mode === "margins" && (
-              <div className="margin-sub-tabs">
-                <button
-                  className={`margin-sub-tab ${marginSubTab === "jobs" ? "active" : ""}`}
-                  onClick={() => onMarginSubTabChange("jobs")}
-                >
-                  Jobs
-                </button>
-                <button
-                  className={`margin-sub-tab ${marginSubTab === "margins" ? "active" : ""}`}
-                  onClick={() => onMarginSubTabChange("margins")}
-                >
-                  Margins
-                </button>
-              </div>
-            )}
-            <div className="lp-items-empty">
-              {filter
-                ? "No matches"
-                : mode === "margins"
-                  ? marginSubTab === "jobs"
-                    ? "No open jobs yet. Upload job data to populate this board."
-                    : "No saved margins yet. Attach candidates to jobs to create margins."
-                  : mode === "facility"
-                    ? "No facility records available."
-                    : "No data yet"}
-            </div>
-          </>
-        ) : (
-          (() => {
-            // Sports mode: group by date with day separators
-            if (mode === "sports") {
-              // Group by date first
-              const grouped: { date: string; label: string; items: PanelItem[] }[] = [];
-              let lastDate = "";
-              for (const item of filtered) {
-                const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
-                if (d !== lastDate) {
-                  const dateObj = new Date(d + "T12:00:00Z");
-                  grouped.push({
-                    date: d,
-                    label: dateObj.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }),
-                    items: [],
-                  });
-                  lastDate = d;
-                }
-                if (grouped.length > 0) grouped[grouped.length - 1].items.push(item);
-              }
-
-              const nowLocal = new Date();
-              const todayISO = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
-
-              // League logo map (shared with nav rail above)
-              const leagueLogoMap: Record<string, string> = {
-                "MLB": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/mlb.png&w=40&h=40",
-                "NBA": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/nba.png&w=40&h=40",
-                "NHL": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/nhl.png&w=40&h=40",
-                "EPL": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/23.png&w=40&h=40",
-                "La Liga": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/15.png&w=40&h=40",
-                "Bundesliga": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/10.png&w=40&h=40",
-                "Serie A": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/12.png&w=40&h=40",
-                "Ligue 1": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/9.png&w=40&h=40",
-                "MLS": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/19.png&w=40&h=40",
-                "Champions League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/2.png&w=40&h=40",
-                "Europa League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/2310.png&w=40&h=40",
-                "Liga MX": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/26.png&w=40&h=40",
-                "Brasileirao": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/85.png&w=40&h=40",
-                "Primeira Liga": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/14.png&w=40&h=40",
-                "Eredivisie": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/11.png&w=40&h=40",
-                "Scottish Premiership": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/24.png&w=40&h=40",
-                "Super Lig": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/18.png&w=40&h=40",
-                "Belgian Pro League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/144.png&w=40&h=40",
-                "Argentina Primera": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/1.png&w=40&h=40",
-              };
-
-              return grouped.map((group) => {
-                const isToday = group.date === todayISO;
-                const isPast = group.date < todayISO;
-
-                // Sub-group by league within each date
-                const leagueOrder: string[] = [];
-                const leagueMap = new Map<string, PanelItem[]>();
-                for (const item of group.items) {
-                  const league = item.league || "Other";
-                  if (!leagueMap.has(league)) {
-                    leagueOrder.push(league);
-                    leagueMap.set(league, []);
-                  }
-                  leagueMap.get(league)!.push(item);
-                }
-
-                return (
-                  <div key={group.date} data-date={group.date}>
-                    <div className={`lp-day-separator ${isToday ? 'lp-day-today' : ''} ${isPast ? 'lp-day-past' : ''}`}>
-                      <span className="lp-day-label">{isToday ? 'Today' : group.label}</span>
-                      <span className="lp-day-count">{group.items.length}</span>
-                    </div>
-                    {leagueOrder.map((league) => {
-                      const leagueItems = leagueMap.get(league)!;
-                      const leagueLogo = leagueLogoMap[league] || null;
-                      return (
-                        <div key={`${group.date}-${league}`} data-league-id={`${group.date}-${league}`}>
-                          {/* League section header */}
-                          <div className="lp-league-header">
-                            {leagueLogo && (
-                              <img src={leagueLogo} alt="" className="lp-league-logo" />
-                            )}
-                            <span className="lp-league-name">{league}</span>
-                            <span className="lp-league-count">{leagueItems.length}</span>
-                          </div>
-                          {leagueItems.map((item) => {
-                            const hasWriteup = Boolean(item.writeupUrl);
-                            return (
-                              <div
-                                key={item.id}
-                                className={`lp-item lp-item-game ${hasWriteup ? "sp-match-linked" : ""}`}
-                                onClick={() => {
-                                  if (hasWriteup) {
-                                    window.open(item.writeupUrl!, "_blank");
-                                  } else {
-                                    onItemClick(item);
-                                  }
-                                }}
-                              >
-                                <div className="sp-card">
-                                  {/* Team rows */}
-                                  <div className="sp-matchup">
-                                    <div className="sp-team-row">
-                                      {item.awayLogo && <img src={item.awayLogo} alt="" className="sp-team-icon" />}
-                                      <span className="sp-team-name">{item.away || "TBD"}</span>
-                                      {item.awayRecord && <span className="sp-team-rec">{item.awayRecord}</span>}
-                                      {item.spread != null && (
-                                        <span className="sp-line">{item.spread > 0 ? "+" : ""}{item.spread}</span>
-                                      )}
-                                    </div>
-                                    <div className="sp-team-row">
-                                      {item.homeLogo && <img src={item.homeLogo} alt="" className="sp-team-icon" />}
-                                      <span className="sp-team-name">{item.home || "TBD"}</span>
-                                      {item.homeRecord && <span className="sp-team-rec">{item.homeRecord}</span>}
-                                      {item.total != null && (
-                                        <span className="sp-line sp-line-ou">o/u {item.total}</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  {/* Footer: time + venue */}
-                                  <div className="sp-card-foot">
-                                    <span className="sp-foot-time">
-                                      {item.startTime
-                                        ? new Date(item.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-                                        : "TBD"}
-                                    </span>
-                                    {item.venue && (
-                                      <>
-                                        <span className="sp-foot-sep">·</span>
-                                        <span className="sp-foot-venue">{item.venue}</span>
-                                      </>
-                                    )}
-                                    <span
-                                      className={`sp-status-dot ${hasWriteup ? "sp-dot-ready" : "sp-dot-pending"}`}
-                                      title={hasWriteup ? "Writeup published" : "No writeup yet"}
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              });
-            }
-
-            if (mode === "worldcup") {
-              const grouped: { date: string; label: string; items: PanelItem[] }[] = [];
-              let lastDate = "";
-
-              for (const item of filtered) {
-                const dateKey = item.kickoff ? item.kickoff.slice(0, 10) : "";
-                if (dateKey !== lastDate) {
-                  const dateObj = dateKey ? new Date(`${dateKey}T12:00:00Z`) : null;
-                  grouped.push({
-                    date: dateKey,
-                    label: dateObj
-                      ? dateObj.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
-                      : "TBD",
-                    items: [],
-                  });
-                  lastDate = dateKey;
-                }
-                if (grouped.length > 0) grouped[grouped.length - 1].items.push(item);
-              }
-
-              const nowLocal = new Date();
-              const todayISO = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, "0")}-${String(nowLocal.getDate()).padStart(2, "0")}`;
-
-              return grouped.map((group) => {
-                const isToday = group.date === todayISO;
-                return (
-                  <div key={group.date || "tbd"} data-date={group.date}>
-                    <div className={`lp-day-separator ${isToday ? "lp-day-today" : ""}`}>
-                      <span className="lp-day-label">{isToday ? "Today" : group.label}</span>
-                      <span className="lp-day-count">{group.items.length}</span>
-                    </div>
-                    {group.items.map((item) => {
-                      const hasWriteup = Boolean(item.writeupUrl);
-                      return (
-                        <div
-                          key={item.id}
-                          className={`lp-item lp-item-game ${hasWriteup ? "wc-match-linked" : ""}`}
-                          onClick={() => {
-                            if (hasWriteup) {
-                              window.open(item.writeupUrl!, "_blank");
-                            } else {
-                              onItemClick(item);
-                            }
-                          }}
-                        >
-                          <div className="lp-game-row">
-                            <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                              {item.homeFlag && <img src={item.homeFlag} alt="" className="lp-team-logo" />}
-                              <div style={{ minWidth: 0 }}>
-                                <p
-                                  className="lp-item-label"
-                                  style={{ margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                                >
-                                  {item.homeName || "TBD"} vs {item.awayName || "TBD"}
-                                </p>
-                                <p className="lp-pitcher-names" style={{ margin: "2px 0 0" }}>
-                                  {item.groupLetter
-                                    ? `Group ${item.groupLetter} · ${item.venue || "Venue TBD"}`
-                                    : `${formatStage(item.stage)} · ${item.venue || "Venue TBD"}`}
-                                </p>
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
-                              <span className="lp-game-time">
-                                {item.kickoff
-                                  ? new Date(item.kickoff).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-                                  : "TBD"}
-                              </span>
-                              <span
-                                className={`wc-status-dot ${hasWriteup ? "wc-dot-ready" : "wc-dot-pending"}`}
-                                title={hasWriteup ? "Writeup published" : "No writeup yet"}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              });
-            }
-
-            if (mode === "facility") {
-              const byState: Array<{ state: string; items: PanelItem[] }> = [];
-              const stateMap = new Map<string, PanelItem[]>();
-              for (const item of filtered) {
-                const stateKey = String(item.facilityState || item.state || "UNSPECIFIED").toUpperCase();
-                if (!stateMap.has(stateKey)) {
-                  stateMap.set(stateKey, []);
-                  byState.push({ state: stateKey, items: stateMap.get(stateKey)! });
-                }
-                stateMap.get(stateKey)!.push(item);
-              }
-              byState.sort((a, b) => a.state.localeCompare(b.state));
-
-              return byState.map((group) => (
-                <div key={group.state}>
-                  <div className="lp-day-sep fac-state-header">
-                    <span className="lp-day-label">{group.state}</span>
-                    <span className="lp-day-count">{group.items.length}</span>
-                  </div>
-                  <div>
-                    {group.items.map((item) => {
-                      const active = Number(item.activeAssignments || 0);
-                      const pending = Number(item.pendingStartAssignments || 0);
-                      const pipeline = Number(item.pipelineAssignments || 0);
-                      const hasStats = active > 0 || pending > 0 || pipeline > 0;
-                      const isEasy = item.submissionDifficulty === "easy";
-                      const rules = item.submittalRules || "";
-                      const hasCompact = /compact/i.test(rules);
-                      const hasLocals = /local/i.test(rules);
-                      return (
-                        <button
-                          type="button"
-                          key={item.id}
-                          className={`lp-item lp-item-facility ${selectedItemId === item.id ? "lp-item-active" : ""}`}
-                          onClick={() => onItemClick(item)}
-                          aria-label={`Open facility ${item.facilityName || item.label}`}
-                        >
-                          <div className="fac-card-row">
-                            <div className="fac-card-info">
-                              <span className="fac-card-name">{item.facilityName || item.label}</span>
-                              <span className="fac-card-loc">
-                                {(item.facilityCity || "--")}{item.facilityState ? `, ${item.facilityState}` : ""}
-                                {item.vmsPlatform ? ` · ${item.vmsPlatform}` : ""}
-                              </span>
-                              {(item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl) && (
-                                <a
-                                  className="aya-nova-btn"
-                                  href={item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl || "#"}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  onClick={e => e.stopPropagation()}
-                                  title={item.facilityProfileUrl || item.facilityNovaUrl || item.novaUrl || ""}
-                                >
-                                  Nova
-                                </a>
-                              )}
-                            </div>
-                            <div className="fac-card-icons">
-                              {isEasy && <span className="fac-icon" title="Easy submittal">⚡</span>}
-                              {hasCompact && <span className="fac-icon" title="Compact optional">🛡️</span>}
-                              {hasLocals && <span className="fac-icon" title="Locals accepted">📍</span>}
-                            </div>
-                            {hasStats && (
-                              <div className="fac-card-stats">
-                                {active > 0 && <span className="fac-stat fac-stat-active">{active} Active</span>}
-                                {pending > 0 && <span className="fac-stat fac-stat-pending">{pending} Pending</span>}
-                                {pipeline > 0 && <span className="fac-stat fac-stat-pipeline">{pipeline} Pipeline</span>}
-                              </div>
-                            )}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ));
-            }
-
-            if (mode === "margins") {
-              const formatCurrency = (value: number | null | undefined) =>
-                typeof value === "number" && Number.isFinite(value)
-                  ? new Intl.NumberFormat("en-US", {
-                    style: "currency",
-                    currency: "USD",
-                    maximumFractionDigits: 0,
-                  }).format(value)
-                  : "--";
-              const formatPercent = (value: number | null | undefined) =>
-                typeof value === "number" && Number.isFinite(value)
-                  ? `${(value * 100).toFixed(2)}%`
-                  : "--";
-
-              const handleSubTabChange = (tab: "jobs" | "margins") => {
-                onMarginSubTabChange(tab);
-              };
-
-              const handleAttach = async (jobObjectId: string) => {
-                if (!attachName.trim()) return;
-                setAttachLoading(true);
-                try {
-                  const res = await fetch("/api/ayaops/jobs/attach", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      margin_object_id: jobObjectId,
-                      candidate_name: attachName.trim(),
-                    }),
-                  });
-                  if (!res.ok) {
-                    const err = await res.json();
-                    alert(err.error || "Failed to attach");
-                    return;
-                  }
-                  setAttachJobId(null);
-                  setAttachName("");
-                  // Re-fetch to refresh the list
-                  handleSubTabChange(marginSubTab);
-                } catch {
-                  alert("Network error");
-                } finally {
-                  setAttachLoading(false);
-                }
-              };
-
-              return (
-                <>
-                  {/* Jobs / Margins tab toggle */}
-                  <div className="margin-sub-tabs">
-                    <button
-                      className={`margin-sub-tab ${marginSubTab === "jobs" ? "active" : ""}`}
-                      onClick={() => handleSubTabChange("jobs")}
-                    >
-                      Jobs
-                    </button>
-                    <button
-                      className={`margin-sub-tab ${marginSubTab === "margins" ? "active" : ""}`}
-                      onClick={() => handleSubTabChange("margins")}
-                    >
-                      Margins
-                    </button>
-                  </div>
-
-                  {/* Job cards */}
-                  {marginSubTab === "jobs" && filtered.map((item) => (
-                    <div
-                      key={item.id}
-                      className={`lp-item lp-item-job ${selectedItemId === item.id ? "lp-item-active" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="lp-job-body"
-                        onClick={() => onItemClick(item)}
-                      >
-                        <div className="lp-flex-col">
-                          <p className="lp-item-label">
-                            {item.specialty || item.profession || "Role"}
-                            {item.shiftType ? ` · ${item.shiftType.charAt(0).toUpperCase() + item.shiftType.slice(1)}` : ""}
-                          </p>
-                          <p className="lp-item-meta lp-margin-meta">
-                            {item.facilityName || "--"}
-                          </p>
-                          {(item.assignmentStart || item.assignmentEnd) && (
-                            <p className="lp-item-meta lp-margin-dates">
-                              {formatShortDate(item.assignmentStart)} {item.assignmentEnd ? `→ ${formatShortDate(item.assignmentEnd)}` : ""}
-                            </p>
-                          )}
-                        </div>
-                        <div className="lp-margin-values">
-                          {item.weeklyGross != null && (
-                            <span className="lp-margin-gross">{formatCurrency(item.weeklyGross)}</span>
-                          )}
-                          {item.weeklyHours != null && (
-                            <span className="lp-margin-pct">{item.weeklyHours}h/wk</span>
-                          )}
-                        </div>
-                      </button>
-                      {/* Attach action */}
-                      {attachJobId === item.id ? (
-                        <div className="lp-attach-form">
-                          <input
-                            type="text"
-                            className="lp-attach-input"
-                            placeholder="Candidate name..."
-                            value={attachName}
-                            onChange={(e) => setAttachName(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") handleAttach(item.marginObjectId || item.id); }}
-                            autoFocus
-                          />
-                          <button
-                            className="lp-attach-btn"
-                            disabled={attachLoading || !attachName.trim()}
-                            onClick={() => handleAttach(item.marginObjectId || item.id)}
-                          >
-                            {attachLoading ? "..." : "Attach"}
-                          </button>
-                          <button
-                            className="lp-attach-cancel"
-                            onClick={() => { setAttachJobId(null); setAttachName(""); }}
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          className="lp-attach-trigger"
-                          onClick={(e) => { e.stopPropagation(); setAttachJobId(item.id); setAttachName(""); }}
-                        >
-                          Attach Candidate
-                        </button>
-                      )}
-                    </div>
-                  ))}
-
-                  {/* Margin cards (existing) */}
-                  {marginSubTab === "margins" && filtered.map((item) => (
-                    <button
-                      type="button"
-                      key={item.id}
-                      className={`lp-item lp-item-margin ${selectedItemId === item.id ? "lp-item-active" : ""}`}
-                      onClick={() => onItemClick(item)}
-                      aria-label={`Open margin details for ${item.candidateName || item.label}`}
-                    >
-                      <div className="lp-flex-col">
-                        <p className="lp-item-label">{item.candidateName || item.label}</p>
-                        <p className="lp-item-meta lp-margin-meta">
-                          {(item.facilityName || "--")}
-                          {item.specialty ? ` · ${item.specialty}` : item.profession ? ` · ${item.profession}` : ""}
-                        </p>
-                        <p className="lp-item-meta lp-margin-dates">
-                          {formatShortDate(item.assignmentStart)} {item.assignmentEnd ? `→ ${formatShortDate(item.assignmentEnd)}` : ""}
-                        </p>
-                      </div>
-                      <div className="lp-margin-values">
-                        <span className="lp-margin-gross">{formatCurrency(item.weeklyGross)}</span>
-                        <span className="lp-margin-pct">{formatPercent(item.actualMarginPct)}</span>
-                      </div>
-                    </button>
-                  ))}
-                </>
-              );
-            }
-
-            // AyaOps mode: candidates grouped by specialty (server-normalized)
-            if (mode === "ayaops") {
-              const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-              const fmtDate = (iso: string) => { const [y, m, d] = iso.split('-'); return `${MONTHS[+m - 1]} ${+d} '${y.slice(2)}`; };
-              const workflowStates = [
-                { key: "prospect", label: "Prospect" },
-                { key: "working", label: "Working" },
-                { key: "submitted", label: "Submitted" },
-                { key: "offer", label: "Offer" },
-                { key: "prestart", label: "Prestart" },
-                { key: "completed", label: "Completed" },
-              ] as const;
-              const stateLabelMap: Record<string, string> = workflowStates.reduce((acc, state) => {
-                acc[state.key] = state.label;
-                return acc;
-              }, {} as Record<string, string>);
-              const statusMap: Record<string, string> = {
-                review: "prospect",
-                under_review: "prospect",
-                working: "working",
-                active: "working",
-                on_assignment: "working",
-                submitted: "submitted",
-                submittal: "submitted",
-                submitted_to_client: "submitted",
-                in_pipeline: "submitted",
-                offer: "offer",
-                offered: "offer",
-                offer_extended: "offer",
-                prestart: "prestart",
-                pre_start: "prestart",
-                pending_start: "prestart",
-                starting_soon: "prestart",
-                restart: "prestart",
-                completed: "completed",
-                done: "completed",
-              };
-              const normalizeStatus = (item: PanelItem) => {
-                const rawStatus = String(item.derivedCurrentStatus || item.assignmentStatus || "")
-                  .toLowerCase()
-                  .trim()
-                  .replace(/[\s-]+/g, "_");
-                if (!rawStatus) return "prospect";
-                return statusMap[rawStatus] || "prospect";
-              };
-
-              // Stat counts
-              const statCounts: Record<string, number> = {
-                prospect: 0,
-                working: 0,
-                submitted: 0,
-                offer: 0,
-                prestart: 0,
-                completed: 0,
-              };
-              for (const item of filtered) {
-                const state = normalizeStatus(item);
-                if (state in statCounts) statCounts[state]++;
-              }
-
-              // Apply status filter
-              const statusFiltered = filtered.filter((it) => normalizeStatus(it) === statusFilter);
-
-              // Build specialty counts for filter pills
-              const specCounts = new Map<string, number>();
-              for (const item of statusFiltered) {
-                const s = item.specialty || "Unknown";
-                specCounts.set(s, (specCounts.get(s) || 0) + 1);
-              }
-              const specEntries = [...specCounts.entries()].sort((a, b) => b[1] - a[1]);
-
-              // Apply specialty filter
-              const specFiltered = selectedSpecialty
-                ? statusFiltered.filter(it => (it.specialty || "Unknown") === selectedSpecialty)
-                : statusFiltered;
-
-              const ranked = [...specFiltered].sort((a, b) => {
-                const levelRank = (value?: string | null) => {
-                  const key = String(value || "").toLowerCase();
-                  if (key === "critical") return 5;
-                  if (key === "high") return 4;
-                  if (key === "medium") return 3;
-                  if (key === "standard") return 2;
-                  if (key === "low") return 1;
-                  return 0;
-                };
-                const levelDiff = levelRank(b.touchPriorityLevel) - levelRank(a.touchPriorityLevel);
-                if (levelDiff !== 0) return levelDiff;
-                const scoreDiff = (b.touchPriorityScore || 0) - (a.touchPriorityScore || 0);
-                if (scoreDiff !== 0) return scoreDiff;
-                const aDays = a.touchDaysToEnd ?? 9999;
-                const bDays = b.touchDaysToEnd ?? 9999;
-                if (aDays !== bDays) return aDays - bDays;
-                return (a.label || "").localeCompare(b.label || "");
-              });
-
-              return (
-                <>
-                  {/* Stat filter strip */}
-                  <div className="lp-stat-filters">
-                    {workflowStates.map((state) => (
-                      <button
-                        key={state.key}
-                        className={`lp-sf ${statusFilter === state.key ? 'active' : ''} ${statCounts[state.key] === 0 ? 'is-zero' : ''}`}
-                        onClick={() => setStatusFilter(state.key)}
-                      >
-                        <span className="lp-sf-num">{statCounts[state.key]}</span>
-                        <span className="lp-sf-lbl">{state.label}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Specialty filter pills — horizontal scroll track */}
-                  {specEntries.length > 1 && (
-                    <div className="aya-spec-pills">
-                      <button
-                        className={`aya-spec-pill ${!selectedSpecialty ? 'active' : ''}`}
-                        onClick={() => setSelectedSpecialty(null)}
-                      >
-                        All {statusFiltered.length}
-                      </button>
-                      {specEntries.map(([spec, count]) => (
-                        <button
-                          key={spec}
-                          className={`aya-spec-pill ${selectedSpecialty === spec ? 'active' : ''}`}
-                          onClick={() => setSelectedSpecialty(selectedSpecialty === spec ? null : spec)}
-                        >
-                          {spec} {count}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Flat matchup rows */}
-                  {ranked.map((item) => {
-                    const status = stateLabelMap[normalizeStatus(item)] || "Prospect";
-                    const normalizedTouchReason = formatTouchPriorityReason(item.touchPriorityReason);
-                    const score = typeof item.touchPriorityScore === "number" ? Math.round(item.touchPriorityScore) : null;
-                    const scoreBadge =
-                      typeof item.touchDaysToEnd === "number"
-                        ? `${item.touchDaysToEnd}d`
-                        : score !== null
-                          ? `P${score}`
-                          : null;
-                    const heatBand = score !== null
-                      ? score >= 80 ? "heat-urgent" : score >= 40 ? "heat-warm" : "heat-cold"
-                      : item.touchPriorityBand === "today" ? "heat-urgent"
-                        : item.touchPriorityBand === "this_week" ? "heat-warm"
-                          : "heat-cold";
-                    const tooltipText = normalizedTouchReason || (score !== null ? `Priority score: ${score}` : "");
-                    return (
-                      <div
-                        key={item.id}
-                        className="lp-item aya-candidate-card"
-                      >
-                        <div className="aya-card-collapsed">
-                          <div className="aya-avatar">
-                            {(item.label || "?").split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase()}
-                          </div>
-                          <div className="aya-card-name-col">
-                            {item.novaUrl ? (
-                              <a
-                                href={item.novaUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="lp-candidate-name-link"
-                                onClick={e => e.stopPropagation()}
-                              >{item.label}</a>
-                            ) : (
-                              <span className="lp-candidate-name-link">{item.label}</span>
-                            )}
-                            <span className="aya-card-meta">
-                              {item.specialty || item.profession}
-                              {item.homeState && ` · ${item.homeState}`}
-                            </span>
-                            {(item.rcThreadUrl || item.outlookThreadUrl || item.novaId || item.novaUrl) && (
-                              <div className="aya-card-badges">
-                                {(item.novaId || item.novaUrl) && (
-                                  <a
-                                    href={item.novaUrl || `/c/${item.novaId}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="aya-nova-btn"
-                                    onClick={e => e.stopPropagation()}
-                                    title={item.novaUrl || `nova/candidate/${item.novaId}`}
-                                  >
-                                    Nova
-                                  </a>
-                                )}
-                                {item.novaId && (
-                                  <a
-                                    href={`/c/${item.novaId}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="aya-hub-badge"
-                                    onClick={e => e.stopPropagation()}
-                                    title="Open Internal Profile"
-                                  >
-                                    File ↗
-                                  </a>
-                                )}
-                                {item.rcThreadUrl && (
-                                  <a
-                                    href={item.rcThreadUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="aya-rc-badge"
-                                    onClick={e => e.stopPropagation()}
-                                    title="Open SMS Thread"
-                                  >
-                                    SMS ↗
-                                  </a>
-                                )}
-                                {item.outlookThreadUrl && (
-                                  <a
-                                    href={item.outlookThreadUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="aya-outlook-badge"
-                                    onClick={e => e.stopPropagation()}
-                                    title="Open Email Thread"
-                                  >
-                                    Email ↗
-                                  </a>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          {/* Ghost action bar — visible on hover */}
-                          <div className="aya-ghost-actions">
-                            <button
-                              type="button"
-                              className="aya-ghost-btn"
-                              title="Prep Note"
-                              onClick={(e) => { e.stopPropagation(); onItemClick(item); }}
-                            >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
-                            </button>
-                            {item.phone && (
-                              <a
-                                href={`rcapp://r/call?number=${encodeURIComponent(item.phone)}`}
-                                className="aya-ghost-btn"
-                                title="Call"
-                                onClick={e => e.stopPropagation()}
-                              >
-                                <Phone size={14} />
-                              </a>
-                            )}
-                            {item.novaUrl && (
-                              <a
-                                href={item.novaUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="aya-ghost-btn"
-                                title="Open in Nova"
-                                onClick={e => e.stopPropagation()}
-                              >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
-                              </a>
-                            )}
-                          </div>
-                          {/* Priority badge removed for demo Polish */}
-                          <span className={`aya-status-dot aya-dot-${status.toLowerCase().replace(/\s+/g, '-')}`}
-                            title={status}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </>
-              );
-            }
-
-            // Healthcare: editorial licensing cards
-            if (mode === "healthcare") {
-              const profFiltered = professionFilter
-                ? filtered.filter((item) => {
-                  const p = (item.profession || "").toLowerCase();
-                  return p === professionFilter.toLowerCase();
-                })
-                : filtered;
-              return profFiltered.map((item) => {
-                const slug = item.id || "";
-                const refUrl = buildLicensingReferenceUrl(slug);
-                const parsed = inferHealthcareContextFromLabel(item.label);
-                const stateName = parsed.state || item.state || "";
-                const professionName = parsed.profession || item.profession || "";
-                const isActive = selectedItemId === item.id;
-                const isCopied = copiedHcUrl === item.id;
-                return (
-                  <div
-                    key={item.id}
-                    className={`lp-hc-card ${isActive ? "lp-hc-active" : ""}`}
-                  >
-                    <button
-                      className="lp-hc-body"
-                      onClick={() => onItemClick(item)}
-                      title={item.board || item.label}
-                      type="button"
-                    >
-                      <div className="lp-hc-header">
-                        <span className="lp-hc-state">{stateName}</span>
-                        <span className="lp-hc-profession">{professionName}</span>
-                      </div>
-                      <div className="lp-hc-row-group">
-                        {item.fee !== undefined && (
-                          <div className="lp-hc-row">
-                            <span className="lp-hc-row-key">{item.renewalFee ? "Initial" : "Fee"}</span>
-                            <span className="lp-hc-row-val">${item.fee}</span>
-                          </div>
-                        )}
-                        {item.renewalFee !== undefined && (
-                          <div className="lp-hc-row">
-                            <span className="lp-hc-row-key">Renewal</span>
-                            <span className="lp-hc-row-val">${item.renewalFee}</span>
-                          </div>
-                        )}
-                        {item.compact && (
-                          <div className="lp-hc-row">
-                            <span className="lp-hc-row-key">Compact</span>
-                            <span className="lp-hc-row-val lp-hc-row-yes">Yes</span>
-                          </div>
-                        )}
-                        {item.description && (
-                          <div className="lp-hc-row">
-                            <span className="lp-hc-row-key">Timeline</span>
-                            <span className="lp-hc-row-val">{item.description}</span>
-                          </div>
-                        )}
-                      </div>
-                    </button>
-                    {refUrl && (
-                      <div className="lp-hc-link-row">
-                        <a
-                          className="lp-hc-link"
-                          href={refUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          title={`Open ${stateName} ${professionName} on State Licensing Reference`}
-                        >
-                          {refUrl.replace("https://www.", "")}
-                        </a>
-                        <button
-                          type="button"
-                          className="lp-hc-copy-btn"
-                          title="Copy link"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigator.clipboard.writeText(refUrl).then(() => {
-                              setCopiedHcUrl(item.id);
-                              setTimeout(() => setCopiedHcUrl(null), 1800);
-                            });
-                          }}
-                        >
-                          {isCopied ? <Check size={11} /> : <Copy size={11} />}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              });
-            }
-
-            if (mode === "code") {
-              return filtered.map((item) => {
-                const asCodeItem = item as any;
-                return (
-                <button
-                  key={item.id}
-                  className={`lp-item lp-item-code ${selectedItemId === item.id ? "lp-active" : ""}`}
-                  onClick={() => onItemClick(item)}
-                  title={item.label}
-                >
-                  <span className="lp-item-label">{item.label}</span>
-                  {asCodeItem.category && <span className="lp-item-meta">{asCodeItem.category} ({item.status})</span>}
-
-                  {/* Browser Agent Payload - Grounding Target */}
-                  <div className="sr-only"
-                    data-grounding-type="ARCHITECTURE_VERDICT"
-                    data-verdict-id={item.id}
-                    data-agent={asCodeItem.agent || ""}
-                    data-status={item.status || ""}
-                    data-risk-zones={(asCodeItem.riskZones || []).join(",")}
-                  >
-                    [VERDICT]: {item.label}
-                    Agent: {asCodeItem.agent}
-                    Status: {item.status}
-                    Preview: {asCodeItem.preview}
-                    Use the 'verdicts' tools to write or list decisions.
-                  </div>
-                </button>
-              )});
-            }
-
-            // Other non-sports modes: flat list
-            return filtered.map((item) => (
-              <button
-                key={item.id}
-                className="lp-item"
-                onClick={() => onItemClick(item)}
-                title={item.board || item.label}
-              >
-                <span className="lp-item-label">{item.label}</span>
-                {item.fee !== undefined && (
-                  <span className="lp-item-meta">${item.fee}</span>
-                )}
-                {item.description && (
-                  <span className="lp-item-desc">{item.description}</span>
-                )}
-              </button>
-            ));
-          })()
-        )}
-      </div>
-    </aside>
-  );
-}
 
 // --- Right Panel (Sources) ---
 function RightPanel({
@@ -3175,7 +910,7 @@ function RightPanel({
   );
 }
 
-function CapabilityDropdown({
+export function CapabilityDropdown({
   value,
   onChange,
   disabled,
@@ -3246,7 +981,7 @@ function CapabilityDropdown({
 export default function ChatPage() {
   const { user } = useAuth();
   const [state, dispatch] = useReducer(chatReducer, {
-    messages: [], input: "", loading: false, copiedId: null, pendingImage: null, mode: "sports" as ConsoleMode, selectedCandidate: null,
+    messages: [], input: "", loading: false, copiedId: null, pendingImage: null, imageIntent: null, mode: "sports" as ConsoleMode, selectedCandidate: null,
   });
   const [selectedWorkspaceItem, setSelectedWorkspaceItem] = useState<PanelItem | null>(null);
 
@@ -3275,6 +1010,14 @@ export default function ChatPage() {
   const [artifactContent, setArtifactContent] = useState<string | null>(null);
   const [artifactTitle, setArtifactTitle] = useState("");
 
+  // Agent Tab state
+  const [agentTasks, setAgentTasks] = useState<BrowserTask[]>([]);
+  const [selectedAgentTask, setSelectedAgentTask] = useState<string | null>(null);
+
+  const activeAgentTask = useMemo(
+    () => agentTasks.find((t) => t.taskId === selectedAgentTask) || null,
+    [agentTasks, selectedAgentTask],
+  );
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -3637,8 +1380,8 @@ export default function ChatPage() {
 
   // Image handling
   const handleFileSelect = (file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    if (file.size > 10 * 1024 * 1024) { alert("Image must be under 10MB"); return; }
+    if (!file.type.startsWith("image/") && file.type !== "application/pdf") return;
+    if (file.size > 10 * 1024 * 1024) { alert("File must be under 10MB"); return; }
     const reader = new FileReader();
     reader.onloadend = async () => {
       const imageDataUrl = reader.result as string;
@@ -3677,7 +1420,7 @@ export default function ChatPage() {
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of Array.from(items)) {
-      if (item.type.startsWith("image/")) {
+      if (item.type.startsWith("image/") || item.type === "application/pdf") {
         e.preventDefault();
         const file = item.getAsFile();
         if (file) handleFileSelect(file);
@@ -3689,7 +1432,7 @@ export default function ChatPage() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith("image/")) handleFileSelect(file);
+    if (file && (file.type.startsWith("image/") || file.type === "application/pdf")) handleFileSelect(file);
   };
 
   const appendAssistantSystemMessage = useCallback((text: string) => {
@@ -3887,7 +1630,7 @@ export default function ChatPage() {
       setApprovingSnapshotMessageId(message.id);
       try {
         const approvalBody = {
-          state: context.state,
+          state: normalizeStateToCode(context.state) || context.state,
           profession: context.profession,
           category: "licensing",
           answer_text: message.text,
@@ -3969,6 +1712,114 @@ export default function ChatPage() {
     [appendAssistantSystemMessage, resolveHealthcareContextForMessage, user?.email, user?.uid],
   );
 
+  // ── Add Candidate to System (from screenshot extraction) ──────
+  const [ingestingCandidateMessageId, setIngestingCandidateMessageId] = useState<string | null>(null);
+
+  const handleAddCandidateToSystem = useCallback(
+    async (message: Message) => {
+      const text = message.text || "";
+
+      // Parse structured candidate fields from the AI's markdown output
+      const extract = (pattern: RegExp): string | null => {
+        const m = text.match(pattern);
+        return m ? m[1].trim() : null;
+      };
+
+      // Extract candidate name — try specific heading patterns first
+      let fullName = extract(/Candidate Profile:\s*\*?\*?\s*(.+)/i)
+        || extract(/details for\s+\*?\*?([\w][\w\s]+[\w])\*?\*?\s/i)
+        || extract(/\*\*?(?:Name|Candidate)[:\s]*\*?\*?\s*(.+)/i);
+
+      if (!fullName) {
+        appendAssistantSystemMessage("Could not extract candidate name from this message.");
+        return;
+      }
+
+      // Strip markdown formatting and stray label prefixes
+      fullName = fullName
+        .replace(/[*_]/g, "")
+        .replace(/^Profile:\s*/i, "")
+        .trim();
+
+      const nameParts = fullName.split(/\s+/);
+      const firstName = nameParts[0] || "";
+      const lastName = nameParts.slice(1).join(" ") || "";
+
+      const novaId = extract(/(?:Aya ID|Nova ID)[:\s]*(\d+)/i);
+      const email = extract(/(?:Email)[:\s]*([^\s*]+@[^\s*]+)/i);
+      const phone = extract(/(?:Primary Phone)[:\s]*([\d().\-\s+]+)/i);
+      const profession = extract(/(?:Profession)[:\s]*([^\n*]+)/i)?.replace(/:\s*$/, "");
+      const specialty = extract(/(?:Specialty)[:\s]*([^\n*]+)/i)?.replace(/:\s*$/, "");
+      const experienceRaw = extract(/(?:Experience)[:\s]*(\d+)/i);
+      const employmentType = extract(/(?:Employment Type)[:\s]*([^\n*]+)/i);
+
+      // Parse city/state from address or location field
+      const addressMatch = text.match(/(?:Home Address|Address|Location)[:\s]*[^,]*,\s*([^,]+),\s*([A-Z]{2})/i);
+      const city = addressMatch ? addressMatch[1].trim() : null;
+      const stateCode = addressMatch ? addressMatch[2].trim() : null;
+
+      setIngestingCandidateMessageId(message.id);
+      try {
+        const res = await fetch("/api/candidates/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            first_name: firstName,
+            last_name: lastName,
+            email: email || undefined,
+            phone: phone || undefined,
+            profession: profession || undefined,
+            specialty: specialty || undefined,
+            years_experience: experienceRaw ? parseFloat(experienceRaw) : undefined,
+            current_city: city || undefined,
+            current_state: stateCode || undefined,
+            employment_type: employmentType || undefined,
+            nova_id: novaId || undefined,
+            ingested_by: user?.email || user?.uid || "local_user",
+            notes: `Ingested from screenshot at ${new Date().toISOString()}`,
+          }),
+        });
+
+        const payload = await res.json().catch(() => null) as
+          | { result?: Record<string, unknown>; error?: string }
+          | null;
+        if (!res.ok) {
+          throw new Error(payload?.error || `Ingest failed (${res.status})`);
+        }
+
+        const result = payload?.result || {};
+        const outcome = String(result.outcome || "inserted");
+
+        dispatch({
+          type: "SET_ASSISTANT_WRITE_RESULT",
+          payload: {
+            id: message.id,
+            writeResult: {
+              outcome: outcome as "inserted" | "updated" | "no_change",
+              action: "candidate_ingest",
+              objectType: "candidate",
+              rowsUpdated: 1,
+              code: null,
+              payload: result,
+            },
+          },
+        });
+
+        appendAssistantSystemMessage(
+          outcome === "already_exists"
+            ? `Candidate already exists: ${result.name} (${result.candidate_id})`
+            : `Added to system: ${result.name} (${result.candidate_id})`,
+        );
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : "Ingest failed";
+        appendAssistantSystemMessage(`Failed to add candidate: ${messageText}`);
+      } finally {
+        setIngestingCandidateMessageId(null);
+      }
+    },
+    [appendAssistantSystemMessage, user?.email, user?.uid],
+  );
+
   const handleLinkImageCandidate = async (image: SavedImage) => {
     const candidateId = state.selectedCandidate?.id;
     if (!candidateId) return;
@@ -3999,15 +1850,15 @@ export default function ChatPage() {
       if (res.ok) {
         dispatch({
           type: "ADD_ASSISTANT_MESSAGE",
-          payload: { id: String(Date.now() + 1), text: `✅ Credential Verified:\n\`\`\`json\n${JSON.stringify(data.extracted, null, 2)}\n\`\`\`` }
+          payload: { id: String(Date.now() + 1), text: `[Credential Verified]:\n\`\`\`json\n${JSON.stringify(data.extracted, null, 2)}\n\`\`\`` }
         });
       } else {
         throw new Error(data.error || "Failed to process");
       }
-    } catch (e) {
+    } catch (e: unknown) {
       dispatch({
         type: "ADD_ASSISTANT_MESSAGE",
-        payload: { id: String(Date.now() + 1), text: `❌ Credential Processing Failed: ${e instanceof Error ? e.message : "Unknown error"}` }
+        payload: { id: String(Date.now() + 1), text: `[Credential Processing Failed]: ${e instanceof Error ? e.message : "Unknown error"}` }
       });
     }
   };
@@ -4276,11 +2127,13 @@ export default function ChatPage() {
           : null;
 
       // Build request body with optional retrieval policy for internal records
+      const sentImageIntent = state.imageIntent;
       const chatBody: Record<string, unknown> = {
         prompt,
         history,
         image: sentImage || undefined,
         imageRecordId: sentSavedImage?.imageId,
+        imageIntent: sentImageIntent || undefined,
         mode: state.mode,
         modelOverride: modelOverride !== "auto" ? modelOverride : undefined,
         selectedCandidateContext,
@@ -4413,7 +2266,7 @@ export default function ChatPage() {
                 announcedSandboxTasksRef.current.add(taskId);
                 dispatch({
                   type: "APPEND_ASSISTANT_CHUNK",
-                  payload: { id: aId, textChunk: `${isOpsMode ? "\n\n" : ""}📋 Preview ready: ${title} — [Review in Sandbox →]` },
+                  payload: { id: aId, textChunk: `${isOpsMode ? "\n\n" : ""}Preview ready: ${title} — Review in Sandbox` },
                 });
               }
             } else if (parsed.type === "write_result") {
@@ -4486,19 +2339,20 @@ export default function ChatPage() {
                 },
               });
             } else if (parsed.type === "tool_status") {
-              // Tool progress chip — append as status line to assistant message
-              const statusIcon =
-                parsed.status === "running" ? "🔍"
-                  : parsed.status === "ok" ? "✅"
-                    : "❌";
               const label = typeof parsed.label === "string" ? parsed.label : String(parsed.tool || "");
               console.log(`[tool_status] ${parsed.tool} ${parsed.status} ${parsed.latency_ms ?? ""}ms`);
-              if (parsed.status === "running") {
-                dispatch({
-                  type: "APPEND_ASSISTANT_CHUNK",
-                  payload: { id: aId, textChunk: `${statusIcon} ${label}\n` },
-                });
-              }
+              dispatch({
+                type: "UPSERT_TOOL_STATUS",
+                payload: {
+                  id: aId,
+                  status: {
+                    tool: parsed.tool,
+                    status: parsed.status,
+                    label,
+                    latencyMs: parsed.latency_ms
+                  }
+                }
+              });
             } else if (parsed.type === "grounding") {
               dispatch({ type: "SET_ASSISTANT_GROUNDING", payload: { id: aId, citations: parsed.citations, queries: parsed.queries } });
             } else if (parsed.type === "executableCode") {
@@ -4928,280 +2782,44 @@ export default function ChatPage() {
           );
         })()}
 
-        <div className="c-scroll">
-          <div className="c-messages">
-            {visibleMessages.length === 0 && (
-              <div className="c-empty">
-                <h2 className="c-empty-heading">What do you want to know?</h2>
-                <div className="c-starters">
-                  {modeConfig.suggestions.map((s) => (
-                    <button
-                      key={s}
-                      className="c-starter"
-                      onClick={() => { dispatch({ type: "SET_INPUT", payload: s }); inputRef.current?.focus(); }}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {visibleMessages.map((msg) => (
-              <div key={msg.id} className="c-row">
-                {msg.role === "user" ? (
-                  (() => {
-                    const userDisplay = buildUserDisplayContent(msg.text);
-                    return (
-                      <div className="c-user">
-                        {msg.imageUrl && (
-                          <div className="c-user-img">
-                            <img src={msg.imageUrl} alt="Attached" />
-                          </div>
-                        )}
-                        <div className="c-user-text">{userDisplay.previewText}</div>
-                        <div className="c-msg-time">{formatMessageTimestamp(msg.timestamp)}</div>
-                      </div>
-                    );
-                  })()
-                ) : (
-                  (() => {
-                    const assistantDisplay = buildAssistantDisplayContent(msg.text, state.mode);
-                    const shouldRenderDraftCard =
-                      CLEAN_COPY_MODES.has(state.mode) &&
-                      Boolean(assistantDisplay.primaryCopyBlock);
-                    const replyMarkdown = shouldRenderDraftCard
-                      ? assistantDisplay.visibleMarkdownWithoutPrimaryCopyBlock
-                      : assistantDisplay.visibleMarkdown;
-                    const hasReplyMarkdown = Boolean(replyMarkdown.trim());
-                    return (
-                      <div className="c-reply">
-                        {msg.text && hasReplyMarkdown ? (
-                          <div
-                            className="c-body"
-                            dangerouslySetInnerHTML={{ __html: formatMarkdown(replyMarkdown) }}
-                          />
-                        ) : msg.isStreaming ? (
-                          <div className="c-thinking">
-                            <span className="c-thinking-dot" />
-                            <span className="c-thinking-dot" />
-                            <span className="c-thinking-dot" />
-                          </div>
-                        ) : shouldRenderDraftCard ? null : (
-                          <div className="c-empty-reply">
-                            No response returned. Please retry.
-                          </div>
-                        )}
-
-                        {!msg.isStreaming && shouldRenderDraftCard && assistantDisplay.primaryCopyBlock && (
-                          <div className="c-draft-card">
-                            <pre className="c-draft-text">{assistantDisplay.primaryCopyBlock}</pre>
-                            <div className="c-draft-actions">
-                              <button
-                                className="c-action-btn c-action-btn-primary c-draft-copy-btn"
-                                onClick={() =>
-                                  copyToClipboard(msg.text, msg.id, state.mode, {
-                                    primaryOnly: true,
-                                  })
-                                }
-                              >
-                                {state.copiedId === msg.id ? <Check size={13} /> : <Copy size={13} />}
-                                {state.copiedId === msg.id ? "Copied" : "Copy draft"}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Code execution blocks */}
-                        {msg.codeBlocks && msg.codeBlocks.length > 0 && (
-                          <div className="c-exec-blocks">
-                            {msg.codeBlocks.map((block, i) => (
-                              <div key={i} className="c-exec">
-                                <div className="c-exec-header">
-                                  <span className="c-exec-lang">{block.language?.toLowerCase() || "python"}</span>
-                                  <span className="c-exec-label">{block.outcome ? "ran" : "running..."}</span>
-                                </div>
-                                <pre className="c-exec-code"><code>{block.code}</code></pre>
-                                {block.output && (
-                                  <div className={`c-exec-output ${block.outcome === "OUTCOME_OK" ? "" : "c-exec-error"}`}>
-                                    <div className="c-exec-output-label">{block.outcome === "OUTCOME_OK" ? "Output" : "Error"}</div>
-                                    <pre>{block.output}</pre>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {msg.isStreaming && msg.text && <span className="c-cursor" />}
-
-                        {!msg.isStreaming && msg.text && (
-                          <div className="c-actions">
-                            {state.mode === "healthcare" && (
-                              <button
-                                className="c-action-btn c-action-btn-primary"
-                                onClick={() => handleApproveHealthcareSnapshot(msg)}
-                                disabled={
-                                  Boolean(approvingSnapshotMessageId) ||
-                                  (msg.writeResult?.action === "approve_research_snapshot" &&
-                                    msg.writeResult.outcome !== "failed")
-                                }
-                              >
-                                {approvingSnapshotMessageId === msg.id
-                                  ? "Saving..."
-                                  : msg.writeResult?.action === "approve_research_snapshot" &&
-                                    msg.writeResult.outcome !== "failed"
-                                    ? "Approved"
-                                    : "Approve snapshot"}
-                              </button>
-                            )}
-                            {!shouldRenderDraftCard && (
-                              <button
-                                className={`c-action-btn ${CLEAN_COPY_MODES.has(state.mode) && assistantDisplay.primaryCopyBlock ? "c-action-btn-primary" : ""}`}
-                                onClick={() =>
-                                  copyToClipboard(msg.text, msg.id, state.mode, {
-                                    primaryOnly: CLEAN_COPY_MODES.has(state.mode) && Boolean(assistantDisplay.primaryCopyBlock),
-                                  })
-                                }
-                              >
-                                {state.copiedId === msg.id ? <Check size={13} /> : <Copy size={13} />}
-                                {state.copiedId === msg.id
-                                  ? "Copied"
-                                  : CLEAN_COPY_MODES.has(state.mode) && assistantDisplay.primaryCopyBlock
-                                    ? "Copy draft"
-                                    : "Copy"}
-                              </button>
-                            )}
-                            {msg.writeResult && (
-                              <span
-                                className={`c-write-badge c-write-${msg.writeResult.outcome}`}
-                                title={msg.writeResult.outcome === "failed" ? "Action failed" : "Saved to record"}
-                              >
-                                {writeOutcomeLabel(msg.writeResult.outcome)}
-                              </span>
-                            )}
-                            {((msg.citations && msg.citations.length > 0) ||
-                              (msg.queries && msg.queries.length > 0)) && (
-                                <button
-                                  className="c-action-btn c-sources-btn"
-                                  onClick={() => {
-                                    setSourcesMsg(msg);
-                                    setRightPanelMode("sources");
-                                  }}
-                                >
-                                  <ChevronDown size={13} />
-                                  {msg.citations && msg.citations.length > 0
-                                    ? `${msg.citations.length} source${msg.citations.length > 1 ? "s" : ""}`
-                                    : `${msg.queries?.length || 0} quer${(msg.queries?.length || 0) === 1 ? "y" : "ies"}`}
-                                </button>
-                              )}
-                            {msg.writeResult && state.mode === "code" && (
-                              <button
-                                type="button"
-                                className="c-write-toggle"
-                                onClick={() => {
-                                  setExpandedWritePayloads((current) => {
-                                    const next = new Set(current);
-                                    if (next.has(msg.id)) next.delete(msg.id);
-                                    else next.add(msg.id);
-                                    return next;
-                                  });
-                                }}
-                              >
-                                {expandedWritePayloads.has(msg.id) ? "Hide details" : "Details"}
-                              </button>
-                            )}
-                            <span className="c-msg-time">{formatMessageTimestamp(msg.timestamp)}</span>
-                          </div>
-                        )}
-                        {!msg.isStreaming && state.mode === "code" && msg.writeResult && expandedWritePayloads.has(msg.id) && (
-                          <pre className="c-write-payload">
-                            {JSON.stringify(writePayloadForDisplay(msg.writeResult), null, 2)}
-                          </pre>
-                        )}
-                      </div>
-                    );
-                  })()
-                )}
-              </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
+        <ChatMessages
+          state={state}
+          dispatch={dispatch}
+          inputRef={inputRef}
+          messagesEndRef={messagesEndRef}
+          visibleMessages={visibleMessages}
+          approvingSnapshotMessageId={approvingSnapshotMessageId}
+          ingestingCandidateMessageId={ingestingCandidateMessageId}
+          expandedWritePayloads={expandedWritePayloads}
+          setExpandedWritePayloads={setExpandedWritePayloads}
+          setSourcesMsg={setSourcesMsg}
+          setRightPanelMode={setRightPanelMode}
+          handleApproveHealthcareSnapshot={handleApproveHealthcareSnapshot}
+          handleAddCandidateToSystem={handleAddCandidateToSystem}
+          copyToClipboard={copyToClipboard}
+          modeConfig={modeConfig}
+        />
 
         {/* Input dock */}
-        <div className="c-dock">
-          {pendingSavedImage && (
-            <div className="c-img-preview">
-              <img src={pendingSavedImage.previewUrl} alt="Saved source preview" />
-              <button className="c-img-dismiss" onClick={() => setPendingSavedImage(null)}>
-                <X size={12} />
-              </button>
-            </div>
-          )}
-          {state.pendingImage && (
-            <div className="c-img-preview">
-              <img src={state.pendingImage} alt="Preview" />
-              <button className="c-img-dismiss" onClick={() => dispatch({ type: "SET_PENDING_IMAGE", payload: null })}>
-                <X size={12} />
-              </button>
-            </div>
-          )}
-          <form
-            className="c-input-form"
-            onSubmit={handleSubmit}
-            onDrop={handleDrop}
-            onDragOver={(e) => e.preventDefault()}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              style={{ display: "none" }}
-              onChange={(e) => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]); e.target.value = ""; }}
-            />
-            <button type="button" className="c-attach-btn" onClick={() => fileInputRef.current?.click()}>
-              <Paperclip size={16} />
-            </button>
-            <textarea
-              ref={inputRef}
-              value={state.input}
-              onChange={(e) => {
-                dispatch({ type: "SET_INPUT", payload: e.target.value });
-                // Auto-expand
-                const el = e.target;
-                el.style.height = "auto";
-                el.style.height = Math.min(el.scrollHeight, 160) + "px";
-              }}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={modeConfig.placeholder}
-              className="c-textarea"
-              rows={1}
-              disabled={state.loading}
-            />
-            <div className="c-capability-wrap">
-              <span className="c-capability-label">Mode</span>
-              <CapabilityDropdown
-                value={modelOverride}
-                onChange={setModelOverride}
-                disabled={state.loading || uploadingImage}
-                mode={state.mode}
-              />
-            </div>
-            <button
-              type="submit"
-              className={`c-send-btn ${state.loading ? "c-send-loading" : ""} ${(state.input.trim() || state.pendingImage || pendingSavedImage) && !state.loading ? "c-send-ready" : ""}`}
-              disabled={state.loading || uploadingImage || (!state.input.trim() && !state.pendingImage && !pendingSavedImage)}
-            >
-              {state.loading ? (
-                <span className="c-send-spinner" />
-              ) : (
-                <Send size={16} />
-              )}
-            </button>
-          </form>
-        </div>
+        <ChatInput
+          pendingSavedImage={pendingSavedImage}
+          setPendingSavedImage={setPendingSavedImage}
+          state={state}
+          dispatch={dispatch}
+          IMAGE_INTENTS={IMAGE_INTENTS}
+          handleSubmit={handleSubmit}
+          handleDrop={handleDrop}
+          fileInputRef={fileInputRef}
+          handleFileSelect={handleFileSelect}
+          inputRef={inputRef}
+          handleKeyDown={handleKeyDown}
+          handlePaste={handlePaste}
+          modeConfig={modeConfig}
+          modelOverride={modelOverride}
+          setModelOverride={setModelOverride}
+          uploadingImage={uploadingImage}
+          CapabilityDropdown={CapabilityDropdown}
+        />
       </div>
 
       {/* Right Panel (Sources) */}

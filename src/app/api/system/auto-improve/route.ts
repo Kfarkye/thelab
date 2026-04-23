@@ -13,10 +13,9 @@ import {
   processCodeChange,
   setGitHubConfigOverride,
   type ProcessCodeChangeParams,
-  type GitHubConfig,
 } from "@/lib/github/tools";
 
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-3-flash-preview";
 const MAX_TOOL_ROUNDS = 6;
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -68,169 +67,187 @@ export async function POST(request: NextRequest) {
     ? (typedBody.files as unknown[]).map((f) => readString(f)).filter(Boolean)
     : [];
 
-  const ai = new GoogleGenAI({
-    apiKey: requireEnv("GEMINI_API_KEY"),
-  });
+  try {
+    const ai = new GoogleGenAI({
+      vertexai: true,
+      project: requireEnv("GOOGLE_CLOUD_PROJECT"),
+      location: "global",
+    });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tools: any = [
-    {
-      functionDeclarations: [...AUTO_IMPROVE_TOOLS],
-    },
-  ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tools: any = [
+      {
+        functionDeclarations: [...AUTO_IMPROVE_TOOLS],
+      },
+    ];
 
-  const systemPrompt = `You are a senior software engineer reviewing a Next.js + TypeScript codebase.
+    const systemPrompt = `You are a senior software engineer reviewing a Next.js + TypeScript codebase.
 Your job is to:
 1. Read the required source files using read_repo_file
 2. Analyze the code against the user's improvement instruction
-3. If a safe change is warranted, call process_code_change with full file contents and a PR message
-4. Never propose destructive or risky changes. Only safe, deterministic fixes.
-5. Always read a file before modifying it.`;
+3. Focus, identify the exact root cause, and explicitly list your plan as text BEFORE executing any changes.
+4. If a safe change is warranted, call process_code_change with full file contents and a PR message
+5. Never propose destructive or risky changes. Only safe, deterministic fixes.
+6. Always read a file before modifying it.`;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let contents: any[] = [
-    {
-      role: "user",
-      parts: [
-        {
-          text: targetFiles.length
-            ? `${instruction}\n\nTarget files to examine:\n${targetFiles.map((f) => `- ${f}`).join("\n")}`
-            : instruction,
-        },
-      ],
-    },
-  ];
-
-  const model = GEMINI_MODEL;
-  let round = 0;
-  const toolResults: Array<{ tool: string; ok: boolean; latency_ms: number }> = [];
-
-  while (round < MAX_TOOL_ROUNDS) {
-    round++;
-
-    const result = await ai.models.generateContent({
-      model,
-      contents,
-      config: {
-        tools,
-        temperature: 0.2,
-        systemInstruction: systemPrompt,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let contents: any[] = [
+      {
+        role: "user",
+        parts: [
+          {
+            text: targetFiles.length
+              ? `${instruction}\n\nTarget files to examine:\n${targetFiles.map((f) => `- ${f}`).join("\n")}`
+              : instruction,
+          },
+        ],
       },
-    });
+    ];
 
-    const candidates = result.candidates;
-    if (!candidates?.length) break;
+    const model = GEMINI_MODEL;
+    let round = 0;
+    const toolResults: Array<{ tool: string; ok: boolean; latency_ms: number }> = [];
 
-    const parts = candidates[0].content?.parts || [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const functionCalls = parts.filter(
-      (p: any) => p.functionCall,
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const textParts = parts
-      .filter((p: any) => typeof p.text === "string")
-      .map((p: any) => String(p.text));
+    while (round < MAX_TOOL_ROUNDS) {
+      round++;
 
-    if (functionCalls.length === 0) {
-      // Model is done — return final text
-      return new Response(
-        JSON.stringify({
-          status: "complete",
-          response: textParts.join(""),
-          rounds: round,
-          toolResults,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
+      const result = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          tools,
+          temperature: 0.2,
+          systemInstruction: systemPrompt,
+        },
+      });
+
+      const candidates = result.candidates;
+      if (!candidates?.length) break;
+
+      const parts = candidates[0].content?.parts || [];
+      const functionCalls = parts.filter(
+        (p: { functionCall?: unknown }) => p.functionCall,
       );
-    }
 
-    // Execute tool calls
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const toolResponses: any[] = [];
+      const textParts = parts
+        .filter((p: { text?: string }) => typeof p.text === "string")
+        .map((p: { text?: string }) => String(p.text));
 
-    for (const fc of functionCalls) {
-      const call = fc.functionCall as { name: string; args: unknown };
-      const name = call.name;
-      const args = toRecord(call.args);
-      const start = Date.now();
+      if (functionCalls.length === 0) {
+        // Model is done — return final text
+        return new Response(
+          JSON.stringify({
+            status: "complete",
+            response: textParts.join(""),
+            rounds: round,
+            toolResults,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
 
-      try {
-        if (name === "read_repo_file") {
-          const path = readString(args.path);
-          const branch = readString(args.branch) || undefined;
-          const content = await readRepoFileByPath(path, branch);
-          const toolResult = content !== null
-            ? { result: { path, content, found: true } }
-            : { result: { path, found: false, error: "File not found" } };
+      // Execute tool calls
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const toolResponses: any[] = [];
 
-          toolResponses.push({
-            functionResponse: { name, response: toolResult },
-          });
-          toolResults.push({ tool: name, ok: true, latency_ms: Date.now() - start });
-        } else if (name === "process_code_change") {
-          const filePatchesRaw = args.file_patches;
-          const files = Array.isArray(filePatchesRaw)
-            ? filePatchesRaw.map((fp: unknown) => {
-                const patch = toRecord(fp);
-                return {
-                  path: readString(patch.path),
-                  content: readString(patch.content),
-                };
-              }).filter((f) => f.path && f.content)
-            : [];
+      for (const fc of functionCalls) {
+        const call = fc.functionCall as { name: string; args: unknown };
+        const name = call.name;
+        const args = toRecord(call.args);
+        const start = Date.now();
 
-          const changeParams: ProcessCodeChangeParams = {
-            commitMessage: readString(args.commit_message) || "Auto-improve change",
-            files,
-            branch: readString(args.branch) || undefined,
-            prTitle: readString(args.pr_title) || undefined,
-            reviewStatus: readString(args.review_status) || undefined,
-          };
+        try {
+          if (name === "read_repo_file") {
+            const path = readString(args.path);
+            const branch = readString(args.branch) || undefined;
+            const content = await readRepoFileByPath(path, branch);
+            const toolResult = content !== null
+              ? { result: { path, content, found: true } }
+              : { result: { path, found: false, error: "File not found" } };
 
-          const prResult = await processCodeChange(changeParams);
+            toolResponses.push({
+              functionResponse: { name, response: toolResult },
+            });
+            toolResults.push({ tool: name, ok: true, latency_ms: Date.now() - start });
+          } else if (name === "process_code_change") {
+            const filePatchesRaw = args.file_patches;
+            const files = Array.isArray(filePatchesRaw)
+              ? filePatchesRaw.map((fp: unknown) => {
+                  const patch = toRecord(fp);
+                  return {
+                    path: readString(patch.path),
+                    content: readString(patch.content),
+                  };
+                }).filter((f) => f.path && f.content)
+              : [];
+
+            const changeParams: ProcessCodeChangeParams = {
+              commitMessage: readString(args.commit_message) || "Auto-improve change",
+              files,
+              branch: readString(args.branch) || undefined,
+              prTitle: readString(args.pr_title) || undefined,
+              reviewStatus: readString(args.review_status) || undefined,
+            };
+
+            const prResult = await processCodeChange(changeParams);
+            toolResponses.push({
+              functionResponse: {
+                name,
+                response: { result: prResult },
+              },
+            });
+            toolResults.push({ tool: name, ok: true, latency_ms: Date.now() - start });
+          } else {
+            toolResponses.push({
+              functionResponse: {
+                name,
+                response: { result: null, error: `Unknown tool: ${name}` },
+              },
+            });
+            toolResults.push({ tool: name, ok: false, latency_ms: Date.now() - start });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[auto-improve] tool ${name} failed:`, msg);
           toolResponses.push({
             functionResponse: {
               name,
-              response: { result: prResult },
-            },
-          });
-          toolResults.push({ tool: name, ok: true, latency_ms: Date.now() - start });
-        } else {
-          toolResponses.push({
-            functionResponse: {
-              name,
-              response: { result: null, error: `Unknown tool: ${name}` },
+              response: { result: null, error: msg },
             },
           });
           toolResults.push({ tool: name, ok: false, latency_ms: Date.now() - start });
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[auto-improve] tool ${name} failed:`, msg);
-        toolResponses.push({
-          functionResponse: {
-            name,
-            response: { result: null, error: msg },
-          },
-        });
-        toolResults.push({ tool: name, ok: false, latency_ms: Date.now() - start });
       }
+
+      // Feed tool responses back to the model
+      contents = [
+        ...contents,
+        { role: "model", parts },
+        { role: "user", parts: toolResponses },
+      ];
     }
 
-    // Feed tool responses back to the model
-    contents = [
-      ...contents,
-      { role: "model", parts },
-      { role: "user", parts: toolResponses },
-    ];
+    return new Response(
+      JSON.stringify({
+        status: "max_rounds_reached",
+        rounds: round,
+        toolResults,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  } catch (error) {
+    // ARCHITECTURE RULE: No retries/timeouts, circuit breakers, or opaque provider fallbacks.
+    // Deterministic failure is required; do not hide downstream availability outages.
+    const errorMsg = error instanceof Error ? error.message : "Unknown error in auto-improve route";
+    console.error(JSON.stringify({
+      severity: "ERROR",
+      module: "auto-improve",
+      message: errorMsg,
+      stack: error instanceof Error ? error.stack : undefined
+    }));
+    return new Response(
+      JSON.stringify({ error: "Internal server error during code improvement phase" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
-
-  return new Response(
-    JSON.stringify({
-      status: "max_rounds_reached",
-      rounds: round,
-      toolResults,
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
 }

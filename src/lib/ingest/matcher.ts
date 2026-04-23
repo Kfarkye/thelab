@@ -1,7 +1,7 @@
 // src/lib/ingest/matcher.ts
 import { getDb } from '@/lib/spanner-pool';
 
-const INSTANCE_ID = 'workflowos-instance';
+
 
 export function normalizePhone(phone: string | undefined | null) {
   if (!phone) return null;

@@ -1,5 +1,5 @@
 import { GoogleAuth } from "google-auth-library";
-import { getDb } from "@/lib/spanner";
+import { getCredentialDb } from "@/lib/spanner-pool";
 const EVIDENCE_BUCKET = process.env.EVIDENCE_BUCKET || "workflowos-a0fbf-evidence";
 
 const auth = new GoogleAuth({
@@ -7,7 +7,7 @@ const auth = new GoogleAuth({
 });
 
 function getEvidenceDb() {
-  return getDb();
+  return getCredentialDb();
 }
 
 export interface SavedImageRecord {
@@ -160,6 +160,7 @@ function extensionFromMimeType(mimeType: string): string {
   if (mimeType === "image/png") return "png";
   if (mimeType === "image/webp") return "webp";
   if (mimeType === "image/gif") return "gif";
+  if (mimeType === "application/pdf") return "pdf";
   return "img";
 }
 

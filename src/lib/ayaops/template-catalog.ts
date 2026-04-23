@@ -611,25 +611,48 @@ Thank you!`,
   // Margin Approval (internal)
   {
     id: 'margin_approval',
-    name: '💰 OPS: Margin Approval Request',
+    name: '💰 OPS: Low Margin Approval Request',
     category: 'ops',
     messageType: 'email',
     internalOnly: true,
     requiredFields: ['name'],
     generateContent: (d) => {
       const margin = d.actualMargin != null ? String(d.actualMargin) : '[XX]';
+      const firstName = d.name?.split(' ')[0] || '[First Name]';
       const signature = `Best,\nKofi Farkye\nSenior Recruiter, Fulfillment Specialist\nP: 858-529-7267 Ext: 17017`;
 
       return {
-        to: 'Colton.Valdez@ayahealthcare.com',
-        cc: 'Tiffany.Chavez@ayahealthcare.com',
-        subject: `Margin Approval – ${d.name || '[CANDIDATE]'} – ${margin}%`,
+        to: 'team.managers.approval@ayahealthcare.com',
+        cc: '',
+        subject: `Margin Approval: ${d.name || '[CANDIDATE]'} – ${margin}%`,
         body: [
-          `Reason needed for approval? RFM and Fast Distro set TM% at ${margin}%.`,
-          `Is this a New Placement, Extension, or Change of Contract? New Placement`,
-          `Is premium approval needed? N`,
-          `Was this sent to Comp Info (Y/N)? N`,
-          '',
+          `Reason needed for approval (please include all details and information to fully understand your request):`,
+          `[Insert reason here]`,
+          ``,
+          `Is this a New Placement, Extension, or Change of Contract? (If COC, attach any previous margin approvals):`,
+          `[New Placement / Extension / COC]`,
+          ``,
+          `Is premium approval needed? Why?:`,
+          `[Yes/No - Reason]`,
+          ``,
+          `Was this sent to Comp Info Y/N?`,
+          `[Y/N]`,
+          ``,
+          `If yes, what was the distro's response? Please attach the email if applicable.`,
+          `[Distro response here]`,
+          ``,
+          `For Extensions, include the following:`,
+          `What’s the TM % for this contract? (If BR is changing on an extension offer, TM will be provided by AM):`,
+          `[TM %]`,
+          ``,
+          `Did you review why there was a variance on the initial contract?`,
+          `[Yes/No]`,
+          ``,
+          `What was the initial reason for the lower margin? (Attach prior approval for faster review—reference where it first started, even if a few contracts ago):`,
+          `[Reason]`,
+          ``,
+          `Insert link to deals tab ➔ [Link here]`,
+          ``,
           signature
         ].join('\n'),
       };

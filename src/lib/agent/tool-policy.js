@@ -20,7 +20,7 @@ const EXPLICIT_DRAFT_PERSIST_PATTERNS = [
 ];
 
 const COPY_ONLY_DRAFT_PATTERNS = [
-  /\b(draft|rewrite|reword|compose|prep|prepare)\b[\s\w]{0,40}\b(text|sms|message|reply|follow[\s-]?up|note|email)\b/i,
+  /\b(draft|rewrite|reword|compose|prep|prepare|format|fix)\b[\s\w]{0,40}\b(text|sms|message|reply|follow[\s-]?up|note|email|formatting|outlook)\b/i,
   /\b(write)\b[\s\w]{0,24}\b(text|sms|message|reply|follow[\s-]?up)\b/i,
 ];
 

@@ -4,6 +4,8 @@
 
 import { resolveCandidate, type HubResponse } from "./candidate-resolver";
 import { resolveTemplate } from "./template-resolver";
+import { resolveFacility } from "./facility-resolver";
+import { resolveJob } from "./job-resolver";
 
 // Entity namespace normalization: handle singular/plural/casing
 const ENTITY_ALIASES: Record<string, string> = {
@@ -74,24 +76,10 @@ export async function resolve(rawPath: string): Promise<HubResponse> {
       return resolveTemplate(identifier);
 
     case "facilities":
-      // Phase 2 — return a placeholder for now
-      return {
-        type: "facility",
-        status: "not_implemented",
-        summary: `Facility resolution coming soon. Query: "${identifier}"`,
-        data: null,
-        links: {},
-      };
+      return resolveFacility(identifier);
 
     case "jobs":
-      // Phase 2
-      return {
-        type: "job",
-        status: "not_implemented",
-        summary: `Job resolution coming soon. Query: "${identifier}"`,
-        data: null,
-        links: {},
-      };
+      return resolveJob(identifier);
 
     default:
       return {

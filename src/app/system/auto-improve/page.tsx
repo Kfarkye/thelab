@@ -182,7 +182,7 @@ export default function AutoImprovePage() {
             fontWeight: 500,
           }}
         >
-          {isConfigured ? "✓ GitHub Connected" : "⚠ Setup Required"}
+          {isConfigured ? "✓ GitHub Connected" : "Setup Required"}
         </button>
       </header>
 
@@ -344,11 +344,15 @@ export default function AutoImprovePage() {
             >
               {running ? (
                 <>
-                  <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span>
+                  <span style={{
+                    width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)',
+                    borderTopColor: '#fff', borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite', display: 'inline-block'
+                  }} />
                   Running…
                 </>
               ) : (
-                <>🚀 Run Auto-Improve</>
+                <>Run Auto-Improve</>
               )}
             </button>
           </div>
@@ -370,8 +374,11 @@ export default function AutoImprovePage() {
               marginBottom: 16,
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 18 }}>
-                  {result.status === "complete" ? "✅" : result.status === "error" ? "❌" : "⚠️"}
+                <span style={{ fontSize: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%',
+                  background: result.status === 'complete' ? 'rgba(34, 197, 94, 0.15)' : result.status === 'error' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                  color: result.status === 'complete' ? '#4ade80' : result.status === 'error' ? '#f87171' : '#fbbf24',
+                }}>
+                  {result.status === "complete" ? "✓" : result.status === "error" ? "✕" : "!"}
                 </span>
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: "#d4d4d8" }}>
                   {result.status === "complete" ? "Analysis Complete" : result.status === "error" ? "Error" : "Max Rounds Reached"}
@@ -405,7 +412,7 @@ export default function AutoImprovePage() {
                   marginBottom: 16,
                 }}
               >
-                🔗 Pull Request Created — Review & Merge
+                ↗ Pull Request Created — Review & Merge
                 <span style={{ fontSize: 11, color: "#71717a", marginLeft: "auto" }}>{result.prUrl}</span>
               </a>
             )}
@@ -428,7 +435,10 @@ export default function AutoImprovePage() {
                       borderRadius: 6,
                       border: "1px solid rgba(255,255,255,0.04)",
                     }}>
-                      <span>{tr.ok ? "✅" : "❌"}</span>
+                      <span style={{
+                        width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
+                        background: tr.ok ? '#4ade80' : '#f87171',
+                      }} />
                       <span style={{ color: "#a1a1aa", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
                         {tr.tool}
                       </span>

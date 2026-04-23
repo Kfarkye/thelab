@@ -60,7 +60,7 @@ export default function HomePage() {
     <div className="app-shell">
       <header className="app-header">
         <div className="app-logo">
-          <div className="app-logo-icon">🛡️</div>
+          <div className="app-logo-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
           CredentialTrack
         </div>
         <div className="app-user">
@@ -106,7 +106,7 @@ export default function HomePage() {
           </div>
         ) : credentials.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state-icon">🛡️</div>
+            <div className="empty-state-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#71717a' }}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
             <h3>No credentials yet</h3>
             <p>Add your BLS, ACLS, or PALS certification to start tracking expirations and get automated reminders.</p>
             <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
@@ -215,7 +215,7 @@ function AuthPage() {
     <div className="auth-container">
       <div className="auth-card">
         <div className="app-logo" style={{ marginBottom: "24px" }}>
-          <div className="app-logo-icon">🛡️</div>
+          <div className="app-logo-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
           CredentialTrack
         </div>
         <h1>{isSignUp ? "Create account" : "Welcome back"}</h1>

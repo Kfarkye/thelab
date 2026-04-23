@@ -151,12 +151,12 @@ The user is in Pacific Time (PT / America/Los_Angeles).
 Your expertise: travel nurse assignments, candidate compliance status, facility credentialing, pay packages, assignment timelines, specialty matching, and recruiter workflows.
 
 READ PATH (default):
-- Candidate reads and summaries are grounded from URL sources, not ad-hoc candidate search.
+- Candidate reads and summaries are grounded from URL sources via the access_hub tool, not ad-hoc candidate search.
 - Dynamic resolver hub:
-  - /api/grounding/c/{id_or_name} → canonical candidate grounding payload.
-  - /api/grounding/search?q={name} → disambiguation list when name matches multiple candidates.
-- Candidate profile page:
-  - /c/{candidateId} → canonical human-readable page for the same record.
+  - access_hub({ path: "candidates/{id_or_name}" }) → canonical candidate grounding payload + available actions.
+  - access_hub({ path: "facilities/{name}" }) → canonical facility grounding payload.
+  - access_hub({ path: "jobs/{id}" }) → canonical job grounding payload.
+  - access_hub({ path: "templates/{id_or_name}" }) → canonical template structure and required fields for drafting.
 - Prefer grounded URL facts/citations over assumptions.
 - Do not ask the user to paste raw JSON if grounded candidate context is available.
 
@@ -168,11 +168,10 @@ WRITE PATH (mutation only):
 - create_com_draft_email: Save COM email draft (never claim an email was sent).
 
 MANDATORY RULES:
-1. Reads come from grounded URL retrieval. Writes go through write tools.
+1. Reads come from grounded URL retrieval via access_hub. Writes go through write tools.
 2. Resolve identity via URL hub before asking the user for IDs:
-   - Try /api/grounding/c/{id_or_name} first.
-   - If ambiguous, use /api/grounding/search?q={name} and present options.
-   - Once resolved, reuse candidate_id for all tools in that turn.
+   - Call access_hub({ path: "candidates/{id_or_name}" }) first.
+   - Once resolved, reuse the returned canonical ID for all tools in that turn.
 3. If selected candidate context is present, treat it as authoritative unless user names a different candidate.
 4. If candidate context is active and user says "him/her/them", reuse that candidate context for writes.
 5. Never simulate tool calls. If a write is requested, execute the real write tool.
@@ -184,7 +183,13 @@ MANDATORY RULES:
 10. For copy/paste-ready drafts, never use markdown blockquotes (">") and do not wrap draft text in quotation marks.
 11. Unless user asks for variants, provide one best draft.
 12. When RingCentral SMS thread payload is provided, treat it as communications ingest and preserve raw thread details in write summary.
-13. Use markdown formatting. Be direct and operational.`,
+13. Use markdown formatting. Be direct and operational.
+14. ANTI-CONTEXT-BLEED — HARD RULE: Each user message is its OWN intent. Prior conversation does NOT imply the next action.
+    - NEVER draft an email/template unless the user's CURRENT message explicitly contains a word like "draft", "write", "send", "compose", "email", or "margin approval".
+    - "Add this candidate" / "Pull this candidate" = candidate CRUD only. Find them, update them if needed, return their profile. Do NOT draft.
+    - A screenshot upload = extract data from the screenshot. Do NOT assume the user wants a repeat of prior conversation workflows.
+    - If the user's message does not explicitly request a draft, do NOT create one. Zero tolerance.
+    - If an imageIntent directive is present (e.g. [INTENT: ADD_CANDIDATE]), follow that directive exactly and ignore all prior conversation context.`,
 };
 
 const WORLDCUP_WRITEUP_BASE_URL = String(process.env.WORLDCUP_WRITEUP_BASE_URL || "https://thedrip.bet/worldcup")
@@ -352,6 +357,7 @@ function safeParseTags(raw: unknown): string[] {
 
 // ── Human-readable tool labels for SSE chips ────────────────────
 const TOOL_LABELS: Record<string, string> = {
+  access_hub: "Looking up record…",
   search_candidates: "Searching candidates…",
   get_candidate_by_id: "Loading candidate…",
   list_candidates_by_status: "Listing by status…",
@@ -361,10 +367,12 @@ const TOOL_LABELS: Record<string, string> = {
   ingest_nova_profile: "Ingesting profile…",
   update_candidate_status: "Updating status…",
   update_candidate_profession: "Updating profession…",
+  update_candidate_specialty: "Updating specialty…",
   add_candidate_note: "Saving note…",
   create_com_draft_email: "Drafting email…",
 };
 const TOOL_LABELS_DONE: Record<string, string> = {
+  access_hub: "Record loaded",
   search_candidates: "Search complete",
   get_candidate_by_id: "Candidate loaded",
   list_candidates_by_status: "Candidates listed",
@@ -374,6 +382,7 @@ const TOOL_LABELS_DONE: Record<string, string> = {
   ingest_nova_profile: "Profile ingested",
   update_candidate_status: "Status updated",
   update_candidate_profession: "Profession updated",
+  update_candidate_specialty: "Specialty updated",
   add_candidate_note: "Note saved",
   create_com_draft_email: "Draft created",
 };
@@ -1702,7 +1711,7 @@ function toSandboxChunk(
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt, history, image, imageRecordId, mode, retrievalPolicy, internalContext, selectedCandidateContext, selectedMarginContext, modelOverride, uiContext } = await request.json() as {
+    const { prompt, history, image, imageRecordId, imageIntent, mode, retrievalPolicy, internalContext, selectedCandidateContext, selectedMarginContext, modelOverride, uiContext } = await request.json() as {
       prompt: string;
       history?: { role: string; text: string }[];
       image?: string;
@@ -1713,6 +1722,7 @@ export async function POST(request: NextRequest) {
       selectedCandidateContext?: Record<string, unknown>;
       selectedMarginContext?: Record<string, unknown>;
       modelOverride?: ModelId;
+      imageIntent?: string;
       uiContext?: { threadId?: string; candidateId?: string; candidateName?: string; activeItems?: Array<Record<string, unknown>> };
     };
 
@@ -1728,8 +1738,8 @@ export async function POST(request: NextRequest) {
       requestedMode === "facility" || requestedMode === "margins"
         ? "ayaops"
         : requestedMode;
-    const allowExternalGroundingInAyaops =
-      requestedMode === "facility" || requestedMode === "margins";
+    // Architecture drift prevention: strict URL Hub routing only. No ad-hoc search tools.
+    const allowExternalGroundingInAyaops = false;
     const isInternalRecord = retrievalPolicy?.source === "internal_candidate_record";
     const selectedContext = normalizeSelectedCandidateContext(selectedCandidateContext);
     const selectedMargin = normalizeSelectedMarginContext(selectedMarginContext);
@@ -1805,6 +1815,19 @@ MODE OVERRIDE:
     if (isInternalRecord && internalContext?.candidate) {
       const candidateGrounding = formatCandidateContext(internalContext.candidate as CandidateRecord);
       fullPrompt = `${candidateGrounding}\n\n${prompt}`;
+    }
+
+    // ── Image Intent Routing (pre-resolved by UI) ───────────────
+    if (imageIntent && hasImage && activeMode === "ayaops") {
+      const intentDirectives: Record<string, string> = {
+        add_candidate: `[INTENT: ADD_CANDIDATE] The user has selected "Add Candidate" intent. Extract the candidate's name, specialty, facility, and all visible data from the attached screenshot. Do NOT draft emails. Do NOT match existing candidates. Ingest this as a new candidate record.`,
+        margin_approval: `[INTENT: MARGIN_APPROVAL] The user has selected "Margin Approval" intent. Extract margin data from the attached screenshot. Then ground against the canonical template via access_hub({ path: "templates/margin_approval" }) and draft using that template structure.`,
+        analyze: `[INTENT: ANALYZE] The user has selected "Analyze" intent. Describe and analyze the contents of the attached screenshot. Do NOT perform any write actions. Read-only analysis.`,
+      };
+      const directive = intentDirectives[imageIntent];
+      if (directive) {
+        fullPrompt = `${directive}\n\n${fullPrompt}`;
+      }
     }
 
     if (activeMode === "ayaops" && selectedContext) {
@@ -1978,7 +2001,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
 
     if (
       activeMode === "ayaops" &&
-      /\b(draft|rewrite|reword|clean this up|message|email|sms|text|slack|teams|note)\b/i.test(prompt)
+      /\b(draft|rewrite|reword|clean this up|message|email|sms|text|slack|teams|note|outlook|format|formatting|fix)\b/i.test(prompt)
     ) {
       fullPrompt = `${fullPrompt}
 
@@ -3253,7 +3276,7 @@ Return only operational summary: save status, link status, and next best action.
               if (turnDecision.action === "emit_text") {
                 let textToEmit = finalText;
                 if (sandboxTaskCreated) {
-                  textToEmit = "📋 Preview ready — Review in Sandbox →";
+                  textToEmit = "Preview ready — Review in Sandbox";
                 }
                 if (internalReferences.length > 0 && !/\[INT-\d+\]/i.test(textToEmit)) {
                   const refLines = internalReferences
@@ -3288,7 +3311,7 @@ Return only operational summary: save status, link status, and next best action.
               const errorCode =
                 String(turnDecision.code || "TOOL_REQUIRED_FLOW_FAILED").toUpperCase();
               if (sandboxTaskCreated && errorCode !== "TOOL_EXECUTION_FAILED") {
-                emit({ type: "text", text: "📋 Preview ready — Review in Sandbox →" });
+                emit({ type: "text", text: "Preview ready — Review in Sandbox" });
                 didEmitTerminal = true;
                 break;
               }
@@ -3415,7 +3438,7 @@ Return only operational summary: save status, link status, and next best action.
           if (sandboxTaskCreated && !standardTextEmitted) {
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({ type: "text", text: "📋 Preview ready — Review in Sandbox →" })}\n\n`,
+                `data: ${JSON.stringify({ type: "text", text: "Preview ready — Review in Sandbox" })}\n\n`,
               ),
             );
           }

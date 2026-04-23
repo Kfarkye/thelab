@@ -9,7 +9,7 @@
  * No raw calls outside this module.
  */
 
-import { getSpanner } from '@/lib/spanner';
+import { getDb } from '@/lib/spanner-pool';
 import type { Transaction } from '@google-cloud/spanner';
 import { randomUUID } from 'crypto';
 
@@ -17,7 +17,7 @@ const INSTANCE = process.env.SPANNER_INSTANCE ?? 'game-data';
 const DATABASE = process.env.SPANNER_DATABASE ?? 'recruitingdb';
 
 function db() {
-  return getSpanner().instance(INSTANCE).database(DATABASE);
+  return getDb(DATABASE, INSTANCE);
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ export async function readOne<T = Record<string, unknown>>(
 export async function runInTx<T>(
   fn: (tx: Transaction) => Promise<T>
 ): Promise<T> {
-  return db().runTransactionAsync(async (tx) => {
+  return db().runTransactionAsync(async (tx: any) => {
     const result = await fn(tx);
     await tx.commit();
     return result;

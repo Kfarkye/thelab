@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/spanner";
+import { getCredentialDb } from "@/lib/spanner-pool";
 
 const VALID_TYPES = ["BLS", "ACLS", "PALS"];
 
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Missing firebase_uid" }, { status: 400 });
     }
 
-    const db = getDb();
+    const db = getCredentialDb();
     const [rows] = await db.run({
       sql: `SELECT c.credential_id, c.credential_type, c.issuer, c.holder_name,
                    c.issue_date, c.expiration_date, c.status, c.source_type,
@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const db = getDb();
+    const db = getCredentialDb();
 
     // Get user_id from firebase_uid
     const [userRows] = await db.run({

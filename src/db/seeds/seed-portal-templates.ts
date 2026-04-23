@@ -7,7 +7,7 @@
  * Safe to re-run — uses INSERT ... WHERE NOT EXISTS semantics via read-first.
  */
 
-import { getSpanner } from '../../lib/spanner';
+import { getDb } from '../../lib/spanner-pool';
 import { randomUUID } from 'crypto';
 
 const SEED_SLUG = 'candidate-portal';
@@ -88,8 +88,7 @@ const SCHEMA_JSON = {
 };
 
 async function main() {
-  const spanner = getSpanner();
-  const database = spanner.instance('game-data').database('recruitingdb');
+  const database = getDb('recruitingdb', 'game-data');
 
   // Check if seed already exists
   const [rows] = await database.run({
@@ -98,13 +97,12 @@ async function main() {
   });
   if (rows.length > 0) {
     console.log(`Seed already exists for slug=${SEED_SLUG}, skipping.`);
-    await database.close();
     process.exit(0);
   }
 
   const templateId = randomUUID();
 
-  await database.runTransactionAsync(async (tx) => {
+  await database.runTransactionAsync(async (tx: any) => {
     await tx.runUpdate({
       sql: `INSERT INTO portal_templates
         (template_id, slug, name, description, status, template_html, template_css,
@@ -147,7 +145,6 @@ async function main() {
   });
 
   console.log(`Seeded portal_templates: ${SEED_SLUG} (${templateId})`);
-  await database.close();
   process.exit(0);
 }
 
