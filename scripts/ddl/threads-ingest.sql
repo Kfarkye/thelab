@@ -1,29 +1,29 @@
 -- scripts/ddl/threads-ingest.sql
 
 -- Option A: Fresh Setup
-CREATE TABLE Threads (
-  thread_id STRING(128) NOT NULL,
-  thread_url STRING(MAX),
-  candidate_name_raw STRING(256),
-  candidate_phone_raw STRING(64),
-  normalized_phone STRING(32),
-  location STRING(128),
-  facility_name STRING(256),
-  intent_tags_json STRING(MAX),
-  recommended_next_step STRING(MAX),
-  
-  candidate_match_status STRING(32),
-  matched_candidate_id STRING(128),
-  matched_candidate_name STRING(256),
-  match_score INT64,
-  match_reason STRING(MAX),
-  candidate_match_candidates_json STRING(MAX),
-  resolved_by_user STRING(128),
-  resolved_at TIMESTAMP,
-  
-  first_seen_at TIMESTAMP OPTIONS (allow_commit_timestamp=true),
-  last_seen_at TIMESTAMP OPTIONS (allow_commit_timestamp=true)
-) PRIMARY KEY (thread_id);
+-- CREATE TABLE Threads (
+--   thread_id STRING(128) NOT NULL,
+--   thread_url STRING(MAX),
+--   candidate_name_raw STRING(256),
+--   candidate_phone_raw STRING(64),
+--   normalized_phone STRING(32),
+--   location STRING(128),
+--   facility_name STRING(256),
+--   intent_tags_json STRING(MAX),
+--   recommended_next_step STRING(MAX),
+--   
+--   candidate_match_status STRING(32),
+--   matched_candidate_id STRING(128),
+--   matched_candidate_name STRING(256),
+--   match_score INT64,
+--   match_reason STRING(MAX),
+--   candidate_match_candidates_json STRING(MAX),
+--   resolved_by_user STRING(128),
+--   resolved_at TIMESTAMP,
+--   
+--   first_seen_at TIMESTAMP OPTIONS (allow_commit_timestamp=true),
+--   last_seen_at TIMESTAMP OPTIONS (allow_commit_timestamp=true)
+-- ) PRIMARY KEY (thread_id);
 
 -- Option B: Alter Existing
 -- ALTER TABLE Threads ADD COLUMN thread_url STRING(MAX);
