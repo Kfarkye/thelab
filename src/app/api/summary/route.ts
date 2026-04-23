@@ -146,55 +146,84 @@ async function healthcareSummary() {
 
 async function clicksSummary() {
   const db = getDb("recruitingdb");
+  const empty = () =>
+    Response.json({
+      pulse: {
+        recent_clicks: 0,
+        matched: 0,
+        tracked: 0,
+      },
+      items: [],
+    });
 
-  const [countRows] = await db.run({
-    sql: `SELECT COUNT(*) as total_clicks,
-                 SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) as matched_clicks
-          FROM interested_clicks
-          WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`,
+  const [tableRows] = await db.run({
+    sql: `SELECT TABLE_NAME
+          FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = ''
+            AND TABLE_NAME = 'interested_clicks'`,
   });
-  const counts = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
+  if (tableRows.length === 0) {
+    console.warn("[summary/clicks] interested_clicks table not found; returning empty summary");
+    return empty();
+  }
 
-  const [listRows] = await db.run({
-    sql: `SELECT click_id, candidate_name, email, job_id, specialty, state, clicked_at, match_status
-          FROM interested_clicks
-          ORDER BY clicked_at DESC
-          LIMIT 250`,
-  });
+  try {
+    const [countRows] = await db.run({
+      sql: `SELECT COUNT(*) as total_clicks,
+                   SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) as matched_clicks
+            FROM interested_clicks
+            WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`,
+    });
+    const counts = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
 
-  const items = listRows.map((r: any) => {
-    const row = r.toJSON();
-    const toIsoTimestamp = (value: unknown): string | null => {
-      if (value == null) return null;
-      const parsed = new Date(String(value));
-      return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-    };
+    const [listRows] = await db.run({
+      sql: `SELECT click_id, candidate_name, email, job_id, specialty, state, clicked_at, match_status
+            FROM interested_clicks
+            ORDER BY clicked_at DESC
+            LIMIT 250`,
+    });
 
-    return {
-      id: row.click_id as string,
-      label: (row.candidate_name || row.email || "Unknown Candidate") as string,
-      candidateName: row.candidate_name as string | null,
-      candidateEmail: row.email as string | null,
-      jobId: row.job_id as string | null,
-      specialty: row.specialty as string | null,
-      state: row.state as string | null,
-      date: typeof row.clicked_at === "string" ? row.clicked_at.slice(0, 10) : null,
-      startTime: toIsoTimestamp(row.clicked_at),
-      status: row.match_status as string,
-      description: row.job_id
-        ? `Job ${row.job_id} (${row.specialty || "Unknown"} in ${row.state || "Unknown"})`
-        : "",
-    };
-  });
+    const items = listRows.map((r: any) => {
+      const row = r.toJSON();
+      const toIsoTimestamp = (value: unknown): string | null => {
+        if (value == null) return null;
+        const parsed = new Date(String(value));
+        return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+      };
 
-  return Response.json({
-    pulse: {
-      recent_clicks: Number(counts.total_clicks),
-      matched: Number(counts.matched_clicks),
-      tracked: items.length,
-    },
-    items,
-  });
+      return {
+        id: row.click_id as string,
+        label: (row.candidate_name || row.email || "Unknown Candidate") as string,
+        candidateName: row.candidate_name as string | null,
+        candidateEmail: row.email as string | null,
+        jobId: row.job_id as string | null,
+        specialty: row.specialty as string | null,
+        state: row.state as string | null,
+        date: typeof row.clicked_at === "string" ? row.clicked_at.slice(0, 10) : null,
+        startTime: toIsoTimestamp(row.clicked_at),
+        status: (row.match_status || "unmatched") as string,
+        description: row.job_id
+          ? `Job ${row.job_id} (${row.specialty || "Unknown"} in ${row.state || "Unknown"})`
+          : "",
+      };
+    });
+
+    return Response.json({
+      pulse: {
+        recent_clicks: Number(counts.total_clicks),
+        matched: Number(counts.matched_clicks),
+        tracked: items.length,
+      },
+      items,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/interested_clicks|column|not found|does not exist/i.test(message)) {
+      console.warn(`[summary/clicks] schema not ready (${message}); returning empty summary`);
+      return empty();
+    }
+    throw error;
+  }
 }
 
 async function sportsSummary() {
