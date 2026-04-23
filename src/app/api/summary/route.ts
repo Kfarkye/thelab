@@ -8,7 +8,7 @@ import { listVerdicts } from "@/lib/verdicts/verdict-ledger";
 
 let priorityColumnPresence: { score: boolean; level: boolean } | null = null;
 
-const SPORTS_SUPPORTED_LEAGUES = [
+const SPORTS_SOCCER_LEAGUES = [
   { key: "epl", label: "EPL", leagueIds: ["eng.1"] },
   { key: "la_liga", label: "La Liga", leagueIds: ["esp.1"] },
   { key: "serie_a", label: "Serie A", leagueIds: ["ita.1"] },
@@ -27,18 +27,26 @@ const SPORTS_SUPPORTED_LEAGUES = [
   { key: "europa_league", label: "Europa League", leagueIds: ["uefa.europa"] },
 ] as const;
 
+const SPORTS_CORE_LEAGUES = [
+  { key: "mlb", label: "MLB", leagueIds: ["mlb"] },
+  { key: "nba", label: "NBA", leagueIds: ["nba"] },
+  { key: "wnba", label: "WNBA", leagueIds: ["wnba"] },
+  { key: "nhl", label: "NHL", leagueIds: ["nhl"] },
+  { key: "nfl", label: "NFL", leagueIds: ["nfl"] },
+] as const;
+
+const SPORTS_SUPPORTED_LEAGUES = [...SPORTS_CORE_LEAGUES, ...SPORTS_SOCCER_LEAGUES] as const;
+
 const SPORTS_SUPPORTED_LEAGUES_UI = SPORTS_SUPPORTED_LEAGUES.map(({ key, label }) => ({ key, label }));
 const SPORTS_SOCCER_LEAGUE_IDS = Array.from(
-  new Set(SPORTS_SUPPORTED_LEAGUES.flatMap((league) => [...league.leagueIds]))
+  new Set(SPORTS_SOCCER_LEAGUES.flatMap((league) => [...league.leagueIds]))
 );
 const SPORTS_LEAGUE_LABEL_BY_ID = new Map<string, string>();
 for (const league of SPORTS_SUPPORTED_LEAGUES) {
   for (const leagueId of league.leagueIds) {
-    SPORTS_LEAGUE_LABEL_BY_ID.set(leagueId, league.label);
+    SPORTS_LEAGUE_LABEL_BY_ID.set(String(leagueId).toLowerCase(), league.label);
   }
 }
-SPORTS_LEAGUE_LABEL_BY_ID.set("nba", "NBA");
-SPORTS_LEAGUE_LABEL_BY_ID.set("nhl", "NHL");
 
 /**
  * GET /api/summary?mode=healthcare|sports|code
@@ -155,42 +163,25 @@ async function clicksSummary() {
       },
       items: [],
     });
+  const toIsoTimestamp = (value: unknown): string | null => {
+    if (value == null) return null;
+    const parsed = new Date(String(value));
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  };
 
-  const [tableRows] = await db.run({
-    sql: `SELECT TABLE_NAME
-          FROM INFORMATION_SCHEMA.TABLES
-          WHERE TABLE_SCHEMA = ''
-            AND TABLE_NAME = 'interested_clicks'`,
-  });
-  if (tableRows.length === 0) {
-    console.warn("[summary/clicks] interested_clicks table not found; returning empty summary");
-    return empty();
-  }
-
-  try {
-    const [countRows] = await db.run({
-      sql: `SELECT COUNT(*) as total_clicks,
-                   SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) as matched_clicks
-            FROM interested_clicks
-            WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`,
-    });
-    const counts = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
-
-    const [listRows] = await db.run({
-      sql: `SELECT click_id, candidate_name, email, job_id, specialty, state, clicked_at, match_status
-            FROM interested_clicks
-            ORDER BY clicked_at DESC
-            LIMIT 250`,
+  const buildResponse = (counts: { total_clicks: number; matched_clicks: number }, items: any[]) =>
+    Response.json({
+      pulse: {
+        recent_clicks: Number(counts.total_clicks),
+        matched: Number(counts.matched_clicks),
+        tracked: items.length,
+      },
+      items,
     });
 
-    const items = listRows.map((r: any) => {
+  const mapInterestedClickRows = (listRows: any[]) =>
+    listRows.map((r: any) => {
       const row = r.toJSON();
-      const toIsoTimestamp = (value: unknown): string | null => {
-        if (value == null) return null;
-        const parsed = new Date(String(value));
-        return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-      };
-
       return {
         id: row.click_id as string,
         label: (row.candidate_name || row.email || "Unknown Candidate") as string,
@@ -208,17 +199,123 @@ async function clicksSummary() {
       };
     });
 
-    return Response.json({
-      pulse: {
-        recent_clicks: Number(counts.total_clicks),
-        matched: Number(counts.matched_clicks),
-        tracked: items.length,
-      },
-      items,
+  const loadLegacyCandidateFallback = async () => {
+    const [candidateTableRows] = await db.run({
+      sql: `SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = ''
+              AND TABLE_NAME = 'hc_candidates'`,
     });
+    if (candidateTableRows.length === 0) return null;
+
+    const [countRows] = await db.run({
+      sql: `SELECT COUNT(*) as total_clicks,
+                   SUM(CASE WHEN EXISTS (
+                     SELECT 1
+                     FROM hc_assignments a
+                     WHERE a.candidate_id = c.id
+                       AND a.status IN ('active', 'pending_start', 'in_pipeline')
+                   ) THEN 1 ELSE 0 END) as matched_clicks
+            FROM hc_candidates c
+            WHERE c.source = 'ssrs_interested_click'`,
+    });
+    const countsRaw = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
+    const counts = {
+      total_clicks: Number(countsRaw.total_clicks || 0),
+      matched_clicks: Number(countsRaw.matched_clicks || 0),
+    };
+
+    const [listRows] = await db.run({
+      sql: `SELECT c.id, c.first_name, c.last_name, c.email, c.specialty, c.home_state, c.created_at,
+                   CASE WHEN EXISTS (
+                     SELECT 1
+                     FROM hc_assignments a
+                     WHERE a.candidate_id = c.id
+                       AND a.status IN ('active', 'pending_start', 'in_pipeline')
+                   ) THEN 'matched' ELSE 'unmatched' END as match_status
+            FROM hc_candidates c
+            WHERE c.source = 'ssrs_interested_click'
+            ORDER BY c.created_at DESC
+            LIMIT 250`,
+    });
+
+    const items = listRows.map((r: any) => {
+      const row = r.toJSON();
+      const fullName = `${row.first_name || ""} ${row.last_name || ""}`.trim();
+      const startTime = toIsoTimestamp(row.created_at);
+      return {
+        id: row.id as string,
+        label: (fullName || row.email || "Unknown Candidate") as string,
+        candidateName: fullName || null,
+        candidateEmail: (row.email as string) || null,
+        jobId: null,
+        specialty: (row.specialty as string) || null,
+        state: (row.home_state as string) || null,
+        date: startTime ? startTime.slice(0, 10) : null,
+        startTime,
+        status: (row.match_status || "unmatched") as string,
+        description: row.specialty
+          ? `Legacy SSRS ingest (${row.specialty} in ${row.home_state || "Unknown"})`
+          : "Legacy SSRS ingest",
+      };
+    });
+
+    return { counts, items };
+  };
+
+  const [tableRows] = await db.run({
+    sql: `SELECT TABLE_NAME
+          FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = ''
+            AND TABLE_NAME = 'interested_clicks'`,
+  });
+
+  try {
+    if (tableRows.length > 0) {
+      const [countRows] = await db.run({
+        sql: `SELECT COUNT(*) as total_clicks,
+                     SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) as matched_clicks
+              FROM interested_clicks
+              WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`,
+      });
+      const countsRaw = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
+      const counts = {
+        total_clicks: Number(countsRaw.total_clicks || 0),
+        matched_clicks: Number(countsRaw.matched_clicks || 0),
+      };
+
+      const [listRows] = await db.run({
+        sql: `SELECT click_id, candidate_name, email, job_id, specialty, state, clicked_at, match_status
+              FROM interested_clicks
+              ORDER BY clicked_at DESC
+              LIMIT 250`,
+      });
+      const items = mapInterestedClickRows(listRows);
+
+      if (items.length > 0 || counts.total_clicks > 0 || counts.matched_clicks > 0) {
+        return buildResponse(counts, items);
+      }
+
+      const legacy = await loadLegacyCandidateFallback();
+      if (legacy) return buildResponse(legacy.counts, legacy.items);
+      return empty();
+    }
+
+    const legacy = await loadLegacyCandidateFallback();
+    if (legacy) {
+      console.warn("[summary/clicks] interested_clicks table missing; serving legacy candidate fallback");
+      return buildResponse(legacy.counts, legacy.items);
+    }
+    console.warn("[summary/clicks] interested_clicks and legacy fallback unavailable; returning empty summary");
+    return empty();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/interested_clicks|column|not found|does not exist/i.test(message)) {
+      const legacy = await loadLegacyCandidateFallback();
+      if (legacy) {
+        console.warn(`[summary/clicks] schema not ready (${message}); serving legacy candidate fallback`);
+        return buildResponse(legacy.counts, legacy.items);
+      }
       console.warn(`[summary/clicks] schema not ready (${message}); returning empty summary`);
       return empty();
     }
@@ -414,110 +511,76 @@ async function sportsSummary() {
         LIMIT 220`;
 
   const [soccerRows] = await db.run({ sql: soccerSql });
-  const nbaSql = hasGamePreviewTable
-    ? `SELECT
-          gr.MatchID,
-          MIN(gr.GameDate) AS GameDate,
-          MIN(gr.StartTime) AS StartTime,
-          MIN(gr.LeagueID) AS LeagueID,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.OpponentName END) AS AwayFromHome,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.OpponentName END) AS HomeFromAway,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
-          p.WriteupUrl,
-          p.PublishedAt
-        FROM GameResult gr
-        LEFT JOIN GamePreview p ON p.GameID = gr.MatchID
-        WHERE LOWER(gr.Sport) = 'basketball'
-          AND LOWER(gr.LeagueID) = 'nba'
-          AND gr.StartTime >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
-        GROUP BY gr.MatchID, p.WriteupUrl, p.PublishedAt
-        ORDER BY StartTime ASC
-        LIMIT 220`
-    : `SELECT
-          gr.MatchID,
-          MIN(gr.GameDate) AS GameDate,
-          MIN(gr.StartTime) AS StartTime,
-          MIN(gr.LeagueID) AS LeagueID,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.OpponentName END) AS AwayFromHome,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.OpponentName END) AS HomeFromAway,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
-          CAST(NULL AS STRING) AS WriteupUrl,
-          CAST(NULL AS TIMESTAMP) AS PublishedAt
-        FROM GameResult gr
-        WHERE LOWER(gr.Sport) = 'basketball'
-          AND LOWER(gr.LeagueID) = 'nba'
-          AND gr.StartTime >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
-        GROUP BY gr.MatchID
-        ORDER BY StartTime ASC
-        LIMIT 220`;
+  const buildLeagueSql = (sport: string, leagueId: string) =>
+    hasGamePreviewTable
+      ? `SELECT
+            gr.MatchID,
+            MIN(gr.GameDate) AS GameDate,
+            MIN(gr.StartTime) AS StartTime,
+            MIN(gr.LeagueID) AS LeagueID,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.OpponentName END) AS AwayFromHome,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.OpponentName END) AS HomeFromAway,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
+            p.WriteupUrl,
+            p.PublishedAt
+          FROM GameResult gr
+          LEFT JOIN GamePreview p ON p.GameID = gr.MatchID
+          WHERE LOWER(gr.Sport) = '${sport}'
+            AND LOWER(gr.LeagueID) = '${leagueId}'
+            AND gr.StartTime >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
+          GROUP BY gr.MatchID, p.WriteupUrl, p.PublishedAt
+          ORDER BY StartTime ASC
+          LIMIT 220`
+      : `SELECT
+            gr.MatchID,
+            MIN(gr.GameDate) AS GameDate,
+            MIN(gr.StartTime) AS StartTime,
+            MIN(gr.LeagueID) AS LeagueID,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.OpponentName END) AS AwayFromHome,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.OpponentName END) AS HomeFromAway,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
+            CAST(NULL AS STRING) AS WriteupUrl,
+            CAST(NULL AS TIMESTAMP) AS PublishedAt
+          FROM GameResult gr
+          WHERE LOWER(gr.Sport) = '${sport}'
+            AND LOWER(gr.LeagueID) = '${leagueId}'
+            AND gr.StartTime >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
+          GROUP BY gr.MatchID
+          ORDER BY StartTime ASC
+          LIMIT 220`;
 
-  const [nbaRows] = await db.run({ sql: nbaSql });
-  const nhlSql = hasGamePreviewTable
-    ? `SELECT
-          gr.MatchID,
-          MIN(gr.GameDate) AS GameDate,
-          MIN(gr.StartTime) AS StartTime,
-          MIN(gr.LeagueID) AS LeagueID,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.OpponentName END) AS AwayFromHome,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.OpponentName END) AS HomeFromAway,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
-          p.WriteupUrl,
-          p.PublishedAt
-        FROM GameResult gr
-        LEFT JOIN GamePreview p ON p.GameID = gr.MatchID
-        WHERE LOWER(gr.Sport) = 'icehockey'
-          AND LOWER(gr.LeagueID) = 'nhl'
-          AND gr.StartTime >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
-        GROUP BY gr.MatchID, p.WriteupUrl, p.PublishedAt
-        ORDER BY StartTime ASC
-        LIMIT 220`
-    : `SELECT
-          gr.MatchID,
-          MIN(gr.GameDate) AS GameDate,
-          MIN(gr.StartTime) AS StartTime,
-          MIN(gr.LeagueID) AS LeagueID,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.OpponentName END) AS AwayFromHome,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.OpponentName END) AS HomeFromAway,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
-          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
-          CAST(NULL AS STRING) AS WriteupUrl,
-          CAST(NULL AS TIMESTAMP) AS PublishedAt
-        FROM GameResult gr
-        WHERE LOWER(gr.Sport) = 'icehockey'
-          AND LOWER(gr.LeagueID) = 'nhl'
-          AND gr.StartTime >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
-        GROUP BY gr.MatchID
-        ORDER BY StartTime ASC
-        LIMIT 220`;
-
-  const [nhlRows] = await db.run({ sql: nhlSql });
+  let nbaRows: any[] = [];
+  let wnbaRows: any[] = [];
+  let nhlRows: any[] = [];
+  let nflRows: any[] = [];
+  try {
+    const results = await Promise.all([
+      db.run({ sql: buildLeagueSql("basketball", "nba") }),
+      db.run({ sql: buildLeagueSql("basketball", "wnba") }),
+      db.run({ sql: buildLeagueSql("icehockey", "nhl") }),
+      db.run({ sql: buildLeagueSql("americanfootball", "nfl") }),
+    ]);
+    nbaRows = results[0][0];
+    wnbaRows = results[1][0];
+    nhlRows = results[2][0];
+    nflRows = results[3][0];
+  } catch (e) {
+    console.warn("Non-MLB/soccer league queries failed (NBA/WNBA/NHL/NFL):", e);
+  }
   const nowTs = Date.now();
   const soccerItems = soccerRows.map((r: any) => {
     const row = r.toJSON();
@@ -552,73 +615,45 @@ async function sportsSummary() {
     };
   });
 
-  const nbaItems = nbaRows.map((r: any) => {
-    const row = r.toJSON();
-    const homeName = (row.HomeTeam as string) || (row.HomeFromAway as string) || "TBD";
-    const awayName = (row.AwayTeam as string) || (row.AwayFromHome as string) || "TBD";
-    const startTime = toIsoOrNull(row.StartTime);
-    const leagueId = ((row.LeagueID as string) || "").toLowerCase();
-    const writeupUrlRaw = typeof row.WriteupUrl === "string" ? row.WriteupUrl.trim() : "";
-    const writeupUrl = /^https:\/\//i.test(writeupUrlRaw) ? writeupUrlRaw : null;
+  const mapLeagueRows = (rows: any[], leagueLabel: string) =>
+    rows.map((r: any) => {
+      const row = r.toJSON();
+      const homeName = (row.HomeTeam as string) || (row.HomeFromAway as string) || "TBD";
+      const awayName = (row.AwayTeam as string) || (row.AwayFromHome as string) || "TBD";
+      const startTime = toIsoOrNull(row.StartTime);
+      const writeupUrlRaw = typeof row.WriteupUrl === "string" ? row.WriteupUrl.trim() : "";
+      const writeupUrl = /^https:\/\//i.test(writeupUrlRaw) ? writeupUrlRaw : null;
 
-    return {
-      id: row.MatchID as string,
-      label: `${awayName} @ ${homeName}`,
-      home: homeName,
-      away: awayName,
-      homeLogo: (row.HomeLogo as string) || null,
-      awayLogo: (row.AwayLogo as string) || null,
-      date: (row.GameDate as string) || (startTime ? startTime.slice(0, 10) : null),
-      startTime,
-      status:
-        startTime && new Date(startTime).getTime() > nowTs
-          ? "scheduled"
-          : "post",
-      venue: null,
-      league: "NBA",
-      writeupUrl,
-      publishedAt: toIsoOrNull(row.PublishedAt),
-      homeRecord: (row.HomeRecord as string) || null,
-      awayRecord: (row.AwayRecord as string) || null,
-      spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
-      total: row.Total != null ? parseFloat(String(row.Total)) : null,
-    };
-  });
+      return {
+        id: row.MatchID as string,
+        label: `${awayName} @ ${homeName}`,
+        home: homeName,
+        away: awayName,
+        homeLogo: (row.HomeLogo as string) || null,
+        awayLogo: (row.AwayLogo as string) || null,
+        date: (row.GameDate as string) || (startTime ? startTime.slice(0, 10) : null),
+        startTime,
+        status:
+          startTime && new Date(startTime).getTime() > nowTs
+            ? "scheduled"
+            : "post",
+        venue: null,
+        league: leagueLabel,
+        writeupUrl,
+        publishedAt: toIsoOrNull(row.PublishedAt),
+        homeRecord: (row.HomeRecord as string) || null,
+        awayRecord: (row.AwayRecord as string) || null,
+        spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
+        total: row.Total != null ? parseFloat(String(row.Total)) : null,
+      };
+    });
 
-  const nhlItems = nhlRows.map((r: any) => {
-    const row = r.toJSON();
-    const homeName = (row.HomeTeam as string) || (row.HomeFromAway as string) || "TBD";
-    const awayName = (row.AwayTeam as string) || (row.AwayFromHome as string) || "TBD";
-    const startTime = toIsoOrNull(row.StartTime);
-    const leagueId = ((row.LeagueID as string) || "").toLowerCase();
-    const writeupUrlRaw = typeof row.WriteupUrl === "string" ? row.WriteupUrl.trim() : "";
-    const writeupUrl = /^https:\/\//i.test(writeupUrlRaw) ? writeupUrlRaw : null;
+  const nbaItems = mapLeagueRows(nbaRows, "NBA");
+  const wnbaItems = mapLeagueRows(wnbaRows, "WNBA");
+  const nhlItems = mapLeagueRows(nhlRows, "NHL");
+  const nflItems = mapLeagueRows(nflRows, "NFL");
 
-    return {
-      id: row.MatchID as string,
-      label: `${awayName} @ ${homeName}`,
-      home: homeName,
-      away: awayName,
-      homeLogo: (row.HomeLogo as string) || null,
-      awayLogo: (row.AwayLogo as string) || null,
-      date: (row.GameDate as string) || (startTime ? startTime.slice(0, 10) : null),
-      startTime,
-      status:
-        startTime && new Date(startTime).getTime() > nowTs
-          ? "scheduled"
-          : "post",
-      venue: null,
-      league: "NHL",
-      writeupUrl,
-      publishedAt: toIsoOrNull(row.PublishedAt),
-      homeRecord: (row.HomeRecord as string) || null,
-      awayRecord: (row.AwayRecord as string) || null,
-      spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
-      total: row.Total != null ? parseFloat(String(row.Total)) : null,
-    };
-  });
-
-  const items = [...mlbItems, ...soccerItems, ...nbaItems, ...nhlItems].sort((a: any, b: any) => {
+  const items = [...mlbItems, ...soccerItems, ...nbaItems, ...wnbaItems, ...nhlItems, ...nflItems].sort((a: any, b: any) => {
     const aTime = a.startTime || `${a.date || "1970-01-01"}T00:00:00.000Z`;
     const bTime = b.startTime || `${b.date || "1970-01-01"}T00:00:00.000Z`;
     if (aTime < bTime) return -1;

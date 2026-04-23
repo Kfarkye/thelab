@@ -20,8 +20,12 @@ const LEAGUES: LeagueConfig[] = [
   { leagueId: "mlb", sport: "baseball", espnSportPath: "baseball", espnLeagueSlug: "mlb", matchSuffix: "mlb" },
   // NBA
   { leagueId: "nba", sport: "basketball", espnSportPath: "basketball", espnLeagueSlug: "nba", matchSuffix: "nba" },
+  // WNBA
+  { leagueId: "wnba", sport: "basketball", espnSportPath: "basketball", espnLeagueSlug: "wnba", matchSuffix: "wnba" },
   // NHL
   { leagueId: "nhl", sport: "icehockey", espnSportPath: "hockey", espnLeagueSlug: "nhl", matchSuffix: "nhl" },
+  // NFL
+  { leagueId: "nfl", sport: "americanfootball", espnSportPath: "football", espnLeagueSlug: "nfl", matchSuffix: "nfl" },
   // Soccer
   { leagueId: "eng.1", sport: "soccer", espnSportPath: "soccer", espnLeagueSlug: "eng.1", matchSuffix: "eng.1" },
   { leagueId: "esp.1", sport: "soccer", espnSportPath: "soccer", espnLeagueSlug: "esp.1", matchSuffix: "esp.1" },
