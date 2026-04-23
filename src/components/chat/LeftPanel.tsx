@@ -443,16 +443,38 @@ function LeftPanel({
           "Belgian Pro League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/144.png&w=40&h=40",
           "Argentina Primera": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/1.png&w=40&h=40",
         };
-        // Collect leagues that have games today
+        // Collect leagues that have games today; if none, use the most recent date with games
         const todayLeagues: { name: string; count: number; logo: string | null }[] = [];
         const seen = new Set<string>();
         const counts = new Map<string, number>();
+
+        // First pass: try today
         for (const item of items) {
           const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
           if (d !== todayStr) continue;
           const league = item.league || "Other";
           counts.set(league, (counts.get(league) || 0) + 1);
         }
+
+        // Fallback: if no games today, find the most recent date that has games
+        let activeDate = todayStr;
+        if (counts.size === 0) {
+          let latestDate = "";
+          for (const item of items) {
+            const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
+            if (d && d > latestDate) latestDate = d;
+          }
+          if (latestDate) {
+            activeDate = latestDate;
+            for (const item of items) {
+              const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
+              if (d !== latestDate) continue;
+              const league = item.league || "Other";
+              counts.set(league, (counts.get(league) || 0) + 1);
+            }
+          }
+        }
+
         for (const [name, count] of counts) {
           todayLeagues.push({ name, count, logo: leagueLogoMap[name] || null });
         }
@@ -465,7 +487,7 @@ function LeftPanel({
                 type="button"
                 className="lp-league-chip"
                 onClick={() => {
-                  const el = itemsScrollRef.current?.querySelector(`[data-league-id="${todayStr}-${lg.name}"]`);
+                  const el = itemsScrollRef.current?.querySelector(`[data-league-id="${activeDate}-${lg.name}"]`);
                   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
               >

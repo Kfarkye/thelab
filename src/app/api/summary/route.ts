@@ -216,8 +216,7 @@ async function clicksSummary() {
                      WHERE a.candidate_id = c.id
                        AND a.status IN ('active', 'pending_start', 'in_pipeline')
                    ) THEN 1 ELSE 0 END) as matched_clicks
-            FROM hc_candidates c
-            WHERE c.source = 'ssrs_interested_click'`,
+            FROM hc_candidates c`,
     });
     const countsRaw = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
     const counts = {
@@ -234,7 +233,6 @@ async function clicksSummary() {
                        AND a.status IN ('active', 'pending_start', 'in_pipeline')
                    ) THEN 'matched' ELSE 'unmatched' END as match_status
             FROM hc_candidates c
-            WHERE c.source = 'ssrs_interested_click'
             ORDER BY c.created_at DESC
             LIMIT 250`,
     });
