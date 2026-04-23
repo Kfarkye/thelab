@@ -128,7 +128,8 @@ export type ConsoleMode =
   | "ayaops"
   | "facility"
   | "margins"
-  | "agent";
+  | "agent"
+  | "clicks";
 
 export type ModelOverride = "auto" | "sonnet" | "opus" | "flash" | "pro";
 

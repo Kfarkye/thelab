@@ -7,7 +7,7 @@ import {
   parseTimeToMinutes, formatShiftCadence, formatShiftWindow, formatMarginDelta, marginDeltaPoints,
   buildLicensingReferenceUrl, inferHealthcareContextFromLabel
 } from "@/lib/chat-utils";
-import { MODES } from "@/app/chat/page";
+import { MODES } from "@/lib/chat-modes";
 
 export // --- Left Panel ---
 function LeftPanel({
@@ -143,6 +143,7 @@ function LeftPanel({
       ? { keys: ["total_jobs", "specialties", "facilities"], labels: ["Jobs", "Specialties", "Facilities"] }
       : { keys: ["avg_margin_pct"], labels: ["Avg Margin"] },
     agent: { keys: ["tasks", "passed", "failed"], labels: ["Tasks", "Passed", "Failed"] },
+    clicks: { keys: ["recent_clicks", "matched", "tracked"], labels: ["Last 24h", "Matched", "Listed"] },
   };
 
   const cfg = pulseLabels[mode];
@@ -274,6 +275,23 @@ function LeftPanel({
         )}
       </div>
 
+      {(mode === "ayaops" || mode === "clicks") && (
+        <div className="margin-sub-tabs" style={{ background: '#fff', zIndex: 10 }}>
+          <button
+            className={`margin-sub-tab ${mode === "ayaops" ? "active" : ""}`}
+            onClick={() => onModeSwitch("ayaops")}
+          >
+            Candidates
+          </button>
+          <button
+            className={`margin-sub-tab ${mode === "clicks" ? "active" : ""}`}
+            onClick={() => onModeSwitch("clicks")}
+          >
+            Interested Clicks
+          </button>
+        </div>
+      )}
+
       {mode === "ayaops" && (
         <div className="aya-ops-links-rail" aria-label="AyaOps Quick Links">
           <div className="aya-ops-link-group">
@@ -299,9 +317,7 @@ function LeftPanel({
               <a href="https://nova.ayahealthcare.com/#/recruiting/live-nurses-new" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
                 Live List<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/live-nurses-new</span>
               </a>
-              <a href="https://ssrsreports-ayahealthcare.msappproxy.net/Reports/report/Recruiting/MyAya%20Interested%20Clicks" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Interested Clicks<span className="sr-only">URL: https://ssrsreports-ayahealthcare.msappproxy.net/...</span>
-              </a>
+
               <a href="https://nova.ayahealthcare.com/#/recruiting/prestart-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
                 Prestart<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/prestart-candidates</span>
               </a>
@@ -459,6 +475,8 @@ function LeftPanel({
           </div>
         );
       })()}
+
+
 
       {/* Item list */}
       <div className="lp-items" ref={itemsScrollRef}>
@@ -1391,6 +1409,25 @@ function LeftPanel({
                   </div>
                 </button>
               )});
+            }
+
+            if (mode === "clicks") {
+              return filtered.map((item) => (
+                <button
+                  key={item.id}
+                  className="lp-item"
+                  onClick={() => onItemClick(item)}
+                  title={item.label}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4 }}
+                >
+                  <span className="lp-item-label">{item.label}</span>
+                  {item.description && <span className="lp-item-desc" style={{ textAlign: "left" }}>{item.description}</span>}
+                  <div style={{ display: "flex", justifyContent: "space-between", width: "100%", marginTop: 2 }}>
+                    <span className="lp-item-meta">{item.startTime ? new Date(item.startTime).toLocaleTimeString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ""}</span>
+                    <span className="lp-item-meta" style={{ color: item.status === "matched" ? "var(--green, #10b981)" : "inherit" }}>{item.status}</span>
+                  </div>
+                </button>
+              ));
             }
 
             // Other non-sports modes: flat list

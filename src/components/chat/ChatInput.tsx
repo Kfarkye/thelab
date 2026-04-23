@@ -1,7 +1,6 @@
 import React, { SetStateAction } from "react";
 import { X, Paperclip, Send } from "lucide-react";
 import { ChatState, ChatAction, ModeConfig, ImageIntent, SavedImage, ModelOverride } from "@/lib/types/chat";
-import { CapabilityDropdown } from "@/app/chat/page"; // Actually, fix later if needed
 
 interface ChatInputProps {
   pendingSavedImage: SavedImage | null;

@@ -234,6 +234,64 @@ export const DB_TOOL_DECLARATIONS = [
       required: ["candidate_id", "subject", "body"],
     },
   },
+  {
+    name: "fetch_interested_clicks",
+    description:
+      "Fetch recent MyAya 'Interested' clicks from the interested_clicks table. Shows candidates who clicked 'I'm Interested' on jobs. Filters by recency, specialty, state, or match status. Returns candidate name, email, job_id, and clicked_at. Use for recruiter follow-up workflows.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        hours: {
+          type: "number" as const,
+          description: "How many hours back to look. Defaults to 48.",
+        },
+        specialty: {
+          type: "string" as const,
+          description: "Optional specialty filter (e.g., 'icu', 'er', 'med-surg').",
+        },
+        state: {
+          type: "string" as const,
+          description: "Optional 2-letter state filter (e.g., 'CA', 'TX').",
+        },
+        match_status: {
+          type: "string" as const,
+          description: "Filter by match status: 'unmatched', 'matched', 'in_pipeline'. Defaults to all.",
+        },
+        limit: {
+          type: "number" as const,
+          description: "Max results. Defaults to 25, max 50.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_demand_trends",
+    description:
+      "Get demand trend data from market_demand_daily rollups. Shows click volume by specialty and state over time. Use for market analysis, identifying hot specialties, and geographic demand patterns.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        specialty: {
+          type: "string" as const,
+          description: "Optional specialty to filter by.",
+        },
+        state: {
+          type: "string" as const,
+          description: "Optional 2-letter state to filter by.",
+        },
+        days: {
+          type: "number" as const,
+          description: "Number of days of history to retrieve. Defaults to 7, max 90.",
+        },
+        limit: {
+          type: "number" as const,
+          description: "Max rows. Defaults to 25.",
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════
@@ -323,6 +381,23 @@ export async function executeDbTool(
           ccInput: Array.isArray(args.cc) ? args.cc.map((value) => String(value)) : [],
           saveNoteTraceInput:
             typeof args.save_note_trace === "boolean" ? Boolean(args.save_note_trace) : true,
+        });
+        break;
+      case "fetch_interested_clicks":
+        result = await fetchInterestedClicks({
+          hours: Number(args.hours) || 48,
+          specialty: args.specialty ? String(args.specialty) : undefined,
+          state: args.state ? String(args.state) : undefined,
+          matchStatus: args.match_status ? String(args.match_status) : undefined,
+          limit: Math.min(Number(args.limit) || MAX_RESULTS, 50),
+        });
+        break;
+      case "get_demand_trends":
+        result = await getDemandTrends({
+          specialty: args.specialty ? String(args.specialty) : undefined,
+          state: args.state ? String(args.state) : undefined,
+          days: Math.min(Number(args.days) || 7, 90),
+          limit: Math.min(Number(args.limit) || MAX_RESULTS, MAX_RESULTS),
         });
         break;
       default:
@@ -1826,5 +1901,170 @@ async function updateCandidateProfession(input: {
     rows_updated: rowsUpdated,
     changed_fields: changedFields,
     outcome: "updated",
+  };
+}
+
+// ── Interested Clicks Tool ────────────────────────────────────────
+
+async function fetchInterestedClicks(input: {
+  hours: number;
+  specialty?: string;
+  state?: string;
+  matchStatus?: string;
+  limit: number;
+}): Promise<{
+  object_type: "interested_clicks";
+  action: "fetch_interested_clicks";
+  query_params: Record<string, unknown>;
+  total: number;
+  clicks: Array<{
+    click_id: string;
+    candidate_name: string | null;
+    email: string | null;
+    phone: string | null;
+    job_id: string | null;
+    specialty: string | null;
+    state: string | null;
+    clicked_at: string | null;
+    match_status: string;
+    ingested_at: string;
+  }>;
+}> {
+  const cutoff = new Date();
+  cutoff.setHours(cutoff.getHours() - input.hours);
+
+  const conditions = ["ingested_at >= @cutoff"];
+  const params: Record<string, unknown> = { cutoff };
+  const types: Record<string, { type: string }> = { cutoff: { type: "timestamp" } };
+
+  if (input.specialty) {
+    conditions.push("LOWER(specialty) = @specialty");
+    params.specialty = input.specialty.toLowerCase();
+    types.specialty = { type: "string" };
+  }
+  if (input.state) {
+    conditions.push("UPPER(state) = @state");
+    params.state = input.state.toUpperCase();
+    types.state = { type: "string" };
+  }
+  if (input.matchStatus) {
+    conditions.push("match_status = @matchStatus");
+    params.matchStatus = input.matchStatus;
+    types.matchStatus = { type: "string" };
+  }
+
+  const [rows] = await db.run({
+    sql: `SELECT click_id, candidate_name, email, phone, job_id,
+                 specialty, state, clicked_at, match_status, ingested_at
+          FROM interested_clicks
+          WHERE ${conditions.join(" AND ")}
+          ORDER BY ingested_at DESC
+          LIMIT @limit`,
+    params: { ...params, limit: input.limit },
+    types: { ...types, limit: { type: "int64" } },
+  });
+
+  const clicks = rows.map((row: any) => {
+    const r = row.toJSON();
+    return {
+      click_id: String(r.click_id),
+      candidate_name: r.candidate_name ? String(r.candidate_name) : null,
+      email: r.email ? String(r.email) : null,
+      phone: r.phone ? String(r.phone) : null,
+      job_id: r.job_id ? String(r.job_id) : null,
+      specialty: r.specialty ? String(r.specialty) : null,
+      state: r.state ? String(r.state) : null,
+      clicked_at: r.clicked_at ? String(r.clicked_at) : null,
+      match_status: String(r.match_status || "unmatched"),
+      ingested_at: String(r.ingested_at),
+    };
+  });
+
+  return {
+    object_type: "interested_clicks",
+    action: "fetch_interested_clicks",
+    query_params: {
+      hours: input.hours,
+      specialty: input.specialty || null,
+      state: input.state || null,
+      match_status: input.matchStatus || null,
+      limit: input.limit,
+    },
+    total: clicks.length,
+    clicks,
+  };
+}
+
+// ── Demand Trends Tool ────────────────────────────────────────────
+
+async function getDemandTrends(input: {
+  specialty?: string;
+  state?: string;
+  days: number;
+  limit: number;
+}): Promise<{
+  object_type: "demand_trends";
+  action: "get_demand_trends";
+  query_params: Record<string, unknown>;
+  total: number;
+  trends: Array<{
+    roll_date: string;
+    specialty: string;
+    state: string;
+    click_count: number;
+    unique_candidates: number;
+  }>;
+}> {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - input.days);
+  const cutoff = cutoffDate.toISOString().split("T")[0];
+
+  const conditions = ["roll_date >= @cutoff"];
+  const params: Record<string, unknown> = { cutoff };
+  const types: Record<string, { type: string }> = { cutoff: { type: "date" } };
+
+  if (input.specialty) {
+    conditions.push("LOWER(specialty) = @specialty");
+    params.specialty = input.specialty.toLowerCase();
+    types.specialty = { type: "string" };
+  }
+  if (input.state) {
+    conditions.push("UPPER(state) = @state");
+    params.state = input.state.toUpperCase();
+    types.state = { type: "string" };
+  }
+
+  const [rows] = await db.run({
+    sql: `SELECT roll_date, specialty, state, click_count, unique_candidates
+          FROM market_demand_daily
+          WHERE ${conditions.join(" AND ")}
+          ORDER BY roll_date DESC, click_count DESC
+          LIMIT @limit`,
+    params: { ...params, limit: input.limit },
+    types: { ...types, limit: { type: "int64" } },
+  });
+
+  const trends = rows.map((row: any) => {
+    const r = row.toJSON();
+    return {
+      roll_date: String(r.roll_date),
+      specialty: String(r.specialty),
+      state: String(r.state),
+      click_count: Number(r.click_count),
+      unique_candidates: Number(r.unique_candidates),
+    };
+  });
+
+  return {
+    object_type: "demand_trends",
+    action: "get_demand_trends",
+    query_params: {
+      specialty: input.specialty || null,
+      state: input.state || null,
+      days: input.days,
+      limit: input.limit,
+    },
+    total: trends.length,
+    trends,
   };
 }

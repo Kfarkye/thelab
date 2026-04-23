@@ -64,6 +64,8 @@ export async function GET(request: NextRequest) {
       return await jobsSummary();
     } else if (mode === "ayaops") {
       return await ayaopsSummary();
+    } else if (mode === "clicks") {
+      return await clicksSummary();
     } else {
       return codeSummary();
     }
@@ -138,6 +140,59 @@ async function healthcareSummary() {
       total: Number(pulse.total),
     },
     topProfessions,
+    items,
+  });
+}
+
+async function clicksSummary() {
+  const db = getDb("recruitingdb");
+
+  const [countRows] = await db.run({
+    sql: `SELECT COUNT(*) as total_clicks,
+                 SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) as matched_clicks
+          FROM interested_clicks
+          WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`,
+  });
+  const counts = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
+
+  const [listRows] = await db.run({
+    sql: `SELECT click_id, candidate_name, email, job_id, specialty, state, clicked_at, match_status
+          FROM interested_clicks
+          ORDER BY clicked_at DESC
+          LIMIT 250`,
+  });
+
+  const items = listRows.map((r: any) => {
+    const row = r.toJSON();
+    const toIsoTimestamp = (value: unknown): string | null => {
+      if (value == null) return null;
+      const parsed = new Date(String(value));
+      return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+    };
+
+    return {
+      id: row.click_id as string,
+      label: (row.candidate_name || row.email || "Unknown Candidate") as string,
+      candidateName: row.candidate_name as string | null,
+      candidateEmail: row.email as string | null,
+      jobId: row.job_id as string | null,
+      specialty: row.specialty as string | null,
+      state: row.state as string | null,
+      date: typeof row.clicked_at === "string" ? row.clicked_at.slice(0, 10) : null,
+      startTime: toIsoTimestamp(row.clicked_at),
+      status: row.match_status as string,
+      description: row.job_id
+        ? `Job ${row.job_id} (${row.specialty || "Unknown"} in ${row.state || "Unknown"})`
+        : "",
+    };
+  });
+
+  return Response.json({
+    pulse: {
+      recent_clicks: Number(counts.total_clicks),
+      matched: Number(counts.matched_clicks),
+      tracked: items.length,
+    },
     items,
   });
 }

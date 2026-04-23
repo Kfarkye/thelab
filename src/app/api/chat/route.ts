@@ -57,9 +57,16 @@ const AYAOPS_WRITE_TOOL_NAMES = new Set([
   "add_candidate_note",
   "create_com_draft_email",
 ]);
+const AYAOPS_READ_TOOL_NAMES = new Set([
+  "fetch_interested_clicks",
+  "get_demand_trends",
+]);
 
 const AYAOPS_WRITE_TOOL_DECLARATIONS = DB_TOOL_DECLARATIONS.filter((tool) =>
   AYAOPS_WRITE_TOOL_NAMES.has(String((tool as { name?: unknown }).name || "")),
+);
+const AYAOPS_READ_TOOL_DECLARATIONS = DB_TOOL_DECLARATIONS.filter((tool) =>
+  AYAOPS_READ_TOOL_NAMES.has(String((tool as { name?: unknown }).name || "")),
 );
 
 // ── URL Hub Tool Declaration ────────────────────────────────────
@@ -1735,7 +1742,7 @@ export async function POST(request: NextRequest) {
     const hasImage = hasInlineImage || hasSavedImage;
     const requestedMode = mode || "sports";
     const activeMode =
-      requestedMode === "facility" || requestedMode === "margins"
+      requestedMode === "facility" || requestedMode === "margins" || requestedMode === "clicks"
         ? "ayaops"
         : requestedMode;
     // Architecture drift prevention: strict URL Hub routing only. No ad-hoc search tools.
@@ -1808,6 +1815,15 @@ MODE OVERRIDE:
 - In Facility and Margins views, you MAY use Google Search grounding for external/public context.
 - Candidate-specific identity, status, and write actions MUST remain grounded to internal DB tools.
 - Never fabricate internal data. Keep external claims source-cited.`;
+    }
+    if (!hasImage && requestedMode === "clicks") {
+      systemPrompt = `${systemPrompt}
+
+CLICKS WORKSPACE MODE:
+- Prioritize click-intelligence workflows over candidate lifecycle workflows.
+- Use fetch_interested_clicks for recent click activity and matched/unmatched lead slices.
+- Use get_demand_trends for specialty/state demand analysis over time.
+- Do not run mutation tools unless the user explicitly requests a write action.`;
     }
 
     // ── Build user prompt with optional candidate grounding ─────
@@ -2704,6 +2720,13 @@ Return only operational summary: save status, link status, and next best action.
     if (activeMode === "ayaops") {
       // AyaOps reads are URL-grounded via Vertex AI Search.
       // Mutations remain explicit DB write tools.
+      const ayaopsFunctionDeclarations = [
+        ACCESS_HUB_DECLARATION,
+        ...AYAOPS_READ_TOOL_DECLARATIONS,
+        ...(enableAyaopsSandbox
+          ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...SANDBOX_TOOL_DECLARATIONS]
+          : AYAOPS_WRITE_TOOL_DECLARATIONS),
+      ];
       tools = [
         {
           retrieval: {
@@ -2713,12 +2736,7 @@ Return only operational summary: save status, link status, and next best action.
           },
         },
         {
-          functionDeclarations: [
-            ACCESS_HUB_DECLARATION,
-            ...(enableAyaopsSandbox
-              ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...SANDBOX_TOOL_DECLARATIONS]
-              : AYAOPS_WRITE_TOOL_DECLARATIONS),
-          ],
+          functionDeclarations: ayaopsFunctionDeclarations,
         },
       ];
       if (allowExternalGroundingInAyaops) {
@@ -2745,7 +2763,9 @@ Return only operational summary: save status, link status, and next best action.
 
     const declaredToolNames =
       activeMode === "ayaops"
-        ? AYAOPS_WRITE_TOOL_DECLARATIONS.map((tool) => String((tool as { name?: string }).name || "")).filter(Boolean)
+        ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...AYAOPS_READ_TOOL_DECLARATIONS]
+          .map((tool) => String((tool as { name?: string }).name || ""))
+          .filter(Boolean)
         : [];
 
     const toolPolicy = classifyToolRequirement({
