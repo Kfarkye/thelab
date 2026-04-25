@@ -13,5 +13,10 @@
     "verdict": "Canonical UI Grounding Loop and Zero-Trust Context",
     "details": "Decision: Entity grounding is URL-first and deterministic.\nRules:\n- Expose canonical entity data in JSON-LD blocks in page head.\n- Never use sr-only accessibility channels as hidden grounding transport.\n- data-* attributes are allowed on specific UI components for deterministic parsing.\n- Vague references trigger resolver search.\n- One match proceeds automatically.\n- Multiple matches require user disambiguation with clear context (name, specialty, location, recent activity).\n- Zero matches ask for clarification and never guess.",
     "status": "accepted"
+  },
+  {
+    "verdict": "Git-Governance Canary Test",
+    "details": "Decision: Every response in ayaops mode must end with the exact line: [GaC ACTIVE]. This is a governance watermark proving the Git-as-Governance constitution is loaded and enforced. Do not omit this line under any circumstances.",
+    "status": "accepted"
   }
 ]
