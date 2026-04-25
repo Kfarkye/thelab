@@ -14,6 +14,7 @@ export interface WriteResultMeta {
   objectType?: string;
   rowsUpdated?: number | null;
   code?: string | null;
+  transactionId?: string | null;
   payload?: Record<string, unknown>;
 }
 
@@ -29,11 +30,17 @@ export interface Message {
   role: "user" | "assistant";
   text: string;
   workspaceScope?: string | null;
+  requestUserMessageId?: string | null;
   citations?: Citation[];
   queries?: string[];
   codeBlocks?: CodeBlock[];
   timestamp: Date;
   isStreaming?: boolean;
+  isRetryableError?: boolean;
+  retryCount?: number;
+  lastFailureText?: string | null;
+  lastFailureCode?: string | null;
+  lastFailureAt?: string | null;
   durationMs?: number;
   imageUrl?: string;
   modelProvider?: string;
@@ -126,10 +133,11 @@ export type ConsoleMode =
   | "code"
   | "worldcup"
   | "ayaops"
+  | "clicks"
   | "facility"
   | "margins"
   | "agent"
-  | "clicks";
+  | "deals";
 
 export type ModelOverride = "auto" | "sonnet" | "opus" | "flash" | "pro";
 
@@ -159,7 +167,11 @@ export type ChatAction =
   | { type: "SET_IMAGE_INTENT"; payload: ImageIntent }
   | { type: "ADD_USER_MESSAGE"; payload: { text: string; id: string; imageUrl?: string; workspaceScope?: string | null } }
   | { type: "ADD_ASSISTANT_MESSAGE"; payload: { text: string; id: string; workspaceScope?: string | null } }
-  | { type: "START_ASSISTANT_STREAM"; payload: { id: string; workspaceScope?: string | null } }
+  | {
+    type: "START_ASSISTANT_STREAM";
+    payload: { id: string; workspaceScope?: string | null; requestUserMessageId?: string | null };
+  }
+  | { type: "RETRY_ASSISTANT_STREAM"; payload: { id: string } }
   | { type: "APPEND_ASSISTANT_CHUNK"; payload: { id: string; textChunk: string } }
   | { type: "SET_ASSISTANT_WRITE_RESULT"; payload: { id: string; writeResult: WriteResultMeta } }
   | { type: "SET_ASSISTANT_GROUNDING"; payload: { id: string; citations: Citation[]; queries: string[] } }
@@ -178,6 +190,7 @@ export type ChatAction =
 export interface PanelItem {
   id: string;
   label: string;
+  display?: string;
   candidateName?: string | null;
   candidateId?: string | null;
   candidateEmail?: string | null;
@@ -190,6 +203,7 @@ export interface PanelItem {
   compact?: boolean;
   home?: string;
   away?: string;
+  gameId?: string | null;
   homeLogo?: string;
   awayLogo?: string;
   date?: string;
@@ -201,6 +215,8 @@ export interface PanelItem {
   awayRecord?: string | null;
   spread?: number | null;
   total?: number | null;
+  homeScore?: number | null;
+  awayScore?: number | null;
   // World Cup fields
   homeName?: string;
   awayName?: string;
@@ -212,6 +228,25 @@ export interface PanelItem {
   writeupUrl?: string | null;
   publishedAt?: string | null;
   city?: string | null;
+  hubUrl?: string | null;
+  apiUrl?: string | null;
+  publicUrl?: string | null;
+  // Sports picks fields
+  marketType?: string | null;
+  sideToken?: string | null;
+  priority?: string | null;
+  kicker?: string | null;
+  rationale?: string | null;
+  event_status?: string | null;
+  grading_status?: string | null;
+  result?: number | null;
+  settlementValue?: number | null;
+  live?: Record<string, unknown> | null;
+  is_live_stale?: boolean;
+  ticker?: string | null;
+  oddsAmerican?: number | null;
+  lineObservedAt?: string | null;
+  closingLine?: number | null;
   // AyaOps fields
   novaId?: string | null;
   novaUrl?: string | null;
@@ -246,12 +281,11 @@ export interface PanelItem {
   cancelRatePct?: number | null;
   extensionRatePct?: number | null;
   closedAssignments?: number | null;
-  touchPriorityScore?: number | null;
-  touchPriorityLevel?: string | null;
-  touchPriorityBand?: "today" | "this_week" | "monitor" | null;
-  touchPriorityReason?: string | null;
   touchDaysToEnd?: number | null;
-  touchNoteSeed?: string | null;
+  touchPriorityLevel?: string | null;
+  touchPriorityScore?: number | null;
+  touchPriorityBand?: string | null;
+  touchPriorityReason?: string | null;
   lastTouchAt?: string | null;
   unansweredCount?: number | null;
   // Facility mode fields
@@ -282,6 +316,17 @@ export interface SummaryData {
   items: PanelItem[];
   supportedLeagues?: { key: string; label: string }[];
   topProfessions?: { name: string; count: number }[];
+  sportsPicks?: PanelItem[];
+  sportsTrackRecord?: {
+    sample_size: number;
+    wins: number;
+    losses: number;
+    pushes: number;
+    voids: number;
+    units: number;
+    record: string;
+    matured: boolean;
+  } | null;
 }
 
 export interface TodayCard {

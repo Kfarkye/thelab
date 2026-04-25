@@ -32,6 +32,26 @@ export default async function CandidateGroundingPage({ params }: Props) {
   const status = snapshot.assignment?.status || "Unknown";
   const facility = snapshot.assignment?.facility_name;
   const facilityLoc = [snapshot.assignment?.facility_city, snapshot.assignment?.facility_state].filter(Boolean).join(", ");
+  const candidateGroundingLd = {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    additionalType: "https://thelab.ai/schema/CandidateProfile",
+    identifier: snapshot.candidate_id,
+    name: snapshot.display_name,
+    jobTitle: snapshot.specialty_title || undefined,
+    email: snapshot.contact?.email || undefined,
+    telephone: snapshot.contact?.primary_phone || undefined,
+    url: sourceUrl,
+    sameAs: novaUrl || undefined,
+    workLocation: facility
+      ? {
+          "@type": "Place",
+          name: facility,
+          address: facilityLoc || undefined,
+        }
+      : undefined,
+    candidate_snapshot: snapshot,
+  };
 
   return (
     <>
@@ -376,7 +396,7 @@ export default async function CandidateGroundingPage({ params }: Props) {
                     <div>
                       <p className="w-field-label">Dates</p>
                       <p className="w-field-value">
-                        {new Date(snapshot.assignment.start_date).toLocaleDateString()} — {snapshot.assignment.end_date ? new Date(snapshot.assignment.end_date).toLocaleDateString() : "Ongoing"}
+                        {new Date(snapshot.assignment.start_date).toLocaleDateString()} to {snapshot.assignment.end_date ? new Date(snapshot.assignment.end_date).toLocaleDateString() : "Ongoing"}
                       </p>
                     </div>
                   )}
@@ -460,20 +480,10 @@ export default async function CandidateGroundingPage({ params }: Props) {
       </main>
 
       <script
-        id="candidate-grounding-json"
-        type="application/json"
-        dangerouslySetInnerHTML={{ __html: prettyJson }}
+        id="candidate-grounding-ldjson"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(candidateGroundingLd) }}
       />
-
-      <div className="sr-only" aria-hidden="true">
-        <p>candidate_id: {snapshot.candidate_id}</p>
-        <p>display_name: {snapshot.display_name}</p>
-        <p>specialty_title: {snapshot.specialty_title || "unknown"}</p>
-        <p>assignment_status: {snapshot.assignment?.status || "unknown"}</p>
-        <p>profile_url: {snapshot.profile_url || "none"}</p>
-        <p>ring_central_thread_url: {snapshot.rc_thread_url || "none"}</p>
-        <p>outlook_thread_url: {snapshot.outlook_thread_url || "none"}</p>
-      </div>
     </>
   );
 }

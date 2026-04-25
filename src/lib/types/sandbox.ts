@@ -1,4 +1,4 @@
-export type SandboxPanelMode = "closed" | "sources" | "sandbox";
+export type SandboxPanelMode = "closed" | "sources" | "sandbox" | "picks";
 
 export type SandboxTaskStatus =
   | "pending_review"

@@ -62,6 +62,10 @@ export type CandidateResolverMatch = {
   nova_id: string | null;
   display_name: string;
   assignment_status: string | null;
+  facility_name: string | null;
+  facility_city: string | null;
+  facility_state: string | null;
+  recent_activity_at: string | null;
   specialty: string | null;
   match_reason:
     | "uuid_exact"
@@ -101,6 +105,10 @@ export type CandidateGroundingSearchResult = {
   candidate_id: string;
   nova_id: string | null;
   status: string | null;
+  facility_name: string | null;
+  facility_city: string | null;
+  facility_state: string | null;
+  recent_activity_at: string | null;
   specialty: string | null;
   groundingUrl: string;
   actionUrl: string;
@@ -171,6 +179,10 @@ function toResolverMatch(
     nova_id: readString(row.nova_id),
     display_name: displayNameFromRow(row) || "Unknown Candidate",
     assignment_status: readString(row.assignment_status),
+    facility_name: readString(row.facility_name),
+    facility_city: readString(row.facility_city),
+    facility_state: readString(row.facility_state),
+    recent_activity_at: toIsoString(row.recent_activity_at),
     specialty: readString(row.specialty),
     match_reason: rank.reason,
     confidence: rank.confidence,
@@ -218,15 +230,128 @@ async function queryCandidateMatches(identifier: string, limit: number): Promise
           WHERE a.candidate_id = c.id
           ORDER BY
             CASE
-              WHEN LOWER(a.status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
-              WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 1
-              ELSE 2
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE() THEN 0
+              WHEN LOWER(a.status) = 'active' THEN 1
+              WHEN LOWER(a.status) = 'in_pipeline' THEN 2
+              WHEN LOWER(a.status) = 'pending_start' THEN 3
+              WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 4
+              ELSE 5
             END,
-            COALESCE(a.end_date, '9999-12-31') DESC,
-            COALESCE(a.start_date, '0001-01-01') DESC,
+            CASE
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE()
+                THEN SAFE_CAST(a.start_date AS DATE)
+              WHEN LOWER(a.status) = 'active'
+                THEN COALESCE(SAFE_CAST(a.end_date AS DATE), DATE '9999-12-31')
+              WHEN LOWER(a.status) = 'in_pipeline'
+                THEN COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '9999-12-31')
+              ELSE COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01')
+            END ASC,
+            COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01') DESC,
             a.id DESC
           LIMIT 1
-        ) AS assignment_status
+        ) AS assignment_status,
+        (
+          SELECT f.name
+          FROM hc_assignments a
+          LEFT JOIN hc_facilities f ON f.id = a.facility_id
+          WHERE a.candidate_id = c.id
+          ORDER BY
+            CASE
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE() THEN 0
+              WHEN LOWER(a.status) = 'active' THEN 1
+              WHEN LOWER(a.status) = 'in_pipeline' THEN 2
+              WHEN LOWER(a.status) = 'pending_start' THEN 3
+              WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 4
+              ELSE 5
+            END,
+            CASE
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE()
+                THEN SAFE_CAST(a.start_date AS DATE)
+              WHEN LOWER(a.status) = 'active'
+                THEN COALESCE(SAFE_CAST(a.end_date AS DATE), DATE '9999-12-31')
+              WHEN LOWER(a.status) = 'in_pipeline'
+                THEN COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '9999-12-31')
+              ELSE COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01')
+            END ASC,
+            COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01') DESC,
+            a.id DESC
+          LIMIT 1
+        ) AS facility_name,
+        (
+          SELECT f.city
+          FROM hc_assignments a
+          LEFT JOIN hc_facilities f ON f.id = a.facility_id
+          WHERE a.candidate_id = c.id
+          ORDER BY
+            CASE
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE() THEN 0
+              WHEN LOWER(a.status) = 'active' THEN 1
+              WHEN LOWER(a.status) = 'in_pipeline' THEN 2
+              WHEN LOWER(a.status) = 'pending_start' THEN 3
+              WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 4
+              ELSE 5
+            END,
+            CASE
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE()
+                THEN SAFE_CAST(a.start_date AS DATE)
+              WHEN LOWER(a.status) = 'active'
+                THEN COALESCE(SAFE_CAST(a.end_date AS DATE), DATE '9999-12-31')
+              WHEN LOWER(a.status) = 'in_pipeline'
+                THEN COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '9999-12-31')
+              ELSE COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01')
+            END ASC,
+            COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01') DESC,
+            a.id DESC
+          LIMIT 1
+        ) AS facility_city,
+        (
+          SELECT f.state
+          FROM hc_assignments a
+          LEFT JOIN hc_facilities f ON f.id = a.facility_id
+          WHERE a.candidate_id = c.id
+          ORDER BY
+            CASE
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE() THEN 0
+              WHEN LOWER(a.status) = 'active' THEN 1
+              WHEN LOWER(a.status) = 'in_pipeline' THEN 2
+              WHEN LOWER(a.status) = 'pending_start' THEN 3
+              WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 4
+              ELSE 5
+            END,
+            CASE
+              WHEN LOWER(a.status) = 'pending_start'
+                AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE()
+                THEN SAFE_CAST(a.start_date AS DATE)
+              WHEN LOWER(a.status) = 'active'
+                THEN COALESCE(SAFE_CAST(a.end_date AS DATE), DATE '9999-12-31')
+              WHEN LOWER(a.status) = 'in_pipeline'
+                THEN COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '9999-12-31')
+              ELSE COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01')
+            END ASC,
+            COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01') DESC,
+            a.id DESC
+          LIMIT 1
+        ) AS facility_state,
+        (
+          SELECT MAX(act.created_at)
+          FROM activities act
+          WHERE act.candidate_id = c.id
+        ) AS recent_activity_at
       FROM hc_candidates c
       WHERE
         LOWER(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) LIKE @likeIdentifier
@@ -420,12 +545,28 @@ async function loadCandidateSnapshotById(candidateId: string, sourceUrl: string)
         WHERE a.candidate_id = @candidateId
         ORDER BY
           CASE
-            WHEN LOWER(a.status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
-            WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 1
-            ELSE 2
+            WHEN LOWER(a.status) = 'pending_start'
+              AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+              AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE() THEN 0
+            WHEN LOWER(a.status) = 'active' THEN 1
+            WHEN LOWER(a.status) = 'in_pipeline' THEN 2
+            WHEN LOWER(a.status) = 'pending_start' THEN 3
+            WHEN LOWER(a.status) IN ('completed', 'cancelled') THEN 4
+            ELSE 5
           END,
-          COALESCE(a.end_date, '9999-12-31') DESC,
-          COALESCE(a.start_date, '0001-01-01') DESC
+          CASE
+            WHEN LOWER(a.status) = 'pending_start'
+              AND SAFE_CAST(a.start_date AS DATE) IS NOT NULL
+              AND SAFE_CAST(a.start_date AS DATE) >= CURRENT_DATE()
+              THEN SAFE_CAST(a.start_date AS DATE)
+            WHEN LOWER(a.status) = 'active'
+              THEN COALESCE(SAFE_CAST(a.end_date AS DATE), DATE '9999-12-31')
+            WHEN LOWER(a.status) = 'in_pipeline'
+              THEN COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '9999-12-31')
+            ELSE COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01')
+          END ASC,
+          COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '0001-01-01') DESC,
+          a.id DESC
       )
       LIMIT 1
     `,
@@ -521,7 +662,8 @@ async function loadCandidateSnapshotById(candidateId: string, sourceUrl: string)
     ...(novaId === "4378569" ? { extended_telemetry_payload: require("./morgan-profile").MORGAN_PROFILE } : {}),
     ...(novaId === "2502428" ? { extended_telemetry_payload: require("./nathan-profile").NATHAN_PROFILE } : {}),
     ...(novaId === "2960307" ? { extended_telemetry_payload: require("./anna-profile").ANNA_PROFILE } : {}),
-    ...(novaId === "857592" ? { extended_telemetry_payload: require("./justin-profile").JUSTIN_PROFILE } : {})
+    ...(novaId === "857592" ? { extended_telemetry_payload: require("./justin-profile").JUSTIN_PROFILE } : {}),
+    ...(novaId === "5029630" ? { extended_telemetry_payload: require("./matthew-profile").MATTHEW_PROFILE } : {})
   };
 }
 
@@ -561,6 +703,10 @@ export async function searchCandidateGrounding(
     candidate_id: match.candidate_id,
     nova_id: match.nova_id,
     status: match.assignment_status,
+    facility_name: match.facility_name,
+    facility_city: match.facility_city,
+    facility_state: match.facility_state,
+    recent_activity_at: match.recent_activity_at,
     specialty: match.specialty,
     groundingUrl: buildCandidateGroundingUrl(baseUrl, match.candidate_id),
     actionUrl: buildCandidateActionUrl(baseUrl, match.candidate_id),
@@ -568,4 +714,3 @@ export async function searchCandidateGrounding(
     matchReason: match.match_reason,
   }));
 }
-

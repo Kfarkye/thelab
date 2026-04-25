@@ -2,7 +2,7 @@ import React, { useRef, useState, useMemo, useCallback, useEffect } from "react"
 import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, UserPlus, Calculator } from "lucide-react";
 import { ConsoleMode, SummaryData, PanelItem } from "@/lib/types/chat";
 import {
-  formatShortDate, formatTouchPriorityReason, readStringSafe, formatAssignmentWindow,
+  formatShortDate, readStringSafe, formatAssignmentWindow,
   formatTournamentStage, formatSubmissionDifficulty, readNumberSafe, formatRelativeTime,
   parseTimeToMinutes, formatShiftCadence, formatShiftWindow, formatMarginDelta, marginDeltaPoints,
   buildLicensingReferenceUrl, inferHealthcareContextFromLabel
@@ -10,53 +10,52 @@ import {
 import { MODES } from "@/lib/chat-modes";
 
 export // --- Left Panel ---
-function LeftPanel({
-  mode,
-  summary,
-  error,
-  loading,
-  filter,
-  selectedItemId,
-  onFilterChange,
-  onItemClick,
-  onModeSwitch,
-  onRetry,
-  onRefreshData,
-  marginSubTab,
-  onMarginSubTabChange,
-  chatLoading,
-  mobileOpen,
-  onMobileClose,
-}: {
-  mode: ConsoleMode;
-  summary: SummaryData | null;
-  error: string | null;
-  loading: boolean;
-  filter: string;
-  selectedItemId: string | null;
-  onFilterChange: (v: string) => void;
-  onItemClick: (item: PanelItem) => void;
-  onModeSwitch: (m: ConsoleMode) => void;
-  onRetry: () => void;
-  onRefreshData: () => void;
-  marginSubTab: "jobs" | "margins";
-  onMarginSubTabChange: (tab: "jobs" | "margins") => void;
-  chatLoading: boolean;
-  mobileOpen: boolean;
-  onMobileClose: () => void;
-}) {
+  function LeftPanel({
+    mode,
+    summary,
+    error,
+    loading,
+    filter,
+    selectedItemId,
+    onFilterChange,
+    onItemClick,
+    onModeSwitch,
+    onRetry,
+    onRefreshData,
+    marginSubTab,
+    onMarginSubTabChange,
+    chatLoading,
+    mobileOpen,
+    onMobileClose,
+  }: {
+    mode: ConsoleMode;
+    summary: SummaryData | null;
+    error: string | null;
+    loading: boolean;
+    filter: string;
+    selectedItemId: string | null;
+    onFilterChange: (v: string) => void;
+    onItemClick: (item: PanelItem) => void;
+    onModeSwitch: (m: ConsoleMode) => void;
+    onRetry: () => void;
+    onRefreshData: () => void;
+    marginSubTab: "jobs" | "margins";
+    onMarginSubTabChange: (tab: "jobs" | "margins") => void;
+    chatLoading: boolean;
+    mobileOpen: boolean;
+    onMobileClose: () => void;
+  }) {
   const pulse = summary?.pulse;
   const items = summary?.items || [];
   const supportedLeagues = summary?.supportedLeagues || [];
   const itemsScrollRef = useRef<HTMLDivElement>(null);
   const hasScrolledToday = useRef(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [selectedSpecialty, setSelectedSpecialty] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [dotsOpen, setDotsOpen] = useState(false);
   const dotsRef = useRef<HTMLDivElement>(null);
-  const [statusFilter, setStatusFilter] = useState<string>("prospect");
+  const [statusFilter, setStatusFilter] = useState<string>("prestart");
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [professionFilter, setProfessionFilter] = useState<string | null>(null);
   const [attachJobId, setAttachJobId] = useState<string | null>(null);
@@ -132,7 +131,7 @@ function LeftPanel({
     return () => document.removeEventListener("click", close);
   }, [dotsOpen]);
 
-  const pulseLabels: Record<ConsoleMode, { keys: string[]; labels: string[] }> = {
+  const pulseLabels: Record<string, { keys: string[]; labels: string[] }> = {
     healthcare: { keys: ["states", "professions", "total"], labels: ["States", "Professions", "Licenses"] },
     sports: { keys: ["games", "slates", "previews"], labels: ["Games", "Slates", "Previews"] },
     code: { keys: ["tools", "capabilities"], labels: ["Tools", "Features"] },
@@ -146,7 +145,7 @@ function LeftPanel({
     clicks: { keys: ["recent_clicks", "matched", "tracked"], labels: ["Last 24h", "Matched", "Listed"] },
   };
 
-  const cfg = pulseLabels[mode];
+  const cfg = pulseLabels[mode] || pulseLabels.healthcare;
   const formatPulseValue = (key: string, value: number) => {
     if (mode === "margins" && key === "avg_margin_pct") return `${value.toFixed(2)}%`;
     return Number.isFinite(value) ? value.toLocaleString("en-US") : "0";
@@ -224,7 +223,9 @@ function LeftPanel({
             </button>
             {dotsOpen && (
               <div className="lp-dots-menu">
-                {(Object.keys(MODES) as ConsoleMode[]).map((modeKey) => (
+                {(Object.keys(MODES) as ConsoleMode[])
+                  .filter((modeKey) => modeKey !== "clicks")
+                  .map((modeKey) => (
                   <button
                     key={modeKey}
                     type="button"
@@ -275,64 +276,39 @@ function LeftPanel({
         )}
       </div>
 
-      {(mode === "ayaops" || mode === "clicks") && (
-        <div className="margin-sub-tabs" style={{ background: '#fff', zIndex: 10 }}>
-          <button
-            className={`margin-sub-tab ${mode === "ayaops" ? "active" : ""}`}
-            onClick={() => onModeSwitch("ayaops")}
-          >
-            Candidates
-          </button>
-          <button
-            className={`margin-sub-tab ${mode === "clicks" ? "active" : ""}`}
-            onClick={() => onModeSwitch("clicks")}
-          >
-            Interested Clicks
-          </button>
-        </div>
-      )}
-
       {mode === "ayaops" && (
         <div className="aya-ops-links-rail" aria-label="AyaOps Quick Links">
           <div className="aya-ops-link-group">
-            <span className="aya-ops-group-label">Communications</span>
+            <span className="aya-ops-group-label" style={{ marginBottom: "8px", display: "inline-block" }}>Recruiting</span>
             <div className="aya-ops-group-items">
-              <a href="https://app.ringcentral.com/sms/direct/all" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                RingCentral SMS<span className="sr-only">URL: https://app.ringcentral.com/sms/direct/all</span>
-              </a>
-              <a href="https://teams.microsoft.com/v2/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Microsoft Teams<span className="sr-only">URL: https://teams.microsoft.com/v2/</span>
-              </a>
-              <a href="https://outlook.cloud.microsoft/mail/AAMkADA5OTc3NDAxLWM2ZWQtNGNmMC04YzAzLThkOWMwMjk0MjBiMgAuAAAAAAALwSBcifhYRJ2lBsq4Iy%2B0AQAEE5rXW9aUTreCVwiNgefzAAPN4aivAAA%3D" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Outlook Mail<span className="sr-only">URL: https://outlook.cloud.microsoft/mail/...</span>
-              </a>
-            </div>
-          </div>
-
-          <div className="aya-ops-link-divider" />
-
-          <div className="aya-ops-link-group">
-            <span className="aya-ops-group-label">Recruiting Infrastructure</span>
-            <div className="aya-ops-group-items">
-              <a href="https://nova.ayahealthcare.com/#/recruiting/live-nurses-new" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Live List<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/live-nurses-new</span>
-              </a>
-
-              <a href="https://nova.ayahealthcare.com/#/recruiting/prestart-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Prestart<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/prestart-candidates</span>
-              </a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/working-candidates" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Working<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/working-candidates</span>
-              </a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/margins" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Margins<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/margins</span>
-              </a>
-              <a href="https://nova.ayahealthcare.com/#/recruiting/facilities" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                Facilities<span className="sr-only">URL: https://nova.ayahealthcare.com/#/recruiting/facilities</span>
-              </a>
-              <a href="https://thepulse.ayahealthcare.com/" target="_blank" rel="noopener noreferrer" className="aya-ops-link-chip">
-                The Pulse<span className="sr-only">URL: https://thepulse.ayahealthcare.com/</span>
-              </a>
+              <button
+                type="button"
+                className={`aya-ops-link-chip ${statusFilter === "all" ? "active" : ""}`}
+                onClick={() => setStatusFilter("all")}
+              >
+                Live List
+              </button>
+              <button
+                type="button"
+                className={`aya-ops-link-chip ${statusFilter === "prestart" ? "active" : ""}`}
+                onClick={() => setStatusFilter("prestart")}
+              >
+                Prestart
+              </button>
+              <button
+                type="button"
+                className={`aya-ops-link-chip ${statusFilter === "working" ? "active" : ""}`}
+                onClick={() => setStatusFilter("working")}
+              >
+                Working
+              </button>
+              <button
+                type="button"
+                className="aya-ops-link-chip"
+                onClick={() => onModeSwitch("margins")}
+              >
+                Margins
+              </button>
             </div>
           </div>
         </div>
@@ -347,9 +323,9 @@ function LeftPanel({
           {items.length === 0 ? (
             <div className="agent-empty-state">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#71717a', marginBottom: 8 }}>
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-                <line x1="8" y1="21" x2="16" y2="21"/>
-                <line x1="12" y1="17" x2="12" y2="21"/>
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
               </svg>
               <span>No tasks yet</span>
               <span className="agent-empty-hint">Describe a browser check in the chat to create one</span>
@@ -1044,9 +1020,8 @@ function LeftPanel({
 
             // AyaOps mode: candidates grouped by specialty (server-normalized)
             if (mode === "ayaops") {
-              const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-              const fmtDate = (iso: string) => { const [y, m, d] = iso.split('-'); return `${MONTHS[+m - 1]} ${+d} '${y.slice(2)}`; };
               const workflowStates = [
+                { key: "all", label: "All" },
                 { key: "prospect", label: "Prospect" },
                 { key: "working", label: "Working" },
                 { key: "submitted", label: "Submitted" },
@@ -1090,6 +1065,7 @@ function LeftPanel({
 
               // Stat counts
               const statCounts: Record<string, number> = {
+                all: 0,
                 prospect: 0,
                 working: 0,
                 submitted: 0,
@@ -1100,23 +1076,15 @@ function LeftPanel({
               for (const item of filtered) {
                 const state = normalizeStatus(item);
                 if (state in statCounts) statCounts[state]++;
+                statCounts.all++;
               }
 
-              // Apply status filter
-              const statusFiltered = filtered.filter((it) => normalizeStatus(it) === statusFilter);
+              // Apply status filter — "all" bypasses
+              const statusFiltered = statusFilter === "all"
+                ? filtered
+                : filtered.filter((it) => normalizeStatus(it) === statusFilter);
 
-              // Build specialty counts for filter pills
-              const specCounts = new Map<string, number>();
-              for (const item of statusFiltered) {
-                const s = item.specialty || "Unknown";
-                specCounts.set(s, (specCounts.get(s) || 0) + 1);
-              }
-              const specEntries = [...specCounts.entries()].sort((a, b) => b[1] - a[1]);
-
-              // Apply specialty filter
-              const specFiltered = selectedSpecialty
-                ? statusFiltered.filter(it => (it.specialty || "Unknown") === selectedSpecialty)
-                : statusFiltered;
+              const specFiltered = statusFiltered;
 
               const ranked = [...specFiltered].sort((a, b) => {
                 const levelRank = (value?: string | null) => {
@@ -1140,62 +1108,29 @@ function LeftPanel({
 
               return (
                 <>
-                  {/* Stat filter strip */}
-                  <div className="lp-stat-filters">
-                    {workflowStates.map((state) => (
-                      <button
-                        key={state.key}
-                        className={`lp-sf ${statusFilter === state.key ? 'active' : ''} ${statCounts[state.key] === 0 ? 'is-zero' : ''}`}
-                        onClick={() => setStatusFilter(state.key)}
-                      >
-                        <span className="lp-sf-num">{statCounts[state.key]}</span>
-                        <span className="lp-sf-lbl">{state.label}</span>
-                      </button>
-                    ))}
+                  <div className="lp-candidate-kicker-row">
+                    <span className="lp-candidate-kicker">
+                      {statusFilter === "prestart" ? "Prestarts" : statusFilter === "working" ? "Working" : "Candidates"}
+                    </span>
+                    <span className="lp-candidate-kicker-count">{specFiltered.length}</span>
                   </div>
-
-                  {/* Specialty filter pills — horizontal scroll track */}
-                  {specEntries.length > 1 && (
-                    <div className="aya-spec-pills">
-                      <button
-                        className={`aya-spec-pill ${!selectedSpecialty ? 'active' : ''}`}
-                        onClick={() => setSelectedSpecialty(null)}
-                      >
-                        All {statusFiltered.length}
-                      </button>
-                      {specEntries.map(([spec, count]) => (
-                        <button
-                          key={spec}
-                          className={`aya-spec-pill ${selectedSpecialty === spec ? 'active' : ''}`}
-                          onClick={() => setSelectedSpecialty(selectedSpecialty === spec ? null : spec)}
-                        >
-                          {spec} {count}
-                        </button>
-                      ))}
-                    </div>
-                  )}
 
                   {/* Flat matchup rows */}
                   {ranked.map((item) => {
                     const status = stateLabelMap[normalizeStatus(item)] || "Prospect";
-                    const normalizedTouchReason = formatTouchPriorityReason(item.touchPriorityReason);
-                    const score = typeof item.touchPriorityScore === "number" ? Math.round(item.touchPriorityScore) : null;
-                    const scoreBadge =
+                    const statusKey = status.toLowerCase().replace(/\s+/g, "-");
+                    const statusLabel =
                       typeof item.touchDaysToEnd === "number"
-                        ? `${item.touchDaysToEnd}d`
-                        : score !== null
-                          ? `P${score}`
-                          : null;
-                    const heatBand = score !== null
-                      ? score >= 80 ? "heat-urgent" : score >= 40 ? "heat-warm" : "heat-cold"
-                      : item.touchPriorityBand === "today" ? "heat-urgent"
-                        : item.touchPriorityBand === "this_week" ? "heat-warm"
-                          : "heat-cold";
-                    const tooltipText = normalizedTouchReason || (score !== null ? `Priority score: ${score}` : "");
+                        ? `${status}, ${item.touchDaysToEnd} day${item.touchDaysToEnd === 1 ? "" : "s"}`
+                        : status;
+                    const isActive = selectedItemId === item.id;
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={item.id}
-                        className="lp-item aya-candidate-card"
+                        className={`lp-item aya-candidate-card ${isActive ? "lp-item-active" : ""}`}
+                        onClick={() => onItemClick(item)}
+                        aria-label={`Open candidate ${item.label}`}
                       >
                         <div className="aya-card-collapsed">
                           <div className="aya-avatar">
@@ -1279,6 +1214,10 @@ function LeftPanel({
                                 )}
                               </div>
                             )}
+                            <span className={`aya-card-state aya-card-state-${statusKey}`}>
+                              <span className="aya-card-state-dot" />
+                              {statusLabel}
+                            </span>
                           </div>
                           {/* Ghost action bar — visible on hover */}
                           <div className="aya-ghost-actions">
@@ -1303,12 +1242,8 @@ function LeftPanel({
                               </a>
                             )}
                           </div>
-                          {/* Priority badge removed for demo Polish */}
-                          <span className={`aya-status-dot aya-dot-${status.toLowerCase().replace(/\s+/g, '-')}`}
-                            title={status}
-                          />
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </>
@@ -1410,31 +1345,32 @@ function LeftPanel({
               return filtered.map((item) => {
                 const asCodeItem = item as any;
                 return (
-                <button
-                  key={item.id}
-                  className={`lp-item lp-item-code ${selectedItemId === item.id ? "lp-active" : ""}`}
-                  onClick={() => onItemClick(item)}
-                  title={item.label}
-                >
-                  <span className="lp-item-label">{item.label}</span>
-                  {asCodeItem.category && <span className="lp-item-meta">{asCodeItem.category} ({item.status})</span>}
-
-                  {/* Browser Agent Payload - Grounding Target */}
-                  <div className="sr-only"
-                    data-grounding-type="ARCHITECTURE_VERDICT"
-                    data-verdict-id={item.id}
-                    data-agent={asCodeItem.agent || ""}
-                    data-status={item.status || ""}
-                    data-risk-zones={(asCodeItem.riskZones || []).join(",")}
+                  <button
+                    key={item.id}
+                    className={`lp-item lp-item-code ${selectedItemId === item.id ? "lp-active" : ""}`}
+                    onClick={() => onItemClick(item)}
+                    title={item.label}
                   >
-                    [VERDICT]: {item.label}
-                    Agent: {asCodeItem.agent}
-                    Status: {item.status}
-                    Preview: {asCodeItem.preview}
-                    Use the 'verdicts' tools to write or list decisions.
-                  </div>
-                </button>
-              )});
+                    <span className="lp-item-label">{item.label}</span>
+                    {asCodeItem.category && <span className="lp-item-meta">{asCodeItem.category} ({item.status})</span>}
+
+                    {/* Browser Agent Payload - Grounding Target */}
+                    <div className="sr-only"
+                      data-grounding-type="ARCHITECTURE_VERDICT"
+                      data-verdict-id={item.id}
+                      data-agent={asCodeItem.agent || ""}
+                      data-status={item.status || ""}
+                      data-risk-zones={(asCodeItem.riskZones || []).join(",")}
+                    >
+                      [VERDICT]: {item.label}
+                      Agent: {asCodeItem.agent}
+                      Status: {item.status}
+                      Preview: {asCodeItem.preview}
+                      Use the 'verdicts' tools to write or list decisions.
+                    </div>
+                  </button>
+                )
+              });
             }
 
             if (mode === "clicks") {

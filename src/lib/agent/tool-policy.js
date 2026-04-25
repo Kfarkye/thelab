@@ -13,6 +13,33 @@ const WRITE_INTENT_VERBS = [
   "move",
 ];
 
+const READ_INTENT_VERBS = [
+  "show",
+  "list",
+  "find",
+  "get",
+  "pull",
+  "lookup",
+  "look up",
+  "bring up",
+  "open",
+  "check",
+  "review",
+  "rank",
+  "sort",
+  "filter",
+];
+
+const READ_ENTITY_PATTERN =
+  /\b(candidate|candidates|dietitian|dietitians|nurse|nurses|traveler|travelers|facility|facilities|job|jobs|submittal|submittals|contract|contracts|prestart|prestarts)\b/i;
+
+const READ_LIST_QUALIFIER_PATTERN =
+  /\b(all|working|active|prestart|pending|pipeline|submitted|completed|cold|replied|top|match|matches|ending|expiring|next)\b/i;
+const LOOKUP_OPENING_PATTERN =
+  /^\s*(show|list|find|get|pull|lookup|look up|bring up|open|check|who|which|what|how many)\b/i;
+const COPY_TASK_PATTERN =
+  /\b(draft|write|compose|rewrite|reword|format|message|email|sms|text)\b/i;
+
 const EXPLICIT_DRAFT_PERSIST_PATTERNS = [
   /\b(save|store|persist|log|insert|upsert)\b[\s\w]{0,80}\bdraft\b/i,
   /\bdraft\b[\s\w]{0,80}\b(save|store|persist|log|insert|upsert)\b/i,
@@ -68,6 +95,20 @@ export function classifyToolRequirement({ prompt, availableToolNames = [], mode 
   const writeIntent = copyOnlyDraftIntent
     ? false
     : Boolean(((matchedVerb || statusIntent) && !nonWriteAddIntent) || explicitDraftPersistIntent);
+  const readIntentVerb = READ_INTENT_VERBS.some((verb) => new RegExp(`\\b${verb}\\b`, "i").test(normalizedPrompt));
+  const readEntityMention = READ_ENTITY_PATTERN.test(normalizedPrompt);
+  const readQualifierMention = READ_LIST_QUALIFIER_PATTERN.test(normalizedPrompt);
+  const shortEntityQuery =
+    normalizedPrompt.split(/\s+/).filter(Boolean).length <= 6 && readEntityMention;
+  const lookupWithoutEntity =
+    LOOKUP_OPENING_PATTERN.test(normalizedPrompt) &&
+    !COPY_TASK_PATTERN.test(normalizedPrompt);
+  const readGroundingIntent =
+    mode === "ayaops" &&
+    !writeIntent &&
+    ((readEntityMention && (readIntentVerb || readQualifierMention)) ||
+      shortEntityQuery ||
+      lookupWithoutEntity);
 
   const normalizedToolNames = availableToolNames
     .map((name) => String(name || "").trim())
@@ -88,15 +129,29 @@ export function classifyToolRequirement({ prompt, availableToolNames = [], mode 
   });
 
   const hasMatchingWriteTool = matchingWriteTools.length > 0;
-  const toolRequired = mode === "ayaops" && writeIntent;
+  const hasMatchingReadTool = normalizedToolNames.some(
+    (toolName) => toolName.toLowerCase() === "access_hub",
+  );
+  const requiredToolKind = writeIntent ? "write" : readGroundingIntent ? "read" : "none";
+  const toolRequired = mode === "ayaops" && requiredToolKind !== "none";
+  const hasMatchingRequiredTool =
+    requiredToolKind === "write"
+      ? hasMatchingWriteTool
+      : requiredToolKind === "read"
+        ? hasMatchingReadTool
+        : true;
 
   return {
     mode,
     writeIntent,
+    readGroundingIntent,
     toolRequired,
+    requiredToolKind,
     matchedVerb,
     statusIntent,
     hasMatchingWriteTool,
+    hasMatchingReadTool,
+    hasMatchingRequiredTool,
     matchingWriteTools,
     availableToolNames: normalizedToolNames,
   };

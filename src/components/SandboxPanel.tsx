@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { SandboxTask } from "@/lib/types/sandbox";
 import { DocumentPreview } from "@/components/sandbox/DocumentPreview";
@@ -43,13 +43,29 @@ function ApiCallPreview({
   );
 }
 
+function encodeOutlookParam(value: string): string {
+  return encodeURIComponent(value);
+}
+
 function buildOutlookDeepLink(toEmail: string, cc: string[], subject: string, body: string): string {
-  const params = new URLSearchParams();
-  params.set("to", toEmail);
-  if (cc.length > 0) params.set("cc", cc.join(","));
-  params.set("subject", subject);
-  params.set("body", body);
-  return `https://outlook.office.com/mail/deeplink/compose?${params.toString()}`;
+  const params: Array<[string, string]> = [];
+  if (toEmail) params.push(["to", toEmail]);
+  if (cc.length > 0) params.push(["cc", cc.join(",")]);
+  if (subject) params.push(["subject", subject]);
+  if (body) params.push(["body", body]);
+  const query = params
+    .map(([key, value]) => `${key}=${encodeOutlookParam(value)}`)
+    .join("&");
+  return query
+    ? `https://outlook.office.com/mail/deeplink/compose?${query}`
+    : "https://outlook.office.com/mail/deeplink/compose";
+}
+
+function parseCcList(value: string): string[] {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function EmailDraftPreview({
@@ -61,6 +77,7 @@ function EmailDraftPreview({
   candidateId,
   jobId,
   noteContent,
+  onDraftChange,
 }: {
   templateId: string;
   toEmail: string;
@@ -70,20 +87,103 @@ function EmailDraftPreview({
   candidateId?: string;
   jobId?: string;
   noteContent?: string;
+  onDraftChange?: (draft: { toEmail: string; cc: string[]; subject: string; body: string }) => void;
 }) {
-  const outlookUrl = buildOutlookDeepLink(toEmail, cc, subject, body);
+  const [editableTo, setEditableTo] = useState(toEmail);
+  const [editableCc, setEditableCc] = useState(cc.join(", "));
+  const [editableSubject, setEditableSubject] = useState(subject);
+  const [editableBody, setEditableBody] = useState(body);
+
+  useEffect(() => {
+    setEditableTo(toEmail);
+    setEditableCc(cc.join(", "));
+    setEditableSubject(subject);
+    setEditableBody(body);
+  }, [toEmail, cc, subject, body]);
+
+  const normalizedCc = parseCcList(editableCc);
+  const outlookUrl = buildOutlookDeepLink(editableTo.trim(), normalizedCc, editableSubject, editableBody);
+
+  const emitDraftChange = ({
+    nextTo = editableTo,
+    nextCc = editableCc,
+    nextSubject = editableSubject,
+    nextBody = editableBody,
+  }: {
+    nextTo?: string;
+    nextCc?: string;
+    nextSubject?: string;
+    nextBody?: string;
+  }) => {
+    if (!onDraftChange) return;
+    onDraftChange({
+      toEmail: nextTo.trim(),
+      cc: parseCcList(nextCc),
+      subject: nextSubject,
+      body: nextBody,
+    });
+  };
+
   return (
     <div className="sb-email">
       <div className="sb-email-meta">
         <div><strong>Template:</strong> {templateId}</div>
-        <div><strong>To:</strong> {toEmail}</div>
-        <div><strong>CC:</strong> {cc.length > 0 ? cc.join(", ") : "None"}</div>
+        <label className="sb-email-field">
+          <span className="sb-email-field-label">To</span>
+          <input
+            className="sb-email-input"
+            type="email"
+            autoComplete="email"
+            value={editableTo}
+            onChange={(event) => {
+              const next = event.target.value;
+              setEditableTo(next);
+              emitDraftChange({ nextTo: next });
+            }}
+            placeholder="candidate@email.com"
+          />
+        </label>
+        <label className="sb-email-field">
+          <span className="sb-email-field-label">CC</span>
+          <input
+            className="sb-email-input"
+            type="text"
+            value={editableCc}
+            onChange={(event) => {
+              const next = event.target.value;
+              setEditableCc(next);
+              emitDraftChange({ nextCc: next });
+            }}
+            placeholder="a@example.com, b@example.com"
+          />
+        </label>
         {candidateId && <div><strong>Candidate:</strong> {candidateId}</div>}
         {jobId && <div><strong>Job:</strong> {jobId}</div>}
       </div>
-      <div className="sb-email-subject"><strong>Subject:</strong> {subject}</div>
+      <label className="sb-email-field sb-email-field-subject">
+        <span className="sb-email-field-label">Subject</span>
+        <input
+          className="sb-email-input"
+          type="text"
+          value={editableSubject}
+          onChange={(event) => {
+            const next = event.target.value;
+            setEditableSubject(next);
+            emitDraftChange({ nextSubject: next });
+          }}
+          placeholder="Email subject"
+        />
+      </label>
       <div className="sb-email-body">
-        <pre><code>{body}</code></pre>
+        <textarea
+          className="sb-email-textarea"
+          value={editableBody}
+          onChange={(event) => {
+            const next = event.target.value;
+            setEditableBody(next);
+            emitDraftChange({ nextBody: next });
+          }}
+        />
       </div>
       <a
         href={outlookUrl}
@@ -175,6 +275,7 @@ export function SandboxPanel({
   onSelectTask,
   onApprove,
   onReject,
+  onEditEmailDraft,
   onClose,
   isCommitting,
 }: {
@@ -183,6 +284,10 @@ export function SandboxPanel({
   onSelectTask: (taskId: string) => void;
   onApprove: (taskId: string, mode?: "default" | "send_now") => void;
   onReject: (taskId: string, feedback: string) => void;
+  onEditEmailDraft?: (
+    taskId: string,
+    draft: { toEmail: string; cc: string[]; subject: string; body: string },
+  ) => void;
   onClose: () => void;
   isCommitting: boolean;
 }) {
@@ -280,6 +385,7 @@ export function SandboxPanel({
             candidateId={activeTask.preview.candidateId}
             jobId={activeTask.preview.jobId}
             noteContent={activeTask.preview.noteContent}
+            onDraftChange={(draft) => onEditEmailDraft?.(activeTask.taskId, draft)}
           />
         )}
 

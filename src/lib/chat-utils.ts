@@ -8,37 +8,159 @@ export function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
+function stripNumericCitationBrackets(value: string): string {
+  return String(value || "").replace(/\s*\[(?:\d+\s*(?:,\s*\d+\s*)*)\]/g, "");
+}
+
+function semanticLinkLabel(url: string): string {
+  const normalized = String(url || "").trim().toLowerCase();
+  if (!normalized) return "Open link";
+  if (normalized.includes("nova.ayahealthcare.com")) return "Open in Nova";
+  if (normalized.includes("ringcentral")) return "Open in RingCentral";
+  if (normalized.includes("outlook.")) return "Open in Outlook";
+  if (normalized.includes("msappproxy")) return "Open secure report";
+  return "Open link";
+}
+
 export function formatMarkdown(text: string): string {
-  const escaped = escapeHtml(text);
+  const escaped = escapeHtml(
+    stripNumericCitationBrackets(String(text || "").replace(/\r\n?/g, "\n")),
+  );
+  const formatLabelValuePair = (
+    _match: string,
+    bulletRaw: string | undefined,
+    labelRaw: string,
+    valueRaw: string,
+  ): string => {
+    const bullet = String(bulletRaw || "");
+    const label = String(labelRaw || "").trim();
+    const value = String(valueRaw || "").trim();
+    const labelKey = label.toLowerCase();
+    if (!label) return _match;
+    if (labelKey === "http:" || labelKey === "https:" || labelKey.includes("http:") || labelKey.includes("https:")) {
+      return _match;
+    }
+
+    const labelNoColon = label.replace(/:\s*$/, "").trim();
+    const sectionLabelLike = /^[IVXLC]+\.\s+[A-Z0-9/&()' .-]+$/i.test(labelNoColon);
+    if (sectionLabelLike && value) {
+      return `${bullet}<h4 class="c-md-section">${labelNoColon}: ${value}</h4>`;
+    }
+
+    if (!value) return `${bullet}<span class="c-md-label">${label}</span>`;
+
+    const isAbsoluteUrl = /^https?:\/\/\S+$/i.test(value);
+    if (isAbsoluteUrl) {
+      const linkText = labelKey.includes("nova")
+        ? "Open in Nova"
+        : labelKey.includes("ringcentral")
+          ? "Open in RingCentral"
+          : labelKey.includes("outlook")
+            ? "Open in Outlook"
+            : "Open link";
+      return `${bullet}<span class="c-md-label">${label}</span> <a class="c-md-link-value" href="${value}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+    }
+
+    const valuePlain = value.replace(/`/g, "").trim();
+    const valueWords = valuePlain.split(/\s+/).filter(Boolean).length;
+    const valueLen = valuePlain.length;
+    const punctuationCount = (value.match(/[,;:]/g) || []).length;
+    const isStatusValue = /^(out|doubtful|questionable|probable|active|inactive|full\s*time|final)$/i.test(
+      valuePlain,
+    );
+    const isStatTriplet = /\b\d{1,3}\s*-\s*\d{1,3}\s*-\s*\d{1,3}\b/.test(valuePlain);
+    const isActionableValue =
+      /(?:^|[\s(])(?:[+-]\d+(?:\.\d+)?)(?=$|[\s)\]])/.test(valuePlain) ||
+      /\b(?:moneyline|ml|puck\s*line|spread|total|over|under)\b/i.test(valuePlain) ||
+      /\(\s*[+-]?\d+(?:\.\d+)?\s*\)/.test(valuePlain);
+
+    const looksLongForm =
+      valueLen > 72 ||
+      valueWords > 10 ||
+      punctuationCount > 1 ||
+      /[.!?]\s+\S/.test(value);
+    const shouldChip =
+      !looksLongForm &&
+      !isStatTriplet &&
+      valueLen <= 44 &&
+      valueWords <= 6 &&
+      (isStatusValue || isActionableValue);
+
+    const valueHtml = shouldChip
+      ? `<strong class="c-md-value-chip ${isStatusValue ? "c-md-value-chip-status" : "c-md-value-chip-action"}">${valuePlain}</strong>`
+      : looksLongForm
+      ? `<span class="c-md-value-text">${value}</span>`
+      : `<span class="c-md-value-text">${value}</span>`;
+    return `${bullet}<span class="c-md-label">${label}</span> ${valueHtml}`;
+  };
+
   let html = escaped
     .replace(/```(\w*)\n([\s\S]*?)```/g, (_match, _lang, code) => {
+      const trimmed = String(code || "").trim();
+      if (trimmed && !trimmed.includes("\n") && trimmed.length <= 84) {
+        return `<strong class="c-md-value-chip c-md-value-chip-action">${trimmed}</strong>`;
+      }
       return `<pre class="c-code"><code>${code}</code></pre>`;
     })
+    .replace(/^\s*([*-]\s+)?\*\*([A-Za-z0-9/&()' .-]{1,80}:)\*\*\s*$/gm, (_match, bulletRaw, labelRaw) => {
+      const bullet = String(bulletRaw || "");
+      const label = String(labelRaw || "").trim();
+      return `${bullet}<span class="c-md-label">${label}</span>`;
+    })
+    .replace(
+      /^([ \t]*(?:\*|-|\d+\.)\s+)\*\*([^*\n]{1,80}?:)\*\*\s*([^\n]+)/gm,
+      formatLabelValuePair,
+    )
+    .replace(
+      /^([ \t]*)\*\*([^*\n]{1,80}?:)\*\*\s*([^\n]+)/gm,
+      formatLabelValuePair,
+    )
+    .replace(
+      /^([ \t]*(?:\*|-|\d+\.)\s+)?([A-Za-z][A-Za-z0-9/&()' .-]{0,80}:)\s*([^\n]+)/gm,
+      formatLabelValuePair,
+    )
     .replace(/^>\s?(.*$)/gm, "$1")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => {
+      const normalizedLabel = String(label || "").trim();
+      const linkText = /^https?:\/\//i.test(normalizedLabel)
+        ? semanticLinkLabel(url)
+        : normalizedLabel || semanticLinkLabel(url);
+      return `<a class="c-md-link-value" href="${url}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+    })
     .replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_match, prefix, url) => {
-      return `${prefix}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+      return `${prefix}<a class="c-md-link-value" href="${url}" target="_blank" rel="noopener noreferrer">${semanticLinkLabel(url)}</a>`;
     })
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.*?)\*/g, "<em>$1</em>")
     .replace(/`([^`]+)`/g, '<code class="c-inline-code">$1</code>')
-    .replace(/^#### (.*$)/gm, '<h4>$1</h4>')
-    .replace(/^### (.*$)/gm, '<h4>$1</h4>')
-    .replace(/^## (.*$)/gm, '<h3>$1</h3>')
-    .replace(/^# (.*$)/gm, '<h3>$1</h3>')
-    .replace(/^\* (.*$)/gm, '<li>$1</li>')
-    .replace(/^- (.*$)/gm, '<li>$1</li>')
-    .replace(/^\d+\.\s(.*$)/gm, '<li>$1</li>')
+    .replace(/^\s*####\s+(.+)$/gm, '<h4>$1</h4>')
+    .replace(/^\s*###\s+(.+)$/gm, '<h4>$1</h4>')
+    .replace(/^\s*##\s+(.+)$/gm, '<h3>$1</h3>')
+    .replace(/^\s*#\s+(.+)$/gm, '<h3>$1</h3>')
+    .replace(/^\s*-{3,}\s*$/gm, '<hr class="c-md-rule" />')
+    .replace(/^\s*\* (.*$)/gm, '<li>$1</li>')
+    .replace(/^\s*- (.*$)/gm, '<li>$1</li>')
+    .replace(/^\s*\d+\.\s(.*$)/gm, '<li>$1</li>')
     .replace(/\n\n/g, "</p><p>")
     .replace(/\n/g, "<br/>");
 
-  html = html.replace(/((<li>.*?<\/li>)(\s*<br\/>)?)+/g, (match) => `<ul>${match.replace(/<br\/>/g, "")}</ul>`);
-  return `<p>${html}</p>`;
+  html = html
+    .replace(/((<li>.*?<\/li>)(\s*<br\/>)?)+/g, (match) => `<ul>${match.replace(/<br\/>/g, "")}</ul>`)
+    .replace(/\s*<hr class="c-md-rule" \/>\s*/g, "</p><hr class=\"c-md-rule\" /><p>")
+    .replace(/<p>\s*(<(?:h3|h4|ul|pre|hr)[\s\S]*?<\/(?:h3|h4|ul|pre)>|<hr[^>]*>)\s*<\/p>/g, "$1");
+  const wrapped = `<p>${html}</p>`;
+  return wrapped.replace(
+    /<p>\s*(<(?:h3|h4|ul|pre)\b[^>]*>[\s\S]*?<\/(?:h3|h4|ul|pre)>|<hr\b[^>]*\/?>)\s*<\/p>/g,
+    "$1",
+  )
+    .replace(/<p>\s*<br\/>/g, "<p>")
+    .replace(/<br\/>\s*<\/p>/g, "</p>")
+    .replace(/<p>\s*<\/p>/g, "");
 }
 
 export function formatCopyReadyText(markdown: string): string {
   if (!markdown) return "";
-  return markdown
+  return stripNumericCitationBrackets(markdown)
     .replace(/```[\w-]*\n([\s\S]*?)```/g, (_match, block) => `${String(block || "").trim()}\n\n`)
     .replace(/^>\s?/gm, "")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1")
@@ -382,6 +504,18 @@ export function formatShortDate(value: string | null | undefined): string {
   }).format(parsed);
 }
 
+export function formatTouchPriorityReason(value: string | null | undefined): string {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+  // Title-case and clean underscores/dashes
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function formatLongDate(value: string | null | undefined): string {
   if (!value) return "--";
   const parsed = new Date(value);
@@ -517,9 +651,9 @@ export function formatAssignmentWindow(start: string | null | undefined, end: st
     if (hasValidRange) {
       const msPerWeek = 7 * 24 * 60 * 60 * 1000;
       const weeks = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / msPerWeek));
-      return `${weeks} weeks · ${formatLongDate(start)} – ${formatLongDate(end)}`;
+      return `${weeks} weeks · ${formatLongDate(start)} to ${formatLongDate(end)}`;
     }
-    return `${formatLongDate(start)} – ${formatLongDate(end)}`;
+    return `${formatLongDate(start)} to ${formatLongDate(end)}`;
   }
   if (start) return `Starts ${formatLongDate(start)}`;
   return `Through ${formatLongDate(end)}`;
@@ -539,16 +673,6 @@ export function assignmentProgress(start: string | null | undefined, end: string
   };
 }
 
-
-export function formatTouchPriorityReason(value: string | null | undefined): string | null {
-  const raw = readStringSafe(value);
-  if (!raw) return null;
-  const lowered = raw.toLowerCase();
-  if (lowered.includes("fallback timing signal") || lowered.includes("no explicit priority score")) {
-    return "Priority inferred from current status and timing.";
-  }
-  return raw;
-}
 
 export function formatSubmissionDifficulty(value: "easy" | "moderate" | "hard" | null | undefined): string {
   if (value === "easy") return "Easy submittal";
@@ -761,9 +885,9 @@ export function resolveHealthcareEntityFromPrompt(
 }
 
 export const writeOutcomeLabel = (outcome: import("@/lib/types/chat").WriteOutcome) => {
-  if (outcome === "updated") return "Saved";
-  if (outcome === "inserted") return "Saved";
-  if (outcome === "no_change") return "Saved";
+  if (outcome === "updated") return "Updated";
+  if (outcome === "inserted") return "Created";
+  if (outcome === "no_change") return "No change";
   return "Retry";
 };
 

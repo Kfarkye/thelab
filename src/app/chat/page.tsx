@@ -1,7 +1,7 @@
 "use client";
 
 import { useReducer, useRef, useEffect, useCallback, useState, useMemo, FormEvent } from "react";
-import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, UserPlus, Calculator } from "lucide-react";
+import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, UserPlus, Calculator, Link2, Users, CirclePlus } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import type { CommitAction, SandboxPanelMode, SandboxPreview, SandboxTask } from "@/lib/types/sandbox";
@@ -19,6 +19,7 @@ import { MODES } from "@/lib/chat-modes";
 
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessages } from "@/components/chat/ChatMessages";
+import { PicksPanel } from "@/components/picks/PicksPanel";
 import {
   formatMarkdown, formatCopyReadyText, isCopyReadyFenceLanguage, isLikelyRawPayloadBlock,
   buildCopyOnlyMarkdown, buildAssistantDisplayContent, buildUserDisplayContent, formatMessageTimestamp,
@@ -26,7 +27,7 @@ import {
   workspaceScopeFor, getSavedMode, readStringSafe, readNumberSafe, readPercentDecimal, MODE_KEY, storageKey,
   formatShortDate, formatLongDate, formatDateTime, marginDeltaPoints, formatMarginDelta,
   formatRelativeTime, formatShiftWindow, parseTimeToMinutes, formatShiftCadence,
-  formatAssignmentWindow, assignmentProgress, formatTouchPriorityReason, formatSubmissionDifficulty,
+  formatAssignmentWindow, assignmentProgress, formatSubmissionDifficulty,
   formatTournamentStage, normalizeStateToCode, inferHealthcareContextFromPrompt,
   inferHealthcareContextFromLabel, normalizeTextToken, buildLicensingReferenceUrl,
   resolveHealthcareEntityFromPrompt
@@ -37,9 +38,10 @@ const CLEAN_COPY_MODES = new Set<ConsoleMode>([
   "sports",
   "worldcup",
   "ayaops",
+  "clicks",
   "facility",
   "margins",
-  "clicks",
+  "deals",
 ]);
 
 const MODE_CONTEXT_HINTS: Record<ConsoleMode, string> = {
@@ -48,10 +50,11 @@ const MODE_CONTEXT_HINTS: Record<ConsoleMode, string> = {
   code: "Ask for architecture, debugging, implementation, or reviews.",
   worldcup: "Ask about matches, tactical reads, line movement, and today’s slate.",
   ayaops: "Ask about candidates, facilities, rates, deadlines, and message threads.",
+  clicks: "Ask about interested clicks, matched candidates, and tracked listings.",
   facility: "Ask about submittal rules, cancellation risk, extensions, and facility load.",
   margins: "Ask for the margin read, execution risk, and next best action.",
-  agent: "Describe a browser task — the AI will produce structured steps, selectors, and assertions.",
-  clicks: "Ask about interested clicks, market demand, matched leads, and system performance.",
+  agent: "Describe a browser task. The AI will produce structured steps, selectors, and assertions.",
+  deals: "Ask about high margin assignments, deals closing this week, and at-risk contracts.",
 };
 
 const CAPABILITY_OPTIONS: { value: ModelOverride; label: string; hint: string }[] = [
@@ -102,6 +105,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             text: action.payload.text,
             timestamp: new Date(),
             isStreaming: false,
+            isRetryableError: false,
+            retryCount: 0,
+            lastFailureText: null,
+            lastFailureCode: null,
+            lastFailureAt: null,
             workspaceScope: action.payload.workspaceScope || null,
           },
         ],
@@ -117,9 +125,39 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             text: "",
             timestamp: new Date(),
             isStreaming: true,
+            isRetryableError: false,
+            retryCount: 0,
+            requestUserMessageId: action.payload.requestUserMessageId || null,
+            lastFailureText: null,
+            lastFailureCode: null,
+            lastFailureAt: null,
             workspaceScope: action.payload.workspaceScope || null,
           },
         ]
+      };
+    case "RETRY_ASSISTANT_STREAM":
+      return {
+        ...state,
+        loading: true,
+        messages: state.messages.map((m) => {
+          if (m.id !== action.payload.id) return m;
+          return {
+            ...m,
+            text: "",
+            timestamp: new Date(),
+            isStreaming: true,
+            isRetryableError: false,
+            retryCount: (typeof m.retryCount === "number" ? m.retryCount : 0) + 1,
+            writeResult: undefined,
+            toolStatuses: undefined,
+            citations: undefined,
+            queries: undefined,
+            codeBlocks: undefined,
+            durationMs: undefined,
+            modelProvider: undefined,
+            modelId: undefined,
+          };
+        }),
       };
     case "APPEND_ASSISTANT_CHUNK":
       return {
@@ -161,27 +199,38 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             durationMs: action.payload.durationMs,
             modelProvider: action.payload.modelProvider,
             modelId: action.payload.modelId,
+            isRetryableError: false,
             writeResult: m.writeResult || inferred || undefined,
           };
         })
       };
     case "ERROR_ASSISTANT_STREAM":
-      return {
-        ...state, loading: false,
-        messages: state.messages.map((m) =>
-          m.id === action.payload.id
-            ? {
-              ...m,
-              isStreaming: false,
-              text: humanizeStreamError(action.payload.error, action.payload.code),
-              writeResult: {
-                outcome: "failed",
-                code: action.payload.code || "STREAM_ERROR",
-              },
-            }
-            : m
-        )
-      };
+      {
+        const failedAt = new Date().toISOString();
+        return {
+          ...state, loading: false,
+          messages: state.messages.map((m) =>
+            m.id === action.payload.id
+              ? (() => {
+                const errorText = humanizeStreamError(action.payload.error, action.payload.code);
+                return {
+                  ...m,
+                  isStreaming: false,
+                  isRetryableError: true,
+                  text: errorText,
+                  lastFailureText: errorText,
+                  lastFailureCode: action.payload.code || "STREAM_ERROR",
+                  lastFailureAt: failedAt,
+                  writeResult: {
+                    outcome: "failed",
+                    code: action.payload.code || "STREAM_ERROR",
+                  },
+                };
+              })()
+              : m
+          )
+        };
+      }
     case "ADD_CODE_BLOCK":
       return {
         ...state,
@@ -290,39 +339,113 @@ function inferWriteResultFromText(text: string): WriteResultMeta | null {
 function humanizeStreamError(error: string, code?: string): string {
   const raw = String(error || "").trim();
   const lowered = raw.toLowerCase();
-  if (!raw) return "I couldn’t complete that request. Please try again.";
+  if (!raw) return "Request could not be completed. Please try again.";
 
   if (lowered.includes("internal lookup failed")) {
-    return "I couldn’t complete that lookup. Try candidate name or ID and retry.";
+    return "Lookup could not be completed. Try candidate name or ID and retry.";
   }
   if (lowered.includes("tool-required request was not executed") || lowered.includes("internal lookup loop limit")) {
-    return "I couldn’t finish that lookup yet. Try the candidate name or ID and I’ll retry.";
+    return "Lookup is incomplete. Try candidate name or ID and retry.";
   }
   if (lowered.includes("unsupported built-in function") || lowered.includes("unimplemented")) {
     return "That lookup is temporarily unavailable. Please retry in a moment.";
   }
   if (lowered.includes("permission_denied") || lowered.includes("unauthenticated")) {
-    return "I couldn’t access that record right now. Please retry.";
+    return "That record is unavailable right now. Please retry.";
   }
   if (lowered.includes("deadline_exceeded") || lowered.includes("timeout")) {
     return "That request timed out. Please retry.";
   }
   if (lowered.includes("to_email is required")) {
-    return "I couldn’t draft that yet because the candidate email is missing.";
+    return "Draft cannot be generated because the candidate email is missing.";
   }
   if (lowered.includes("connection failed")) {
-    return "I lost connection while fetching that. Try again in a moment.";
+    return "Connection dropped while fetching that. Try again in a moment.";
   }
   if (lowered.includes("malformed nova payload")) {
-    return "I couldn’t read that payload format. Paste the full JSON block and I’ll process it.";
+    return "Payload format is invalid. Paste the full JSON block and retry.";
   }
   if (code === "STREAM_ERROR") {
-    return "I ran into a temporary stream issue. Please retry.";
+    return "Temporary stream issue. Please retry.";
   }
   if (code === "TOOL_EXECUTION_FAILED" && error && error.length > 5) {
     return `Tool execution failed: ${error}`;
   }
-  return "I couldn’t complete that request. Please try again.";
+  return "Request could not be completed. Please try again.";
+}
+
+function summarizeThreadLabel(text: string, maxLength = 52): string {
+  const firstLine = String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean) || "";
+  const cleaned = firstLine
+    .replace(/\s+/g, " ")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+  if (!cleaned) return "";
+  if (cleaned.length <= maxLength) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function shortStableHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function deriveWriteTransactionId(input: {
+  action?: string | null;
+  outcome?: string | null;
+  rowsUpdated?: number | null;
+  payload?: Record<string, unknown> | null;
+}): string {
+  const payload = input.payload || {};
+  const changedFields =
+    payload.changed_fields && typeof payload.changed_fields === "object"
+      ? JSON.stringify(payload.changed_fields)
+      : "";
+  const signature = [
+    String(input.action || payload.action || ""),
+    String(input.outcome || payload.outcome || ""),
+    String(input.rowsUpdated ?? payload.rows_updated ?? ""),
+    String(payload.object_type || ""),
+    String(payload.candidate_id || ""),
+    String(payload.nova_id || ""),
+    String(payload.thread_id || ""),
+    String(payload.note_id || ""),
+    String(payload.event_id || ""),
+    String(payload.write_timestamp || payload.updated_at || payload.created_at || ""),
+    changedFields,
+  ].join("|");
+  return `tx_${shortStableHash(signature)}`;
+}
+
+function writeMessageScore(message: Message): number {
+  let score = 0;
+  if (!message.isStreaming) score += 2;
+  if (!message.isRetryableError) score += 2;
+  if ((message.text || "").trim().length > 0) score += 2;
+  const outcome = message.writeResult?.outcome;
+  if (outcome === "updated" || outcome === "inserted" || outcome === "no_change") score += 3;
+  if (outcome === "failed") score -= 2;
+  score += Number(message.timestamp ? new Date(message.timestamp).getTime() : 0) / 1_000_000_000_000;
+  return score;
+}
+
+function sanitizeToolStatusLabel(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "Working";
+
+  const withoutEmojiPrefix = raw
+    .replace(/^[\s\u200B-\u200D\uFEFF\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]+/gu, "")
+    .replace(/^[\s•·\-–—:]+/g, "")
+    .trim();
+
+  return withoutEmojiPrefix || "Working";
 }
 
 
@@ -602,12 +725,16 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
     const candidates = summary.items.filter((item) => Boolean(item.label));
     if (candidates.length === 0) return [];
     const ranked = [...candidates].sort((a, b) => {
-      const aScore = typeof a.touchPriorityScore === "number" ? a.touchPriorityScore : -1;
-      const bScore = typeof b.touchPriorityScore === "number" ? b.touchPriorityScore : -1;
-      if (aScore !== bScore) return bScore - aScore;
-      const aDays = typeof a.touchDaysToEnd === "number" ? a.touchDaysToEnd : Number.POSITIVE_INFINITY;
-      const bDays = typeof b.touchDaysToEnd === "number" ? b.touchDaysToEnd : Number.POSITIVE_INFINITY;
-      return aDays - bDays;
+      const aDays =
+        typeof a.touchDaysToEnd === "number" && Number.isFinite(a.touchDaysToEnd)
+          ? a.touchDaysToEnd
+          : Number.POSITIVE_INFINITY;
+      const bDays =
+        typeof b.touchDaysToEnd === "number" && Number.isFinite(b.touchDaysToEnd)
+          ? b.touchDaysToEnd
+          : Number.POSITIVE_INFINITY;
+      if (aDays !== bDays) return aDays - bDays;
+      return String(a.label || "").localeCompare(String(b.label || ""));
     });
 
     const top = ranked[0];
@@ -624,7 +751,7 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
       {
         id: "ops-priority",
         title: `${top.label} needs attention`,
-        detail: top.touchPriorityReason || `${top.specialty || top.profession || "Traveler"} · ${top.facilityName || "Facility not set"}`,
+        detail: `${top.specialty || top.profession || "Traveler"} · ${top.facilityName || "Facility not set"}`,
         prompt: `Prep the follow-up message for ${top.label}.`,
         actionLabel: "Draft follow-up",
         tone: "attention",
@@ -638,7 +765,7 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
         detail:
           typeof dueSoon.touchDaysToEnd === "number"
             ? `${dueSoon.touchDaysToEnd} day${dueSoon.touchDaysToEnd === 1 ? "" : "s"} to assignment end`
-            : dueSoon.touchPriorityReason || "Deadline risk detected",
+            : "Deadline risk detected",
         prompt: `What is blocking ${dueSoon.label} and what should I do next?`,
         actionLabel: "Open plan",
       });
@@ -659,6 +786,48 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
   return [];
 }
 
+function buildAyaopsRosterDigest(summary: SummaryData | null): Record<string, unknown> | null {
+  if (!summary || !Array.isArray(summary.items) || summary.items.length === 0) return null;
+
+  const statusCounts = new Map<string, number>();
+  const specialtyCounts = new Map<string, number>();
+
+  for (const item of summary.items) {
+    const rawStatus = String(item.derivedCurrentStatus || item.assignmentStatus || item.status || "")
+      .trim()
+      .toLowerCase();
+    let statusKey = rawStatus;
+    if (rawStatus.includes("pending_start") || rawStatus.includes("prestart")) statusKey = "prestart";
+    else if (rawStatus === "active" || rawStatus.includes("working")) statusKey = "working";
+    else if (rawStatus.includes("in_pipeline") || rawStatus.includes("submitted")) statusKey = "submitted";
+    else if (rawStatus.includes("completed")) statusKey = "completed";
+    else if (rawStatus.includes("cancel")) statusKey = "cancelled";
+    if (statusKey) {
+      statusCounts.set(statusKey, (statusCounts.get(statusKey) || 0) + 1);
+    }
+
+    const specialtyKey = String(item.specialty || item.profession || "")
+      .trim()
+      .toLowerCase();
+    if (specialtyKey) {
+      specialtyCounts.set(specialtyKey, (specialtyCounts.get(specialtyKey) || 0) + 1);
+    }
+  }
+
+  const normalizeMap = (map: Map<string, number>) =>
+    Object.fromEntries(
+      Array.from(map.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 12),
+    );
+
+  return {
+    total: summary.items.length,
+    statuses: normalizeMap(statusCounts),
+    specialties: normalizeMap(specialtyCounts),
+  };
+}
+
 // LeftPanel moved to src/components/chat/LeftPanel.tsx
 import { LeftPanel } from "@/components/chat/LeftPanel";
 
@@ -671,6 +840,7 @@ function RightPanel({
   imagesLoading,
   onUseImage,
   onTogglePin,
+  onAddCandidate,
   onLinkCandidate,
   onProcessCredential,
   selectedCandidateId,
@@ -682,6 +852,7 @@ function RightPanel({
   imagesLoading: boolean;
   onUseImage: (image: SavedImage) => void;
   onTogglePin: (image: SavedImage) => void;
+  onAddCandidate: (image: SavedImage) => void;
   onLinkCandidate: (image: SavedImage) => void;
   onProcessCredential?: (image: SavedImage) => void;
   selectedCandidateId: string | null;
@@ -774,7 +945,7 @@ function RightPanel({
                     onClick={() => onUseImage(image)}
                     title="Use this screenshot in chat"
                   >
-                    <img src={image.previewUrl} alt="Saved screenshot" className="rp-image-thumb" />
+                    <img src={image.previewUrl} alt="Recent screenshot" className="rp-image-thumb" />
                   </button>
                   <div className="rp-image-meta">
                     <div className="rp-image-top">
@@ -787,6 +958,9 @@ function RightPanel({
                     </div>
                     <div className="rp-image-actions">
                       <button className="rp-image-action" onClick={() => onUseImage(image)}>Use in chat</button>
+                      <button className="rp-image-action" onClick={() => onAddCandidate(image)}>
+                        Add candidate
+                      </button>
                       <button className="rp-image-action" onClick={() => onTogglePin(image)}>
                         {image.isPinned ? "Unpin" : "Pin"}
                       </button>
@@ -820,6 +994,35 @@ function RightPanel({
             })}
           </div>
         )}
+      </div>
+    </aside>
+  );
+}
+
+function PicksRightPanel({
+  summary,
+  onPrompt,
+  onClose,
+}: {
+  summary: SummaryData | null;
+  onPrompt: (prompt: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <aside className="rp-shell rp-shell-picks">
+      <div className="rp-header">
+        <h2 className="rp-title">Picks</h2>
+        <button className="rp-close" onClick={onClose}>
+          <X size={14} />
+        </button>
+      </div>
+      <div className="rp-picks-body">
+        <PicksPanel
+          picks={summary?.sportsPicks || []}
+          games={summary?.items || []}
+          track={summary?.sportsTrackRecord || null}
+          onPrompt={onPrompt}
+        />
       </div>
     </aside>
   );
@@ -920,6 +1123,7 @@ export default function ChatPage() {
   const [approvingSnapshotMessageId, setApprovingSnapshotMessageId] = useState<string | null>(null);
   const [mobileRailOpen, setMobileRailOpen] = useState(false);
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [ayaAdminMode, setAyaAdminMode] = useState(false);
 
   // Artifact Canvas
   const [artifactContent, setArtifactContent] = useState<string | null>(null);
@@ -944,20 +1148,51 @@ export default function ChatPage() {
   const lastAutoOpenedMsgIdRef = useRef<string | null>(null);
 
   const modeConfig = MODES[state.mode];
-  const isOpsMode = state.mode === "ayaops" || state.mode === "facility" || state.mode === "margins";
+  const isOpsMode =
+    state.mode === "ayaops" ||
+    state.mode === "facility" ||
+    state.mode === "margins" ||
+    state.mode === "deals";
   const isReadWorkspaceMode = state.mode === "facility" || state.mode === "margins";
   const activeWorkspaceScope = useMemo(
     () => workspaceScopeFor(state.mode, selectedWorkspaceItem),
     [state.mode, selectedWorkspaceItem],
   );
-  const visibleMessages = useMemo(
-    () => (
-      activeWorkspaceScope
-        ? state.messages.filter((message) => message.workspaceScope === activeWorkspaceScope)
-        : state.messages
-    ),
-    [activeWorkspaceScope, state.messages],
-  );
+  const visibleMessages = useMemo(() => {
+    const scoped = activeWorkspaceScope
+      ? state.messages.filter((message) => message.workspaceScope === activeWorkspaceScope)
+      : state.messages;
+
+    const deduped: Message[] = [];
+    const txIndex = new Map<string, number>();
+
+    for (const message of scoped) {
+      if (message.role !== "assistant") {
+        deduped.push(message);
+        continue;
+      }
+
+      const transactionId = readStringSafe(message.writeResult?.transactionId || "");
+      if (!transactionId) {
+        deduped.push(message);
+        continue;
+      }
+
+      const existingIndex = txIndex.get(transactionId);
+      if (existingIndex == null) {
+        txIndex.set(transactionId, deduped.length);
+        deduped.push(message);
+        continue;
+      }
+
+      const current = deduped[existingIndex];
+      if (writeMessageScore(message) >= writeMessageScore(current)) {
+        deduped[existingIndex] = message;
+      }
+    }
+
+    return deduped;
+  }, [activeWorkspaceScope, state.messages]);
   const todayCards = useMemo(() => buildTodayCards(state.mode, summary), [state.mode, summary]);
 
   const marginTimeline = useMemo(
@@ -1153,6 +1388,48 @@ export default function ChatPage() {
                 .filter((item): item is PanelItem => Boolean(item))
               : rawItems.filter((entry): entry is PanelItem => Boolean(entry && typeof entry === "object")) as PanelItem[];
 
+        const sportsPicksRaw = Array.isArray(payload.sportsPicks) ? payload.sportsPicks : [];
+        const sportsPicks: PanelItem[] = sportsPicksRaw
+          .map((entry, index) => {
+            if (!entry || typeof entry !== "object") return null;
+            const row = entry as Record<string, unknown>;
+            const id = readStringSafe(row.id) || `pick-${index + 1}`;
+            const display = readStringSafe(row.display) || readStringSafe(row.label) || id;
+            return {
+              id,
+              label: display,
+              display,
+              gameId: readStringSafe(row.game_id) || null,
+              marketType: readStringSafe(row.market_type) || null,
+              sideToken: readStringSafe(row.side) || null,
+              line: readNumberSafe(row.line),
+              priority: readStringSafe(row.priority) || null,
+              kicker: readStringSafe(row.kicker) || null,
+              rationale: readStringSafe(row.rationale) || null,
+              event_status: readStringSafe(row.event_status) || null,
+              grading_status: readStringSafe(row.grading_status) || null,
+              result: readNumberSafe(row.result),
+              settlementValue: readNumberSafe(row.settlement_value),
+              live: row.live && typeof row.live === "object" && !Array.isArray(row.live)
+                ? row.live as Record<string, unknown>
+                : null,
+              is_live_stale: Boolean(row.is_live_stale),
+              ticker: readStringSafe(row.ticker) || null,
+              oddsAmerican: readNumberSafe(row.odds_american),
+              lineObservedAt: readStringSafe(row.line_observed_at) || null,
+              closingLine: readNumberSafe(row.closing_line),
+              hubUrl: readStringSafe(row.hub_url) || null,
+              apiUrl: readStringSafe(row.api_url) || null,
+              publicUrl: readStringSafe(row.public_url) || null,
+            } as PanelItem;
+          })
+          .filter((item): item is PanelItem => Boolean(item));
+
+        const sportsTrackRecordRaw =
+          payload.sportsTrackRecord && typeof payload.sportsTrackRecord === "object"
+            ? payload.sportsTrackRecord as Record<string, unknown>
+            : null;
+
         setSummary({
           pulse,
           items: normalizedItems,
@@ -1162,6 +1439,19 @@ export default function ChatPage() {
           topProfessions: Array.isArray(payload.topProfessions)
             ? payload.topProfessions as { name: string; count: number }[]
             : undefined,
+          sportsPicks,
+          sportsTrackRecord: sportsTrackRecordRaw
+            ? {
+              sample_size: readNumberSafe(sportsTrackRecordRaw.sample_size) || 0,
+              wins: readNumberSafe(sportsTrackRecordRaw.wins) || 0,
+              losses: readNumberSafe(sportsTrackRecordRaw.losses) || 0,
+              pushes: readNumberSafe(sportsTrackRecordRaw.pushes) || 0,
+              voids: readNumberSafe(sportsTrackRecordRaw.voids) || 0,
+              units: readNumberSafe(sportsTrackRecordRaw.units) || 0,
+              record: readStringSafe(sportsTrackRecordRaw.record) || "0 to 0 to 0",
+              matured: Boolean(sportsTrackRecordRaw.matured),
+            }
+            : null,
         });
       } else {
         let errorMessage = `Summary request failed (${res.status})`;
@@ -1189,6 +1479,8 @@ export default function ChatPage() {
     dispatch({ type: "SET_MODE", payload: savedMode });
     const saved = loadFromStorage(savedMode);
     if (saved.length > 0) dispatch({ type: "HYDRATE", payload: saved });
+    setRightPanelMode(savedMode === "sports" ? "picks" : "closed");
+    setSourcesMsg(null);
     ensureConversationId(savedMode);
     fetchSummary(savedMode);
   }, [ensureConversationId, fetchSummary]);
@@ -1218,6 +1510,7 @@ export default function ChatPage() {
 
     if (
       rightPanelMode !== "sandbox" &&
+      rightPanelMode !== "picks" &&
       ((lastAssistant.citations && lastAssistant.citations.length > 0) ||
         (lastAssistant.queries && lastAssistant.queries.length > 0)) &&
       !lastAssistant.isStreaming &&
@@ -1238,7 +1531,7 @@ export default function ChatPage() {
     localStorage.setItem(MODE_KEY, newMode);
     const saved = loadFromStorage(newMode);
     dispatch({ type: "HYDRATE", payload: saved });
-    setRightPanelMode("closed");
+    setRightPanelMode(newMode === "sports" ? "picks" : "closed");
     setSourcesMsg(null);
     setPendingSavedImage(null);
     fetchSummary(newMode);
@@ -1380,12 +1673,17 @@ export default function ChatPage() {
 
     if (state.mode === "sports") {
       setSelectedWorkspaceItem(null);
-      const matchup = item.away && item.home
-        ? `${item.away} vs ${item.home}`
-        : item.label;
       dispatch({ type: "SET_SELECTED_CANDIDATE", payload: null });
-      dispatch({ type: "SET_INPUT", payload: `What's the latest on ${matchup}?` });
-      inputRef.current?.focus();
+      const canonicalUrl = item.publicUrl || item.apiUrl || item.hubUrl || "";
+      if (canonicalUrl) {
+        window.open(canonicalUrl, "_blank", "noopener,noreferrer");
+      } else {
+        const matchup = item.away && item.home
+          ? `${item.away} vs ${item.home}`
+          : item.label;
+        dispatch({ type: "SET_INPUT", payload: `What's the latest on ${matchup}?` });
+        inputRef.current?.focus();
+      }
       return;
     }
 
@@ -1427,7 +1725,8 @@ export default function ChatPage() {
     }
 
     if (state.mode === "ayaops" && item.id) {
-      setSelectedWorkspaceItem(null);
+      setSelectedWorkspaceItem(item);
+      if (!item.id || !item.label) throw new Error("AYA_OPS_INVARIANT: Candidate lacks minimum identity for Top Bar hydration.");
       try {
         const res = await fetch(`/api/candidates/${item.id}`);
         if (res.ok) {
@@ -1441,15 +1740,10 @@ export default function ChatPage() {
               contextText: data.contextText,
             },
           });
-          const scorePrefix =
-            typeof item.touchPriorityScore === "number"
-              ? `Priority score ${item.touchPriorityScore}/100${item.touchPriorityReason ? ` (${item.touchPriorityReason})` : ""}. `
-              : "";
-          const noteSeed = item.touchNoteSeed ? `Use this outreach context: ${item.touchNoteSeed}. ` : "";
           dispatch({
             type: "SET_INPUT",
             payload:
-              `${scorePrefix}Summarize ${data.candidate.name || item.label}'s current status, then draft a short recruiter touch-base note I can paste into the record today. ${noteSeed}`.trim(),
+              `Summarize ${data.candidate.name || item.label}'s current status, then draft a short recruiter touch-base note I can paste into the record today.`,
           });
           inputRef.current?.focus();
           return;
@@ -1468,6 +1762,33 @@ export default function ChatPage() {
   const handleUseSavedImage = (image: SavedImage) => {
     dispatch({ type: "SET_PENDING_IMAGE", payload: null });
     setPendingSavedImage(image);
+    inputRef.current?.focus();
+  };
+
+  const handleAddCandidateFromSavedImage = (image: SavedImage) => {
+    dispatch({ type: "SET_PENDING_IMAGE", payload: null });
+    dispatch({ type: "SET_IMAGE_INTENT", payload: "add_candidate" });
+    setPendingSavedImage(image);
+    if (!state.input.trim()) {
+      dispatch({ type: "SET_INPUT", payload: "Add this candidate to the system from the screenshot." });
+    }
+    inputRef.current?.focus();
+  };
+
+  const handleQuickAddCandidate = () => {
+    if (state.loading || uploadingImage) return;
+    if (state.mode !== "ayaops") {
+      switchMode("ayaops");
+    }
+    dispatch({ type: "SET_PENDING_IMAGE", payload: null });
+    setPendingSavedImage(null);
+    dispatch({ type: "SET_IMAGE_INTENT", payload: "add_candidate" });
+    if (!state.input.trim()) {
+      dispatch({ type: "SET_INPUT", payload: "Add this candidate to the system from the screenshot." });
+    }
+    window.setTimeout(() => {
+      fileInputRef.current?.click();
+    }, 0);
     inputRef.current?.focus();
   };
 
@@ -1596,6 +1917,12 @@ export default function ChatPage() {
               objectType: "healthcare_research_snapshot",
               rowsUpdated: 1,
               code: null,
+              transactionId: deriveWriteTransactionId({
+                action: "approve_research_snapshot",
+                outcome,
+                rowsUpdated: 1,
+                payload: result,
+              }),
               payload: result,
             },
           },
@@ -1604,11 +1931,11 @@ export default function ChatPage() {
         const summaryLine = readStringSafe(result.change_summary);
         if (isFirstVersion) {
           appendAssistantSystemMessage(
-            `✓ Approved snapshot saved for ${context.state} · ${context.profession}. First approved version captured.`,
+            `Approved snapshot recorded for ${context.state} · ${context.profession}. First approved version captured.`,
           );
         } else {
           appendAssistantSystemMessage(
-            `✓ Approved snapshot saved for ${context.state} · ${context.profession}. ${summaryLine || "Comparison recorded."}`,
+            `Approved snapshot recorded for ${context.state} · ${context.profession}. ${summaryLine || "Comparison recorded."}`,
           );
         }
 
@@ -1619,7 +1946,7 @@ export default function ChatPage() {
         }
       } catch (error) {
         const messageText = error instanceof Error ? error.message : "Approval failed";
-        appendAssistantSystemMessage(`✗ Snapshot approval failed: ${messageText}`);
+        appendAssistantSystemMessage(`Snapshot approval failed: ${messageText}`);
       } finally {
         setApprovingSnapshotMessageId(null);
       }
@@ -1715,6 +2042,12 @@ export default function ChatPage() {
               objectType: "candidate",
               rowsUpdated: 1,
               code: null,
+              transactionId: deriveWriteTransactionId({
+                action: "candidate_ingest",
+                outcome,
+                rowsUpdated: 1,
+                payload: result as Record<string, unknown>,
+              }),
               payload: result,
             },
           },
@@ -1753,7 +2086,7 @@ export default function ChatPage() {
   const handleProcessCredential = async (image: SavedImage) => {
     dispatch({
       type: "ADD_ASSISTANT_MESSAGE",
-      payload: { id: String(Date.now()), text: `🔄 Processing credential OCR for image: ${image.imageId}...` }
+      payload: { id: String(Date.now()), text: `Processing credential OCR for image: ${image.imageId}...` }
     });
     try {
       const res = await fetch("/api/credentials/intake", {
@@ -1852,7 +2185,7 @@ export default function ChatPage() {
           error,
           resolvedAt: new Date(),
         }));
-        appendAssistantSystemMessage(`✗ Failed: ${error}`);
+        appendAssistantSystemMessage(`Commit failed: ${error}`);
         return;
       }
 
@@ -1864,21 +2197,21 @@ export default function ChatPage() {
       }));
       const actionName = payload.result?.action || "";
       if (actionName === "send_email_now") {
-        appendAssistantSystemMessage(`✓ Sent: ${task.title}`);
+        appendAssistantSystemMessage(`Sent: ${task.title}`);
       } else if (actionName === "create_email_draft") {
-        appendAssistantSystemMessage(`✓ Draft saved: ${task.title}`);
+        appendAssistantSystemMessage(`Draft created: ${task.title}`);
       } else if (actionName === "create_agent_handoff_task") {
         const handoffUrl =
           typeof payload.result?.handoff_url === "string" && payload.result.handoff_url
             ? payload.result.handoff_url
             : null;
         if (handoffUrl) {
-          appendAssistantSystemMessage(`✓ Handoff ready: ${task.title}\n${handoffUrl}`);
+          appendAssistantSystemMessage(`Handoff ready: ${task.title}\n${handoffUrl}`);
         } else {
-          appendAssistantSystemMessage(`✓ Handoff task created: ${task.title}`);
+          appendAssistantSystemMessage(`Handoff task created: ${task.title}`);
         }
       } else {
-        appendAssistantSystemMessage(`✓ Published: ${task.title}`);
+        appendAssistantSystemMessage(`Published: ${task.title}`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown sandbox commit error";
@@ -1888,7 +2221,7 @@ export default function ChatPage() {
         error: message,
         resolvedAt: new Date(),
       }));
-      appendAssistantSystemMessage(`✗ Failed: ${message}`);
+      appendAssistantSystemMessage(`Commit failed: ${message}`);
     } finally {
       setPendingSandboxCommitId(null);
     }
@@ -1901,42 +2234,82 @@ export default function ChatPage() {
       feedback: feedback || null,
       resolvedAt: new Date(),
     }));
-    appendAssistantSystemMessage("↩ Regenerating with feedback...");
+    appendAssistantSystemMessage("Regenerating with feedback...");
   }, [appendAssistantSystemMessage, updateSandboxTask]);
 
-  const handleSubmit = async (e?: FormEvent, promptOverride?: string) => {
-    if (e) e.preventDefault();
-    const hasPendingImage = Boolean(state.pendingImage || pendingSavedImage);
-    const prompt = (promptOverride ?? state.input).trim() || (hasPendingImage ? "What's in this image?" : "");
-    if ((!prompt && !hasPendingImage) || state.loading) return;
-    const requestWorkspaceScope = workspaceScopeFor(state.mode, selectedWorkspaceItem);
+  const handleEditSandboxEmailDraft = useCallback((
+    taskId: string,
+    draft: { toEmail: string; cc: string[]; subject: string; body: string },
+  ) => {
+    updateSandboxTask(taskId, (current) => {
+      if (current.preview.type !== "email_draft") return current;
 
-    const sentImage = state.pendingImage;
-    const sentSavedImage = pendingSavedImage;
-    const uId = uid();
-    dispatch({
-      type: "ADD_USER_MESSAGE",
-      payload: {
-        text: prompt,
-        id: uId,
-        imageUrl: sentImage || sentSavedImage?.previewUrl || undefined,
-        workspaceScope: requestWorkspaceScope,
-      },
+      const normalizedTo = String(draft.toEmail || "").trim();
+      const normalizedCc = Array.isArray(draft.cc)
+        ? draft.cc.map((entry) => String(entry || "").trim()).filter(Boolean)
+        : [];
+      const normalizedSubject = String(draft.subject || "");
+      const normalizedBody = String(draft.body || "");
+
+      const previewChanged =
+        current.preview.toEmail !== normalizedTo ||
+        current.preview.subject !== normalizedSubject ||
+        current.preview.body !== normalizedBody ||
+        current.preview.cc.join(",") !== normalizedCc.join(",");
+
+      if (!previewChanged) return current;
+
+      const nextPreview = {
+        ...current.preview,
+        toEmail: normalizedTo,
+        cc: normalizedCc,
+        subject: normalizedSubject,
+        body: normalizedBody,
+      };
+
+      let nextCommitAction = current.commitAction;
+      if (current.commitAction.type === "create_email_draft" || current.commitAction.type === "send_email_now") {
+        nextCommitAction = {
+          ...current.commitAction,
+          toEmail: normalizedTo,
+          cc: normalizedCc,
+          subject: normalizedSubject,
+          body: normalizedBody,
+        };
+      }
+
+      return {
+        ...current,
+        preview: nextPreview,
+        commitAction: nextCommitAction,
+      };
     });
-    setPendingSavedImage(null);
+  }, [updateSandboxTask]);
 
-    const aId = uid();
-    dispatch({
-      type: "START_ASSISTANT_STREAM",
-      payload: { id: aId, workspaceScope: requestWorkspaceScope },
-    });
-    startTimeRef.current = performance.now();
+  type RunAssistantStreamParams = {
+    prompt: string;
+    assistantMessageId: string;
+    requestWorkspaceScope: string | null;
+    sentImage: string | null;
+    sentSavedImage: SavedImage | null;
+    sentImageIntent: ImageIntent;
+    historySeedMessages: Message[];
+  };
 
+  const runAssistantStream = async ({
+    prompt,
+    assistantMessageId,
+    requestWorkspaceScope,
+    sentImage,
+    sentSavedImage,
+    sentImageIntent,
+    historySeedMessages,
+  }: RunAssistantStreamParams) => {
     try {
       const historyBase = requestWorkspaceScope
-        ? state.messages.filter((message) => message.workspaceScope === requestWorkspaceScope)
-        : state.messages;
-      const history = historyBase.slice(-10).map(m => ({ role: m.role, text: m.text }));
+        ? historySeedMessages.filter((message) => message.workspaceScope === requestWorkspaceScope)
+        : historySeedMessages;
+      const history = historyBase.slice(-10).map((message) => ({ role: message.role, text: message.text }));
       const healthcareEntity =
         state.mode === "healthcare"
           ? resolveHealthcareEntityFromPrompt(prompt, summary?.items || [], selectedWorkspaceItem)
@@ -2015,8 +2388,7 @@ export default function ChatPage() {
           })()
           : null;
 
-      const selectedCandidateContext =
-        selectedContextFromSelection || selectedContextFromRail || null;
+      const selectedCandidateContext = selectedContextFromSelection || selectedContextFromRail || null;
 
       const selectedMarginContext: SelectedMarginContextPayload | null =
         state.mode === "margins" && selectedWorkspaceItem
@@ -2040,9 +2412,9 @@ export default function ChatPage() {
             shift_end: selectedWorkspaceItem.shiftEnd || null,
           }
           : null;
+      const rosterDigest =
+        state.mode === "ayaops" ? buildAyaopsRosterDigest(summary) : null;
 
-      // Build request body with optional retrieval policy for internal records
-      const sentImageIntent = state.imageIntent;
       const chatBody: Record<string, unknown> = {
         prompt,
         history,
@@ -2057,6 +2429,7 @@ export default function ChatPage() {
           candidateId: selectedCandidateContext?.candidate_id || null,
           candidateName: selectedCandidateContext?.candidate_name || null,
           activeItems: state.mode === "code" ? summary?.items : undefined,
+          rosterDigest,
         },
       };
 
@@ -2119,18 +2492,21 @@ export default function ChatPage() {
               if (!hasReferenceLink) {
                 const referenceLine = `\n\nReference page: [${healthcareEntity.label}](${healthcareEntity.url})`;
                 assistantTextBuffer += referenceLine;
-                dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: aId, textChunk: referenceLine } });
+                dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: assistantMessageId, textChunk: referenceLine } });
               }
             }
             const elapsed = Math.round(performance.now() - startTimeRef.current);
-            dispatch({ type: "FINISH_ASSISTANT_STREAM", payload: { id: aId, durationMs: elapsed, modelProvider, modelId } });
+            dispatch({
+              type: "FINISH_ASSISTANT_STREAM",
+              payload: { id: assistantMessageId, durationMs: elapsed, modelProvider, modelId },
+            });
             continue;
           }
           try {
             const parsed = JSON.parse(dataStr);
             if (parsed.type === "text") {
               assistantTextBuffer += String(parsed.text || "");
-              dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: aId, textChunk: parsed.text } });
+              dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: assistantMessageId, textChunk: parsed.text } });
             } else if (
               parsed.type === "sandbox_document" ||
               parsed.type === "sandbox_db_write" ||
@@ -2174,14 +2550,17 @@ export default function ChatPage() {
                 error: null,
                 conversationId: conversationIdRef.current || "",
                 mode: state.mode,
-                messageId: aId,
+                messageId: assistantMessageId,
               });
 
               if (!announcedSandboxTasksRef.current.has(taskId)) {
                 announcedSandboxTasksRef.current.add(taskId);
                 dispatch({
                   type: "APPEND_ASSISTANT_CHUNK",
-                  payload: { id: aId, textChunk: `${isOpsMode ? "\n\n" : ""}Preview ready: ${title} — Review in Sandbox` },
+                  payload: {
+                    id: assistantMessageId,
+                    textChunk: `${isOpsMode ? "\n\n" : ""}Preview ready: ${title}. Review in Sandbox.`,
+                  },
                 });
               }
             } else if (parsed.type === "write_result") {
@@ -2191,24 +2570,34 @@ export default function ChatPage() {
                   parsed.payload && typeof parsed.payload === "object"
                     ? (parsed.payload as Record<string, unknown>)
                     : undefined;
+                const transactionIdRaw =
+                  (typeof parsed.transaction_id === "string" && parsed.transaction_id.trim()) ||
+                  (typeof parsed.transactionId === "string" && parsed.transactionId.trim()) ||
+                  "";
+                const transactionId =
+                  transactionIdRaw ||
+                  deriveWriteTransactionId({
+                    action: typeof parsed.action === "string" ? parsed.action : undefined,
+                    outcome,
+                    rowsUpdated: typeof parsed.rowsUpdated === "number" ? parsed.rowsUpdated : null,
+                    payload: writePayload || null,
+                  });
                 dispatch({
                   type: "SET_ASSISTANT_WRITE_RESULT",
                   payload: {
-                    id: aId,
+                    id: assistantMessageId,
                     writeResult: {
                       outcome,
                       action: typeof parsed.action === "string" ? parsed.action : undefined,
                       objectType: typeof parsed.objectType === "string" ? parsed.objectType : undefined,
                       rowsUpdated: typeof parsed.rowsUpdated === "number" ? parsed.rowsUpdated : null,
                       code: typeof parsed.code === "string" ? parsed.code : null,
+                      transactionId,
                       payload: writePayload,
                     },
                   },
                 });
 
-                // ── Reactive left rail update ──────────────────────
-                // When a status write lands, update the matching candidate
-                // card in the left rail immediately — no refresh needed.
                 if (
                   (parsed.action === "update_candidate_status" || parsed.action === "update_candidate_profession") &&
                   writePayload &&
@@ -2217,9 +2606,9 @@ export default function ChatPage() {
                   const candidateId = String(writePayload.candidate_id || "");
                   const novaId = String(writePayload.nova_id || "");
                   if (candidateId || novaId) {
-                    setSummary(prev => {
+                    setSummary((prev) => {
                       if (!prev) return prev;
-                      const updatedItems = prev.items.map(item => {
+                      const updatedItems = prev.items.map((item) => {
                         const itemId = item.candidateId || item.id || "";
                         const itemNovaId = item.novaId || "";
                         const isMatch =
@@ -2248,18 +2637,20 @@ export default function ChatPage() {
               dispatch({
                 type: "ERROR_ASSISTANT_STREAM",
                 payload: {
-                  id: aId,
+                  id: assistantMessageId,
                   error: parsed.message || "No response returned. Please try again.",
                   code: typeof parsed.code === "string" ? parsed.code : undefined,
                 },
               });
             } else if (parsed.type === "tool_status") {
-              const label = typeof parsed.label === "string" ? parsed.label : String(parsed.tool || "");
+              const label = sanitizeToolStatusLabel(
+                typeof parsed.label === "string" ? parsed.label : String(parsed.tool || ""),
+              );
               console.log(`[tool_status] ${parsed.tool} ${parsed.status} ${parsed.latency_ms ?? ""}ms`);
               dispatch({
                 type: "UPSERT_TOOL_STATUS",
                 payload: {
-                  id: aId,
+                  id: assistantMessageId,
                   status: {
                     tool: parsed.tool,
                     status: parsed.status,
@@ -2269,18 +2660,122 @@ export default function ChatPage() {
                 }
               });
             } else if (parsed.type === "grounding") {
-              dispatch({ type: "SET_ASSISTANT_GROUNDING", payload: { id: aId, citations: parsed.citations, queries: parsed.queries } });
+              dispatch({
+                type: "SET_ASSISTANT_GROUNDING",
+                payload: { id: assistantMessageId, citations: parsed.citations, queries: parsed.queries },
+              });
             } else if (parsed.type === "executableCode") {
-              dispatch({ type: "ADD_CODE_BLOCK", payload: { id: aId, code: parsed.code, language: parsed.language } });
+              dispatch({ type: "ADD_CODE_BLOCK", payload: { id: assistantMessageId, code: parsed.code, language: parsed.language } });
             } else if (parsed.type === "codeExecutionResult") {
-              dispatch({ type: "SET_CODE_RESULT", payload: { id: aId, outcome: parsed.outcome, output: parsed.output } });
+              dispatch({
+                type: "SET_CODE_RESULT",
+                payload: { id: assistantMessageId, outcome: parsed.outcome, output: parsed.output },
+              });
             }
-          } catch { /* malformed chunk */ }
+          } catch {
+            // Ignore malformed SSE chunks.
+          }
         }
       }
     } catch (err) {
-      dispatch({ type: "ERROR_ASSISTANT_STREAM", payload: { id: aId, error: err instanceof Error ? err.message : "Try again in a moment." } });
+      dispatch({
+        type: "ERROR_ASSISTANT_STREAM",
+        payload: {
+          id: assistantMessageId,
+          error: err instanceof Error ? err.message : "Try again in a moment.",
+          code: "STREAM_ERROR",
+        },
+      });
     }
+  };
+
+  const handleSubmit = async (e?: FormEvent, promptOverride?: string) => {
+    if (e) e.preventDefault();
+    const hasPendingImage = Boolean(state.pendingImage || pendingSavedImage);
+    const prompt = (promptOverride ?? state.input).trim() || (hasPendingImage ? "What's in this image?" : "");
+    if ((!prompt && !hasPendingImage) || state.loading) return;
+    const requestWorkspaceScope = workspaceScopeFor(state.mode, selectedWorkspaceItem);
+    const sentImage = state.pendingImage;
+    const sentSavedImage = pendingSavedImage;
+    const sentImageIntent = state.imageIntent;
+
+    const userMessageId = uid();
+    dispatch({
+      type: "ADD_USER_MESSAGE",
+      payload: {
+        text: prompt,
+        id: userMessageId,
+        imageUrl: sentImage || sentSavedImage?.previewUrl || undefined,
+        workspaceScope: requestWorkspaceScope,
+      },
+    });
+    setPendingSavedImage(null);
+
+    const assistantMessageId = uid();
+    dispatch({
+      type: "START_ASSISTANT_STREAM",
+      payload: {
+        id: assistantMessageId,
+        workspaceScope: requestWorkspaceScope,
+        requestUserMessageId: userMessageId,
+      },
+    });
+    startTimeRef.current = performance.now();
+
+    await runAssistantStream({
+      prompt,
+      assistantMessageId,
+      requestWorkspaceScope,
+      sentImage,
+      sentSavedImage,
+      sentImageIntent,
+      historySeedMessages: state.messages,
+    });
+  };
+
+  const handleRetryAssistantMessage = async (assistantMessageId: string) => {
+    if (state.loading) return;
+    const assistantIndex = state.messages.findIndex(
+      (message) => message.id === assistantMessageId && message.role === "assistant",
+    );
+    if (assistantIndex < 0) return;
+
+    const assistantMessage = state.messages[assistantIndex];
+    let sourceUserIndex = -1;
+    if (assistantMessage.requestUserMessageId) {
+      sourceUserIndex = state.messages.findIndex(
+        (message) => message.id === assistantMessage.requestUserMessageId && message.role === "user",
+      );
+    }
+    if (sourceUserIndex < 0) {
+      for (let i = assistantIndex - 1; i >= 0; i -= 1) {
+        const candidate = state.messages[i];
+        if (candidate.role !== "user") continue;
+        if ((candidate.workspaceScope || null) !== (assistantMessage.workspaceScope || null)) continue;
+        sourceUserIndex = i;
+        break;
+      }
+    }
+    if (sourceUserIndex < 0) return;
+
+    const sourceUserMessage = state.messages[sourceUserIndex];
+    if (!sourceUserMessage || sourceUserMessage.role !== "user") return;
+
+    const requestWorkspaceScope = sourceUserMessage.workspaceScope || assistantMessage.workspaceScope || null;
+    const historySeedMessages = state.messages.slice(0, sourceUserIndex);
+
+    dispatch({ type: "RETRY_ASSISTANT_STREAM", payload: { id: assistantMessageId } });
+    startTimeRef.current = performance.now();
+
+    await runAssistantStream({
+      prompt: sourceUserMessage.text,
+      assistantMessageId,
+      requestWorkspaceScope,
+      sentImage: sourceUserMessage.imageUrl || null,
+      sentSavedImage: null,
+      sentImageIntent: null,
+      historySeedMessages,
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -2292,15 +2787,94 @@ export default function ChatPage() {
     void handleSubmit(undefined, prompt);
   }, [handleSubmit, state.loading]);
 
+  useEffect(() => {
+    if (state.mode !== "ayaops" && ayaAdminMode) {
+      setAyaAdminMode(false);
+    }
+  }, [ayaAdminMode, state.mode]);
+
+  const toTitleTokens = useCallback((value: string | null | undefined): string => {
+    const normalized = String(value || "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) return "";
+    return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+  }, []);
+
+  const initialsFor = useCallback((value: string | null | undefined): string => {
+    const label = String(value || "").trim();
+    if (!label) return "NA";
+    return label
+      .split(/\s+/)
+      .map((part) => part[0] || "")
+      .join("")
+      .slice(0, 2)
+      .toUpperCase();
+  }, []);
+
+  const activeAyaCandidate = useMemo(() => {
+    if (state.mode !== "ayaops") return null;
+    if (selectedWorkspaceItem) return selectedWorkspaceItem;
+    return (summary?.items?.[0] || null) as PanelItem | null;
+  }, [state.mode, selectedWorkspaceItem, summary?.items]);
+
+  const contextStatusLabel = useMemo(() => {
+    if (!activeAyaCandidate) return "";
+    const rawStatus =
+      activeAyaCandidate.derivedCurrentStatus ||
+      activeAyaCandidate.assignmentStatus ||
+      activeAyaCandidate.status ||
+      "in_conversation";
+    return toTitleTokens(rawStatus);
+  }, [activeAyaCandidate, toTitleTokens]);
+
+  const contextRecentAssignment = useMemo(() => {
+    if (!activeAyaCandidate) return "";
+    const location = [activeAyaCandidate.facilityName, activeAyaCandidate.facilityState]
+      .filter(Boolean)
+      .join(", ");
+    const windowLabel = formatAssignmentWindow(
+      activeAyaCandidate.assignmentStart || null,
+      activeAyaCandidate.assignmentEnd || null,
+    );
+    if (location && windowLabel && windowLabel !== "--") return `${location}, ${windowLabel}`;
+    if (location) return location;
+    return windowLabel !== "--" ? windowLabel : "";
+  }, [activeAyaCandidate]);
+
+  const candidateHubUrl = useMemo(() => {
+    if (!activeAyaCandidate) return "";
+    if (activeAyaCandidate.hubUrl) return activeAyaCandidate.hubUrl;
+    if (activeAyaCandidate.novaId) return `/c/${encodeURIComponent(activeAyaCandidate.novaId)}`;
+    if (activeAyaCandidate.id) return `/api/hub/candidates/${encodeURIComponent(activeAyaCandidate.id)}`;
+    return "";
+  }, [activeAyaCandidate]);
+
   const messageCount = visibleMessages.filter(m => m.role === "user").length;
+  const headerScopeLabel = useMemo(() => {
+    const latestUserMessage = [...visibleMessages]
+      .reverse()
+      .find((message) => message.role === "user" && String(message.text || "").trim().length > 0);
+    const fromThread = latestUserMessage ? summarizeThreadLabel(latestUserMessage.text) : "";
+    if (fromThread) return fromThread;
+    return (
+      selectedWorkspaceItem?.label ||
+      selectedWorkspaceItem?.candidateName ||
+      selectedWorkspaceItem?.facilityName ||
+      "General follow-up"
+    );
+  }, [visibleMessages, selectedWorkspaceItem]);
+  const headerScopePrefix = isOpsMode ? "Team" : "Workspace";
 
   return (
     <div
       className={`ws-shell ${artifactContent ? "ws-artifact-open"
           : rightPanelMode === "sources" ? "ws-sources-open"
+            : rightPanelMode === "picks" ? "ws-picks-open"
             : rightPanelMode === "sandbox" ? "ws-sandbox-open"
               : ""
-        } ${mobileRailOpen ? "ws-mobile-rail-open" : ""} ${
+        } ws-ayaops-v2 ${mobileRailOpen ? "ws-mobile-rail-open" : ""} ${
           leftPanelCollapsed ? "ws-left-collapsed" : ""
         }`}
     >
@@ -2346,6 +2920,13 @@ export default function ChatPage() {
       {/* Center: Header + Messages + Dock */}
       <div className="ws-center" style={{ position: "relative" }}>
         <header className="c-header">
+          <div className="c-header-left">
+            <div className="c-main-crumb">
+              <span className="label">{headerScopePrefix}</span>
+              <span className="sep">/</span>
+              <span className="current">{headerScopeLabel}</span>
+            </div>
+          </div>
           <div className="c-header-right">
             <button
               type="button"
@@ -2355,6 +2936,18 @@ export default function ChatPage() {
             >
               <PanelLeft size={15} />
             </button>
+            {state.mode === "ayaops" && (
+              <button
+                type="button"
+                className={`c-admin-toggle ${ayaAdminMode ? "is-on" : ""}`}
+                onClick={() => setAyaAdminMode((current) => !current)}
+                aria-pressed={ayaAdminMode}
+                aria-label="Toggle admin controls"
+              >
+                <span className="c-admin-toggle-dot" />
+                Admin
+              </button>
+            )}
             {(state.mode === "facility" || state.mode === "margins") && (
               <button
                 type="button"
@@ -2367,7 +2960,7 @@ export default function ChatPage() {
             )}
             <button
               type="button"
-              className="c-sources-btn"
+              className={`c-sources-btn ${rightPanelMode === "sources" ? "is-active" : ""}`}
               onClick={() => {
                 const latestAssistant = [...visibleMessages].reverse().find((m) => m.role === "assistant") || null;
                 setSourcesMsg(latestAssistant);
@@ -2376,17 +2969,27 @@ export default function ChatPage() {
             >
               Sources
             </button>
+            {state.mode === "sports" && (
+              <button
+                type="button"
+                className={`c-sources-btn ${rightPanelMode === "picks" ? "is-active" : ""}`}
+                onClick={() => setRightPanelMode("picks")}
+              >
+                Picks ({summary?.sportsPicks?.length || 0})
+              </button>
+            )}
             <button
               type="button"
               className={`c-sources-btn ${rightPanelMode === "sandbox" ? "is-active" : ""}`}
               onClick={() => setRightPanelMode("sandbox")}
             >
               Sandbox
-              {sandboxTasks.length > 0 ? ` (${sandboxTasks.length})` : ""}
             </button>
-            <Link href="/voice" className="c-voice-link" title="Voice mode">
-              <Mic size={16} />
-            </Link>
+            {state.mode !== "ayaops" && (
+              <Link href="/voice" className="c-voice-link" title="Voice mode">
+                <Mic size={16} />
+              </Link>
+            )}
             {messageCount > 0 && (
               <button
                 className="c-new-btn"
@@ -2399,12 +3002,140 @@ export default function ChatPage() {
                   ensureConversationId(state.mode);
                 }}
               >
-                <Plus size={14} />
                 New
               </button>
             )}
           </div>
         </header>
+
+        {state.mode === "ayaops" && activeAyaCandidate && (
+          <>
+            <section className={`c-context-bar ${ayaAdminMode ? "admin-on" : ""}`}>
+              <div className="c-context-avatar">{initialsFor(activeAyaCandidate.label || activeAyaCandidate.candidateName)}</div>
+              <div className="c-context-info">
+                <div className="c-context-row1">
+                  <span className="c-context-name">
+                    {activeAyaCandidate.label || activeAyaCandidate.candidateName || "Candidate"}
+                  </span>
+                  <span className="c-context-state">{contextStatusLabel || "In Conversation"}</span>
+                </div>
+                <div className="c-context-row2">
+                  <span>
+                    <strong>{activeAyaCandidate.specialty || activeAyaCandidate.profession || "--"}</strong>
+                  </span>
+                  {contextRecentAssignment && (
+                    <span>Recent <strong>{contextRecentAssignment}</strong></span>
+                  )}
+                </div>
+              </div>
+              <div className="c-link-cluster">
+                {activeAyaCandidate.phone ? (
+                  <a className="c-link-btn" href={`tel:${activeAyaCandidate.phone}`} title="RingCentral call">
+                    <Phone size={15} />
+                  </a>
+                ) : (
+                  <span className="c-link-btn is-disabled" aria-hidden="true"><Phone size={15} /></span>
+                )}
+                {activeAyaCandidate.rcThreadUrl || activeAyaCandidate.phone ? (
+                  <a
+                    className="c-link-btn"
+                    href={activeAyaCandidate.rcThreadUrl || `sms:${activeAyaCandidate.phone}`}
+                    target={activeAyaCandidate.rcThreadUrl ? "_blank" : undefined}
+                    rel={activeAyaCandidate.rcThreadUrl ? "noopener noreferrer" : undefined}
+                    title="RingCentral SMS"
+                  >
+                    <MessageSquare size={15} />
+                  </a>
+                ) : (
+                  <span className="c-link-btn is-disabled" aria-hidden="true"><MessageSquare size={15} /></span>
+                )}
+                {activeAyaCandidate.outlookThreadUrl || activeAyaCandidate.candidateEmail ? (
+                  <a
+                    className="c-link-btn"
+                    href={activeAyaCandidate.outlookThreadUrl || `mailto:${activeAyaCandidate.candidateEmail}`}
+                    target={activeAyaCandidate.outlookThreadUrl ? "_blank" : undefined}
+                    rel={activeAyaCandidate.outlookThreadUrl ? "noopener noreferrer" : undefined}
+                    title="Outlook thread"
+                  >
+                    <Mail size={15} />
+                  </a>
+                ) : (
+                  <span className="c-link-btn is-disabled" aria-hidden="true"><Mail size={15} /></span>
+                )}
+                <span className="c-link-divider" />
+                {activeAyaCandidate.novaUrl ? (
+                  <a className="c-link-btn" href={activeAyaCandidate.novaUrl} target="_blank" rel="noopener noreferrer" title="Nova profile">
+                    <CirclePlus size={15} />
+                  </a>
+                ) : (
+                  <span className="c-link-btn is-disabled" aria-hidden="true"><CirclePlus size={15} /></span>
+                )}
+                <span className="c-link-btn is-disabled" aria-hidden="true" title="Teams chat">
+                  <Users size={15} />
+                </span>
+                {ayaAdminMode && (
+                  <>
+                    <span className="c-link-divider" />
+                    {candidateHubUrl ? (
+                      <a className="c-link-btn c-link-btn-admin" href={candidateHubUrl} target="_blank" rel="noopener noreferrer" title="Candidate hub link">
+                        <Link2 size={15} />
+                      </a>
+                    ) : (
+                      <span className="c-link-btn c-link-btn-admin is-disabled" aria-hidden="true">
+                        <Link2 size={15} />
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+
+            <section className={`c-hub-strip ${ayaAdminMode ? "is-on" : ""}`}>
+              <span className="c-hub-strip-label">Hub URL</span>
+              <span className="c-hub-url">{candidateHubUrl || "Unavailable"}</span>
+              <div className="c-hub-actions">
+                <button
+                  type="button"
+                  className="c-hub-action-btn"
+                  disabled={!candidateHubUrl}
+                  onClick={() => {
+                    if (!candidateHubUrl) return;
+                    void navigator.clipboard.writeText(candidateHubUrl);
+                  }}
+                >
+                  <Copy size={12} />
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  className="c-hub-action-btn"
+                  disabled={!candidateHubUrl || !activeAyaCandidate.phone}
+                  onClick={() => {
+                    if (!candidateHubUrl || !activeAyaCandidate.phone) return;
+                    const smsBody = encodeURIComponent(candidateHubUrl);
+                    window.open(`sms:${activeAyaCandidate.phone}?body=${smsBody}`, "_self");
+                  }}
+                >
+                  <MessageSquare size={12} />
+                  Send via SMS
+                </button>
+                <a
+                  className={`c-hub-action-btn c-hub-action-btn-primary ${candidateHubUrl ? "" : "is-disabled"}`}
+                  href={candidateHubUrl || undefined}
+                  target={candidateHubUrl ? "_blank" : undefined}
+                  rel={candidateHubUrl ? "noopener noreferrer" : undefined}
+                  aria-disabled={!candidateHubUrl}
+                  onClick={(event) => {
+                    if (!candidateHubUrl) event.preventDefault();
+                  }}
+                >
+                  <ExternalLink size={12} />
+                  Open hub
+                </a>
+              </div>
+            </section>
+          </>
+        )}
 
 
 
@@ -2452,7 +3183,7 @@ export default function ChatPage() {
             <div className="c-workspace-detail-grid">
               <div>
                 <span>Submittal Rules</span>
-                <strong>{selectedWorkspaceItem.submittalRules || "—"}</strong>
+                <strong>{selectedWorkspaceItem.submittalRules || "--"}</strong>
               </div>
               <div>
                 <span>Difficulty</span>
@@ -2470,7 +3201,7 @@ export default function ChatPage() {
               </div>
               <div>
                 <span>Pay vs Local COL</span>
-                <strong>{selectedWorkspaceItem.payVsLocalCol || "—"}</strong>
+                <strong>{selectedWorkspaceItem.payVsLocalCol || "--"}</strong>
               </div>
               {typeof selectedWorkspaceItem.cancelRatePct === "number" && (
                 <div>
@@ -2711,6 +3442,7 @@ export default function ChatPage() {
           setRightPanelMode={setRightPanelMode}
           handleApproveHealthcareSnapshot={handleApproveHealthcareSnapshot}
           handleAddCandidateToSystem={handleAddCandidateToSystem}
+          onRetryAssistantMessage={handleRetryAssistantMessage}
           copyToClipboard={copyToClipboard}
           modeConfig={modeConfig}
         />
@@ -2734,6 +3466,8 @@ export default function ChatPage() {
           setModelOverride={setModelOverride}
           uploadingImage={uploadingImage}
           CapabilityDropdown={CapabilityDropdown}
+          showQuickAddCandidate={state.mode === "ayaops"}
+          onQuickAddCandidate={handleQuickAddCandidate}
         />
       </div>
 
@@ -2746,6 +3480,7 @@ export default function ChatPage() {
           imagesLoading={imagesLoading}
           onUseImage={handleUseSavedImage}
           onTogglePin={handleToggleImagePin}
+          onAddCandidate={handleAddCandidateFromSavedImage}
           onLinkCandidate={handleLinkImageCandidate}
           onProcessCredential={handleProcessCredential}
           selectedCandidateId={state.selectedCandidate?.id || null}
@@ -2753,6 +3488,17 @@ export default function ChatPage() {
             setRightPanelMode("closed");
             setSourcesMsg(null);
           }}
+        />
+      )}
+
+      {/* Right Panel (Picks) */}
+      {rightPanelMode === "picks" && state.mode === "sports" && (
+        <PicksRightPanel
+          summary={summary}
+          onPrompt={(prompt) => {
+            void handleSubmit(undefined, prompt);
+          }}
+          onClose={() => setRightPanelMode("closed")}
         />
       )}
 
@@ -2764,6 +3510,7 @@ export default function ChatPage() {
           onSelectTask={setActiveSandboxId}
           onApprove={handleApproveSandboxTask}
           onReject={handleRejectSandboxTask}
+          onEditEmailDraft={handleEditSandboxEmailDraft}
           onClose={() => setRightPanelMode("closed")}
           isCommitting={Boolean(pendingSandboxCommitId)}
         />

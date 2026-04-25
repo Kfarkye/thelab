@@ -44,9 +44,9 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Medical Solutions ────────────────────────────────────────
-    if (provider === "medsol" || provider === "all") {
-      const medsolResult = await crawlMedSol(limit, dryRun);
-      results.medsol = medsolResult;
+    // Disabled per user request (Aya only)
+    if (provider === "medsol") {
+      throw new Error("Medical Solutions ingestion is disabled.");
     }
 
     // ── Write to Spanner (if not dry run) ────────────────────────
@@ -92,7 +92,9 @@ async function crawlAya(limit: number): Promise<{
   sitemap_entries: number;
   ids_extracted: number;
 }> {
-  const sitemapUrl = "https://www.ayahealthcare.com/travel-nursing/jobs/sitemap.xml";
+  // Target the specific new index or all-jobs URL.
+  // Note: Aya URLs are opaque (travel-nursing-job/1234567, allied-travel-job/1234567)
+  const sitemapUrl = "https://www.ayahealthcare.com/wp-content/uploads/sites/2/aya-sitemap-all-jobs.xml";
 
   console.log(JSON.stringify({
     severity: "INFO",

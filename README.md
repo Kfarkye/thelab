@@ -34,3 +34,20 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Cloud Run Deployment (The Lab)
+
+This repo deploys with `./deploy-gemini3-chat.sh` and requires:
+
+- `GOOGLE_CLOUD_PROJECT`
+- `VERTEX_AI_AYAOPS_URL_DATASTORE`
+- `GITHUB_TOKEN_SECRET` (Secret Manager secret name that provides runtime `GITHUB_TOKEN`)
+
+Set the secret name, then deploy:
+
+```bash
+export GITHUB_TOKEN_SECRET=github-token
+./deploy-gemini3-chat.sh
+```
+
+Full Git governance secret setup is documented in [docs/GIT_GOVERNANCE_SETUP.md](docs/GIT_GOVERNANCE_SETUP.md).

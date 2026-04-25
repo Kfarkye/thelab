@@ -19,7 +19,8 @@ export async function POST(req: Request) {
         {
           type: "error",
           status: "error",
-          summary: "Missing 'path' parameter. Use: candidates/{name}, templates/{id}, facilities/{name}",
+          summary:
+            "Missing 'path' parameter. Use: candidates/{name}, candidates?specialty=Respiratory&status=working, templates/{id}, facilities/{name}, jobs/{id}, games/{id}, picks/{id}",
           data: null,
           links: {},
         },
@@ -62,12 +63,19 @@ export async function GET(req: Request) {
     return NextResponse.json({
       type: "hub",
       status: "ok",
-      summary: "URL Hub is online. Use ?path=candidates/{name} or POST with { path: '...' }",
+      summary:
+        "URL Hub is online. Use ?path=candidates/{name} or POST with { path: '...' }",
       endpoints: {
         candidates: "?path=candidates/{name_or_id}",
+        candidate_collection:
+          "?path=candidates?specialty=Respiratory%20Therapy&status=working&limit=25",
+        dietitian_collection: "?path=dietitians?specialty=Renal&status=working&limit=25",
         templates: "?path=templates/{id_or_search}",
-        facilities: "?path=facilities/{name} (coming soon)",
-        jobs: "?path=jobs/{id} (coming soon)",
+        template_extension_request: "?path=templates/ops_extension_request",
+        facilities: "?path=facilities/{name}",
+        jobs: "?path=jobs/{id_or_search}",
+        games: "?path=games/{id_or_search}",
+        picks: "?path=picks/{id_or_brief_id}",
       },
     });
   }

@@ -191,7 +191,7 @@ export function parseMedSolJobUrl(url: string, lastmod: string | null): Normaliz
  */
 export function parseAyaJobUrl(url: string, lastmod: string | null): NormalizedJob | null {
   try {
-    const match = url.match(/\/job\/(\d{7})/);
+    const match = url.match(/(?:\-job|\/job)\/(\d{7})/i);
     if (!match) return null;
     
     return {

@@ -47,6 +47,55 @@ function normalizeForSearch(input: string): string {
     .trim();
 }
 
+function findStaticTemplateByExactId(identifier: string): EmailTemplate | null {
+  const normalizedQuery = normalizeForSearch(identifier);
+  const match = ALL_STATIC_TEMPLATES.find(
+    (template) => normalizeForSearch(template.id) === normalizedQuery,
+  );
+  return match || null;
+}
+
+function buildStaticResolvedResponse(template: EmailTemplate): HubResponse {
+  const blueprint = (typeof template.generateContent === "function")
+    ? template.generateContent({
+      name: "[CandidateName]",
+      email: "[Email]",
+      facility: "[Facility]",
+      city: "[City]",
+      state: "[State]",
+      shiftType: "[Shift]",
+      weeklyHours: 36,
+      startDate: null,
+      endDate: null,
+      taxableRate: 0,
+      weeklyStipend: 0,
+      grossWeeklyPay: 0,
+      specialty: "[Specialty]",
+      jobId: null,
+      candidateId: null,
+      actualMargin: 0,
+    })
+    : null;
+
+  return {
+    type: "template",
+    id: template.id,
+    status: "resolved",
+    summary: `${template.name} | ${template.messageType || "email"} | Required: [${(template.requiredFields || []).join(", ")}]`,
+    data: {
+      id: template.id,
+      name: template.name,
+      category: template.category || "uncategorized",
+      messageType: template.messageType || "email",
+      internalOnly: template.internalOnly || false,
+      requiredFields: template.requiredFields || [],
+      source: "static_fallback",
+      blueprint,
+    },
+    links: buildTemplateLinks(template.id, template.category || "outreach"),
+  };
+}
+
 // ── Score a DB row against query ────────────────────────────────
 function scoreDbMatch(row: TemplateRow, query: string): number {
   const normalizedQuery = normalizeForSearch(query);
@@ -107,6 +156,13 @@ function buildResolvedResponse(row: TemplateRow): HubResponse {
 
 // ── Main resolver ───────────────────────────────────────────────
 export async function resolveTemplate(identifier: string): Promise<HubResponse> {
+  // Prefer exact static ID match so canonical URLs (for example templates/ops_extension_request)
+  // remain deterministic even when DB-backed fuzzy matches exist.
+  const exactStatic = findStaticTemplateByExactId(identifier);
+  if (exactStatic) {
+    return buildStaticResolvedResponse(exactStatic);
+  }
+
   // Try Spanner first
   try {
     const db = getRecruitingDb();
@@ -146,6 +202,11 @@ export async function resolveTemplate(identifier: string): Promise<HubResponse> 
         .sort((a, b) => b.score - a.score);
 
       if (scored.length === 0) {
+        const staticFallback = resolveFromStaticCatalog(identifier);
+        if (staticFallback.status !== "not_found") {
+          return staticFallback;
+        }
+
         // No match — return catalog listing
         return {
           type: "template",
@@ -202,6 +263,11 @@ export async function resolveTemplate(identifier: string): Promise<HubResponse> 
 
 // ── Static catalog fallback ─────────────────────────────────────
 function resolveFromStaticCatalog(identifier: string): HubResponse {
+  const exactStatic = findStaticTemplateByExactId(identifier);
+  if (exactStatic) {
+    return buildStaticResolvedResponse(exactStatic);
+  }
+
   const scoreStaticMatch = (template: EmailTemplate, query: string): number => {
     const normalizedQuery = normalizeForSearch(query);
     const normalizedId = normalizeForSearch(template.id);
@@ -250,28 +316,7 @@ function resolveFromStaticCatalog(identifier: string): HubResponse {
 
   const best = scores[0];
   if (best.score >= 0.8) {
-    const t = best.template;
-    const blueprint = (typeof t.generateContent === 'function')
-      ? t.generateContent({ name: "[CandidateName]", email: "[Email]", facility: "[Facility]", city: "[City]", state: "[State]", shiftType: "[Shift]", weeklyHours: 36, startDate: null, endDate: null, taxableRate: 0, weeklyStipend: 0, grossWeeklyPay: 0, specialty: "[Specialty]", jobId: null, candidateId: null, actualMargin: 0 })
-      : null;
-
-    return {
-      type: "template",
-      id: t.id,
-      status: "resolved",
-      summary: `${t.name} | ${t.messageType || "email"} | Required: [${(t.requiredFields || []).join(", ")}]`,
-      data: {
-        id: t.id,
-        name: t.name,
-        category: t.category || "uncategorized",
-        messageType: t.messageType || "email",
-        internalOnly: t.internalOnly || false,
-        requiredFields: t.requiredFields || [],
-        source: "static_fallback",
-        blueprint,
-      },
-      links: buildTemplateLinks(t.id, t.category || "outreach"),
-    };
+    return buildStaticResolvedResponse(best.template);
   }
 
   return {

@@ -51,6 +51,16 @@ export const MODES: Record<ConsoleMode, ModeConfig> = {
     ],
     placeholder: "Ask about your team...",
   },
+  clicks: {
+    id: "clicks",
+    label: "Clicks",
+    suggestions: [
+      "Show latest interested clicks in Texas",
+      "Who clicked ICU jobs in California",
+      "Any matched candidates from today",
+    ],
+    placeholder: "Ask about interested clicks or demand trends...",
+  },
   facility: {
     id: "facility",
     label: "Facility",
@@ -83,14 +93,14 @@ export const MODES: Record<ConsoleMode, ModeConfig> = {
     ],
     placeholder: "Describe what the browser agent should check...",
   },
-  clicks: {
-    id: "clicks",
-    label: "Clicks",
+  deals: {
+    id: "deals",
+    label: "Deals",
     suggestions: [
-      "Show me the latest interested clicks in Texas",
-      "Are there any matched candidates today?",
-      "Who clicked on ICU jobs in California?",
+      "Show me high margin deals closing this week",
+      "Which deals are at risk of cancellation?",
+      "Summarize the top 5 deals by projected revenue",
     ],
-    placeholder: "Ask about interested clicks or demand trends...",
+    placeholder: "Ask about active deals...",
   },
 };

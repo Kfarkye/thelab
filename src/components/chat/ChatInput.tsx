@@ -1,5 +1,5 @@
 import React, { SetStateAction } from "react";
-import { X, Paperclip, Send } from "lucide-react";
+import { X, Paperclip, Send, UserPlus } from "lucide-react";
 import { ChatState, ChatAction, ModeConfig, ImageIntent, SavedImage, ModelOverride } from "@/lib/types/chat";
 
 interface ChatInputProps {
@@ -20,15 +20,37 @@ interface ChatInputProps {
   setModelOverride: (val: ModelOverride) => void;
   uploadingImage: boolean;
   CapabilityDropdown: any;
+  showQuickAddCandidate?: boolean;
+  onQuickAddCandidate?: () => void;
 }
 
-export function ChatInput({ pendingSavedImage, setPendingSavedImage, state, dispatch, IMAGE_INTENTS, handleSubmit, handleDrop, fileInputRef, handleFileSelect, inputRef, handleKeyDown, handlePaste, modeConfig, modelOverride, setModelOverride, uploadingImage, CapabilityDropdown }: ChatInputProps) {
+export function ChatInput({
+  pendingSavedImage,
+  setPendingSavedImage,
+  state,
+  dispatch,
+  IMAGE_INTENTS,
+  handleSubmit,
+  handleDrop,
+  fileInputRef,
+  handleFileSelect,
+  inputRef,
+  handleKeyDown,
+  handlePaste,
+  modeConfig,
+  modelOverride,
+  setModelOverride,
+  uploadingImage,
+  CapabilityDropdown,
+  showQuickAddCandidate,
+  onQuickAddCandidate,
+}: ChatInputProps) {
   return (
         <div className="c-dock">
           {pendingSavedImage && (
             <div className="c-img-preview">
               <div style={{ position: "relative" }}>
-                <img src={pendingSavedImage.previewUrl} alt="Saved source preview" />
+                <img src={pendingSavedImage.previewUrl} alt="Source preview" />
                 <button className="c-img-dismiss" onClick={() => setPendingSavedImage(null)}>
                   <X size={12} />
                 </button>
@@ -91,6 +113,18 @@ export function ChatInput({ pendingSavedImage, setPendingSavedImage, state, disp
             <button type="button" className="c-attach-btn" onClick={() => fileInputRef.current?.click()}>
               <Paperclip size={16} />
             </button>
+            {showQuickAddCandidate && onQuickAddCandidate && (
+              <button
+                type="button"
+                className="c-add-candidate-btn"
+                onClick={onQuickAddCandidate}
+                disabled={state.loading || uploadingImage}
+                title="Upload a screenshot to add a candidate"
+              >
+                <UserPlus size={14} />
+                <span>Add candidate</span>
+              </button>
+            )}
             <textarea
               ref={inputRef}
               value={state.input}
@@ -117,6 +151,10 @@ export function ChatInput({ pendingSavedImage, setPendingSavedImage, state, disp
                 mode={state.mode}
               />
             </div>
+            <span className="c-compose-hint" aria-hidden="true">
+              <kbd>⌘</kbd>
+              <kbd>↵</kbd>
+            </span>
             <button
               type="submit"
               className={`c-send-btn ${state.loading ? "c-send-loading" : ""} ${(state.input.trim() || state.pendingImage || pendingSavedImage) && !state.loading ? "c-send-ready" : ""}`}

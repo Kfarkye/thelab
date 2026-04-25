@@ -24,7 +24,7 @@
 requireEnv(key)  → throws at boot if missing. NEVER wrap in try/catch.
 optionalEnv(key) → for non-critical config only (heartbeat intervals, etc.)
 ```
-All infrastructure identifiers (`GOOGLE_CLOUD_PROJECT`, `SPANNER_INSTANCE`) use `requireEnv()`. The Dockerfile injects `GOOGLE_CLOUD_PROJECT=workflowos-a0fbf` at build time for Next.js static page generation. **Do NOT add fallbacks like `|| "workflowos-a0fbf"` — the container must crash if env is wrong.**
+All runtime-critical identifiers use `requireEnv()`, including `GOOGLE_CLOUD_PROJECT`, `VERTEX_AI_AYAOPS_URL_DATASTORE`, and `GITHUB_TOKEN`. `SPANNER_INSTANCE` remains optional. The Dockerfile injects `GOOGLE_CLOUD_PROJECT=workflowos-a0fbf` at build time for Next.js static page generation. **Do NOT add fallbacks like `|| "workflowos-a0fbf"` — the container must crash if env is wrong.**
 
 ### 2. Spanner Pool — `src/lib/spanner-pool.ts`
 ```ts
@@ -52,7 +52,15 @@ Every mutation endpoint MUST call `requireAuth()`. Firebase Admin verifies ID to
 The deploy script does:
 1. `docker build --no-cache --platform linux/amd64` (cross-compile for Cloud Run)
 2. `docker push` to Artifact Registry
-3. `gcloud run deploy gemini3-chat`
+3. `gcloud run deploy gemini3-chat` with Secret Manager binding for `GITHUB_TOKEN`
+
+Before deployment, set the required secret name:
+
+```bash
+export GITHUB_TOKEN_SECRET=github-token
+```
+
+Secret setup commands live in `docs/GIT_GOVERNANCE_SETUP.md`.
 
 `.dockerignore` excludes `node_modules/`, `.next/`, `.git/`, `scripts/`, `*.md`. The container installs its own linux/amd64 deps.
 
@@ -254,11 +262,12 @@ npx eslint src/
 npm run build
 
 # Test suite
-npm run test:ci                         # tool-policy + state-normalization + live-emit
+npm run test:ci                         # tool-policy + state-normalization + governance-ledger + live-emit
 npm run test:publisher-invariant        # Redis atomic publisher
 npm run test:candidate-identity         # Candidate identity smoke test
 
 # Deploy (local Docker → Artifact Registry → Cloud Run)
+export GITHUB_TOKEN_SECRET=github-token
 ./deploy-gemini3-chat.sh
 
 # DDL scripts

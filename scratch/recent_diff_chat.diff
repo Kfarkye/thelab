@@ -1,0 +1,2763 @@
+diff --git a/src/app/api/chat/route.ts b/src/app/api/chat/route.ts
+index ed63e54..1357e07 100644
+--- a/src/app/api/chat/route.ts
++++ b/src/app/api/chat/route.ts
+@@ -54,13 +54,11 @@ const ai = new GoogleGenAI({
+ const AYAOPS_WRITE_TOOL_NAMES = new Set([
+   "update_candidate_status",
+   "update_candidate_profession",
++  "update_candidate_name",
+   "add_candidate_note",
+   "create_com_draft_email",
+ ]);
+-const AYAOPS_READ_TOOL_NAMES = new Set([
+-  "fetch_interested_clicks",
+-  "get_demand_trends",
+-]);
++const AYAOPS_READ_TOOL_NAMES = new Set<string>();
+ 
+ const AYAOPS_WRITE_TOOL_DECLARATIONS = DB_TOOL_DECLARATIONS.filter((tool) =>
+   AYAOPS_WRITE_TOOL_NAMES.has(String((tool as { name?: unknown }).name || "")),
+@@ -73,14 +71,14 @@ const AYAOPS_READ_TOOL_DECLARATIONS = DB_TOOL_DECLARATIONS.filter((tool) =>
+ const ACCESS_HUB_DECLARATION = {
+   name: "access_hub",
+   description:
+-    "Access the Data Hub to resolve any entity — candidates, templates, facilities, jobs. Returns identity block + canonical URLs + available actions. Path format: '{entity}/{identifier}' e.g. 'candidates/Fontaine' or 'templates/initial-outreach'. The identifier can be a name, ID, or search term.",
++    "Access the Data Hub to resolve any entity: candidates, templates, facilities, jobs, games, picks. Returns identity block + canonical URLs + available actions. Path format: '{entity}/{identifier}' e.g. 'candidates/Fontaine', 'templates/initial-outreach', 'games/401695431', or 'picks/pick_123'. The identifier can be a name, ID, or search term.",
+   parameters: {
+     type: "object" as const,
+     properties: {
+       path: {
+         type: "string" as const,
+         description:
+-          "Hub path, e.g. 'candidates/Fontaine', 'templates/initial-outreach', 'facilities/Rush'",
++          "Hub path, e.g. 'candidates/Fontaine', 'templates/initial-outreach', 'facilities/Rush', 'games/401695431_nba', 'picks/pick_123'",
+       },
+     },
+     required: ["path"],
+@@ -133,7 +131,17 @@ Be precise about dates, deadlines, and regulatory requirements. Use markdown for
+   sports: `You are a sports intelligence analyst with access to Google Search.
+ The user is in Pacific Time (PT / America/Los_Angeles). Always reference times in PT, not UTC or ET unless comparing.
+ Your expertise: injury reports, lineup changes, late scratches, betting market implications, DFS pricing, playoff scenarios, trade rumors, and game-day intel.
+-Always cite your sources with inline numbers like [1], [2]. Be concise, factual, and direct. Prioritize recency — the freshest data wins. Use markdown formatting.`,
++When the user references a specific game from workspace context, call access_hub({ path: "games/{id}" }) first to ground canonical game URLs and structured game data.
++When the user asks for picks, output normalized pick contracts using canonical enums:
++- market_type: SPREAD | TOTAL | MONEYLINE | PLAYER_PROP
++- side: HOME | AWAY | OVER | UNDER
++- priority_band: FEATURED | STANDARD | WATCH
++- event_status: SCHEDULED | LIVE | FINAL | POSTPONED
++- grading_status: PENDING | WON | LOST | PUSH | VOID
++Use display_text for canonical pick wording.
++Rationale length rule: FEATURED can use up to 280 chars. STANDARD and WATCH must stay at 140 chars or less.
++For consumer settlement phrasing, keep it direct and bet-facing: "covered/hit/missed/lost" plus units. Avoid product-internal phrasing like "added to your track record."
++Do not emit bracketed citation numbers. Fold source attribution into prose when useful, and let the Sources panel carry verification links. Be concise, factual, and direct. Prioritize recency, the freshest data wins. Use markdown formatting.`,
+ 
+   code: `You are a senior software engineer with access to Google Search for documentation lookup.
+ The user is in Pacific Time (PT / America/Los_Angeles).
+@@ -161,6 +169,8 @@ READ PATH (default):
+ - Candidate reads and summaries are grounded from URL sources via the access_hub tool, not ad-hoc candidate search.
+ - Dynamic resolver hub:
+   - access_hub({ path: "candidates/{id_or_name}" }) → canonical candidate grounding payload + available actions.
++  - access_hub({ path: "candidates?specialty={specialty}&status={status}&limit={n}" }) → candidate collection query for list/roster asks.
++  - access_hub({ path: "dietitians?specialty={specialty}&status={status}&limit={n}" }) → shorthand alias for dietitian roster queries.
+   - access_hub({ path: "facilities/{name}" }) → canonical facility grounding payload.
+   - access_hub({ path: "jobs/{id}" }) → canonical job grounding payload.
+   - access_hub({ path: "templates/{id_or_name}" }) → canonical template structure and required fields for drafting.
+@@ -176,27 +186,39 @@ WRITE PATH (mutation only):
+ 
+ MANDATORY RULES:
+ 1. Reads come from grounded URL retrieval via access_hub. Writes go through write tools.
+-2. Resolve identity via URL hub before asking the user for IDs:
++2. COLLECTION NAVIGATION MANDATE: If a recruiter asks for a list (candidates, deals, dietitians, facilities, jobs, submittals, contracts), treat it as queryable system data and run the list query flow, do not decline.
++   - Assume a collection endpoint exists and apply available filters/sorts.
++   - If a requested filter is not supported, return available results plus a clear capability gap in recruiter language, never an inability apology.
++3. Resolve identity via URL hub before asking the user for IDs:
+    - Call access_hub({ path: "candidates/{id_or_name}" }) first.
+    - Once resolved, reuse the returned canonical ID for all tools in that turn.
+-3. If selected candidate context is present, treat it as authoritative unless user names a different candidate.
+-4. If candidate context is active and user says "him/her/them", reuse that candidate context for writes.
+-5. Never simulate tool calls. If a write is requested, execute the real write tool.
+-6. For status-change requests, call update_candidate_status and ground confirmation in returned write payload.
+-7. For note/save/log requests, call add_candidate_note and ground confirmation in returned write payload.
+-8. Only call create_com_draft_email when the user explicitly asks to save/log/store a draft in-system.
++4. If selected candidate context is present, treat it as authoritative unless user names a different candidate.
++5. If candidate context is active and user says "him/her/them", reuse that candidate context for writes.
++6. Never simulate tool calls. If a write is requested, execute the real write tool.
++7. For status-change requests, call update_candidate_status and ground confirmation in returned write payload.
++8. For note/save/log requests, call add_candidate_note and ground confirmation in returned write payload.
++9. Only call create_com_draft_email when the user explicitly asks to save/log/store a draft in-system.
+    If they only want wording/copy, return plain draft text with no write tool.
+-9. For profession/specialty changes, call update_candidate_profession and ground confirmation in returned write payload.
+-10. For copy/paste-ready drafts, never use markdown blockquotes (">") and do not wrap draft text in quotation marks.
+-11. Unless user asks for variants, provide one best draft.
+-12. When RingCentral SMS thread payload is provided, treat it as communications ingest and preserve raw thread details in write summary.
+-13. Use markdown formatting. Be direct and operational.
+-14. ANTI-CONTEXT-BLEED — HARD RULE: Each user message is its OWN intent. Prior conversation does NOT imply the next action.
++10. For profession/specialty changes, call update_candidate_profession and ground confirmation in returned write payload.
++11. For copy/paste-ready drafts, never use markdown blockquotes (">") and do not wrap draft text in quotation marks.
++12. Unless user asks for variants, provide one best draft.
++13. When RingCentral SMS thread payload is provided, treat it as communications ingest and preserve raw thread details in write summary.
++14. Use markdown formatting. Be direct and operational.
++15. ANTI-CONTEXT-BLEED - HARD RULE: Each user message is its OWN intent. Prior conversation does NOT imply the next action.
+     - NEVER draft an email/template unless the user's CURRENT message explicitly contains a word like "draft", "write", "send", "compose", "email", or "margin approval".
+     - "Add this candidate" / "Pull this candidate" = candidate CRUD only. Find them, update them if needed, return their profile. Do NOT draft.
+     - A screenshot upload = extract data from the screenshot. Do NOT assume the user wants a repeat of prior conversation workflows.
+     - If the user's message does not explicitly request a draft, do NOT create one. Zero tolerance.
+-    - If an imageIntent directive is present (e.g. [INTENT: ADD_CANDIDATE]), follow that directive exactly and ignore all prior conversation context.`,
++    - If an imageIntent directive is present (e.g. [INTENT: ADD_CANDIDATE]), follow that directive exactly and ignore all prior conversation context.
++16. TEMPLATE ENFORCEMENT: If a user asks you to draft a specific breakdown, form, or email, you MUST execute access_hub({ path: "templates/<search>" }) FIRST to retrieve the correct structure before returning any copy. Never invent schemas organically.
++17. RECRUITER-FACING RESPONSE VOICE: User-facing chat responses must use plain recruiter language, not operator/admin vocabulary.
++    - Never use first-person system narration ("I updated", "I found", "I successfully...").
++    - Never use operator/developer phrasing such as "Resource Resolved", "Items rendered", "Querying", "endpoint", "payload", "REST", or similar system jargon.
++    - Prefer factual recruiter phrasing such as "12 dietitians match Renal specialty in your book."
++18. DRAFTED COMMUNICATION VOICE: Email/SMS/Teams drafts written on behalf of recruiters preserve first-person recruiter voice ("I", "we").
++19. NO INFRASTRUCTURE LEAKAGE IN CHAT: Never expose URLs, query strings, API paths, tool names, or internal system notes in recruiter-facing responses unless the user explicitly asks for technical details.
++20. LIST INTENT FIT: For list queries, return concise results in recruiter language (count + top matches + suggested next actions). If results only partially match user intent, tighten filters or call out the gap and offer the next refinement.
++21. TYPOGRAPHY: No em-dash or en-dash in user-facing copy, including drafted communications. Use commas, periods, parentheses, or "to".`,
+ };
+ 
+ const WORLDCUP_WRITEUP_BASE_URL = String(process.env.WORLDCUP_WRITEUP_BASE_URL || "https://thedrip.bet/worldcup")
+@@ -218,6 +240,7 @@ const VISION_PROMPTS: Record<string, string> = {
+   healthcare: "You are an expert healthcare document analyst. The user is in Pacific Time (PT). Analyze this image for: credential details (provider, cert type, expiration dates, ID numbers), compliance documents, license information, or any healthcare-related data. Extract all structured information. Use markdown formatting.",
+   sports: "You are an expert sports visual analyst. The user is in Pacific Time (PT). Analyze this image for: box scores, lineups, injury reports, betting slips, DFS screenshots, standings, or any sports-related data. Extract all structured information. Use markdown formatting.",
+   code: "You are an expert code analyst. The user is in Pacific Time (PT). Analyze this image for: code snippets, error messages, stack traces, terminal output, architecture diagrams, database schemas, or any development-related content. Extract the code or error text, identify the issue, and provide a fix. Use markdown formatting with correct language-tagged code blocks.",
++  ayaops: "You are an expert recruiter and healthcare travel staffing visual analyst. Provide a rigorous, structured data extraction of this screenshot. Extract ALL candidate data, assignment parameters (Facility, Start/End Dates, Shift Types, Hours), and specific Financial/Pay data (Taxable Rate, Stipend, Gross Pay). Retain exact numerical values, IDs, and identifiers without modification.",
+ };
+ 
+ const SANDBOX_TOOL_DECLARATIONS = [
+@@ -364,33 +387,33 @@ function safeParseTags(raw: unknown): string[] {
+ 
+ // ── Human-readable tool labels for SSE chips ────────────────────
+ const TOOL_LABELS: Record<string, string> = {
+-  access_hub: "Looking up record…",
+-  search_candidates: "Searching candidates…",
+-  get_candidate_by_id: "Loading candidate…",
+-  list_candidates_by_status: "Listing by status…",
+-  list_stale_prospects: "Finding stale prospects…",
+-  get_candidate_profile_link: "Getting profile link…",
+-  get_internal_grounding_context: "Loading internal context…",
+-  ingest_nova_profile: "Ingesting profile…",
+-  update_candidate_status: "Updating status…",
+-  update_candidate_profession: "Updating profession…",
+-  update_candidate_specialty: "Updating specialty…",
+-  add_candidate_note: "Saving note…",
+-  create_com_draft_email: "Drafting email…",
++  access_hub: "Hub lookup",
++  search_candidates: "Candidate search",
++  get_candidate_by_id: "Candidate lookup",
++  list_candidates_by_status: "Status filter",
++  list_stale_prospects: "Prospect scan",
++  get_candidate_profile_link: "Profile link",
++  get_internal_grounding_context: "Context lookup",
++  ingest_nova_profile: "Profile ingest",
++  update_candidate_status: "Status mutation",
++  update_candidate_profession: "Profession mutation",
++  update_candidate_specialty: "Specialty mutation",
++  add_candidate_note: "Note mutation",
++  create_com_draft_email: "Draft mutation",
+ };
+ const TOOL_LABELS_DONE: Record<string, string> = {
+   access_hub: "Record loaded",
+-  search_candidates: "Search complete",
++  search_candidates: "Search resolved",
+   get_candidate_by_id: "Candidate loaded",
+   list_candidates_by_status: "Candidates listed",
+-  list_stale_prospects: "Prospects found",
++  list_stale_prospects: "Prospects resolved",
+   get_candidate_profile_link: "Profile link ready",
+   get_internal_grounding_context: "Context loaded",
+   ingest_nova_profile: "Profile ingested",
+   update_candidate_status: "Status updated",
+   update_candidate_profession: "Profession updated",
+   update_candidate_specialty: "Specialty updated",
+-  add_candidate_note: "Note saved",
++  add_candidate_note: "Note updated",
+   create_com_draft_email: "Draft created",
+ };
+ 
+@@ -736,6 +759,108 @@ function readString(value: unknown): string {
+   return "";
+ }
+ 
++function deriveAyaopsReadFallbackHubPath(
++  prompt: string,
++  selectedCandidateInput?: string,
++): string {
++  const raw = readString(prompt);
++  if (!raw) return "";
++  const lower = raw.toLowerCase();
++
++  const selected = readString(selectedCandidateInput);
++  if (selected && /\b(him|her|them|candidate|profile|record)\b/.test(lower)) {
++    return `candidates/${selected}`;
++  }
++
++  if (/\bworking\b[\s\w]{0,24}\bcandidates?\b/.test(lower)) return "candidates/working";
++  if (/\bprestart(s)?\b/.test(lower)) return "candidates/prestart";
++  if (/\bdietitian(s)?\b/.test(lower)) return `dietitians/${raw}`;
++  if (/\bcandidates?\b/.test(lower)) return `candidates/${raw}`;
++
++  const lookupMatch = raw.match(
++    /(?:pull up|bring up|show|open|find|get|lookup|look up|check)\s+([A-Za-z][A-Za-z'.-]+(?:\s+[A-Za-z][A-Za-z'.-]+)+)/i,
++  );
++  if (lookupMatch?.[1]) {
++    return `candidates/${lookupMatch[1].trim()}`;
++  }
++
++  return "";
++}
++
++function buildAyaopsHubFallbackText(hubResult: unknown): string {
++  const payload = asJsonRecord(hubResult);
++  if (!payload) return "";
++
++  const type = readString(payload.type).toLowerCase();
++  const status = readString(payload.status).toLowerCase();
++  const summary = readString(payload.summary);
++  const data = asJsonRecord(payload.data);
++
++  if (type === "candidate_collection" && data) {
++    const items = Array.isArray(data.items) ? data.items : [];
++    const countRaw = Number(data.count);
++    const count = Number.isFinite(countRaw) ? countRaw : items.length;
++    const topNames = items
++      .slice(0, 3)
++      .map((item) => readString((item as Record<string, unknown>).name))
++      .filter(Boolean);
++
++    if (count <= 0) return summary || "No matching candidates were found.";
++    if (topNames.length === 0) return `${count} candidates match your filters.`;
++    return `${count} candidates match your filters. Top ${topNames.length}: ${topNames.join(", ")}.`;
++  }
++
++  if (type === "candidate") {
++    if (status === "resolved") return summary || "Candidate record loaded.";
++    if (status === "ambiguous" || status === "not_found") return summary;
++  }
++
++  return summary;
++}
++
++function shortStableHash(value: string): string {
++  let hash = 0x811c9dc5;
++  for (let i = 0; i < value.length; i += 1) {
++    hash ^= value.charCodeAt(i);
++    hash = Math.imul(hash, 0x01000193);
++  }
++  return (hash >>> 0).toString(16).padStart(8, "0");
++}
++
++function deriveWriteResultTransactionId(event: Record<string, unknown>): string {
++  const payload = asJsonRecord(event.payload) || {};
++  const changedFields =
++    payload.changed_fields && typeof payload.changed_fields === "object"
++      ? JSON.stringify(payload.changed_fields)
++      : "";
++  const signature = [
++    readString(event.action || payload.action),
++    readString(event.outcome || payload.outcome),
++    readString(event.objectType || event.object_type || payload.object_type),
++    readString(event.rowsUpdated ?? event.rows_updated ?? payload.rows_updated),
++    readString(event.code || payload.code),
++    readString(payload.candidate_id),
++    readString(payload.nova_id),
++    readString(payload.thread_id),
++    readString(payload.note_id),
++    readString(payload.event_id),
++    readString(payload.write_timestamp || payload.updated_at || payload.created_at),
++    changedFields,
++  ].join("|");
++  return `tx_${shortStableHash(signature)}`;
++}
++
++function buildWriteResultEvent(event: Record<string, unknown>): Record<string, unknown> {
++  if (String(event.type || "") !== "write_result") return event;
++  const transactionId =
++    readString(event.transaction_id) ||
++    readString(event.transactionId) ||
++    deriveWriteResultTransactionId(event);
++  const normalized = { ...event, transaction_id: transactionId } as Record<string, unknown>;
++  if ("transactionId" in normalized) delete normalized.transactionId;
++  return normalized;
++}
++
+ function normalizeHttpUri(value: unknown): string {
+   const uri = readString(value);
+   if (!uri) return "";
+@@ -875,6 +1000,77 @@ function buildUserFacingLookupErrorMessage(toolName: string, rawError: unknown):
+   return `Could not complete ${name.replace(/_/g, " ")} right now. Please retry.`;
+ }
+ 
++type AyaopsRosterDigest = {
++  total: number;
++  statuses: Record<string, number>;
++  specialties: Record<string, number>;
++};
++
++function normalizeAyaopsRosterDigest(input: unknown): AyaopsRosterDigest | null {
++  const record = asJsonRecord(input);
++  if (!record) return null;
++
++  const totalRaw = Number(record.total);
++  const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? Math.floor(totalRaw) : 0;
++
++  const normalizeBucket = (value: unknown): Record<string, number> => {
++    const bucket = asJsonRecord(value);
++    if (!bucket) return {};
++    const entries = Object.entries(bucket)
++      .map(([key, count]) => {
++        const normalizedKey = readString(key).toLowerCase();
++        const normalizedCount = Number(count);
++        if (!normalizedKey || !Number.isFinite(normalizedCount) || normalizedCount <= 0) return null;
++        return [normalizedKey, Math.floor(normalizedCount)] as const;
++      })
++      .filter((entry): entry is readonly [string, number] => Boolean(entry))
++      .sort((a, b) => b[1] - a[1])
++      .slice(0, 12);
++    return Object.fromEntries(entries);
++  };
++
++  const statuses = normalizeBucket(record.statuses);
++  const specialties = normalizeBucket(record.specialties);
++
++  if (total <= 0 && Object.keys(statuses).length === 0 && Object.keys(specialties).length === 0) {
++    return null;
++  }
++
++  return { total, statuses, specialties };
++}
++
++function inferAyaopsCollectionHubPath(prompt: string): string {
++  const normalized = readString(prompt).replace(/\s+/g, " ");
++  if (!normalized) return "";
++
++  if (/^(candidates|dietitians)(\/|\?|$)/i.test(normalized)) {
++    return normalized;
++  }
++
++  const lower = normalized.toLowerCase();
++  const listVerb = /\b(show|list|find|get|pull|rank|sort|filter|which|who|how many|top)\b/.test(lower);
++  const rosterEntity = /\b(candidates?|dietitians?|nurses?|travelers?)\b/.test(lower);
++  const rosterQualifier = /\b(all|working|active|prestart|pending|pipeline|submitted|completed|cold|replied|renal)\b/.test(
++    lower,
++  );
++  const explicitCollectionIntent =
++    /\b(candidates?|dietitians?|nurses?|travelers?)\b/.test(lower) &&
++    /\b(all|list|roster|show|find|get|pull|rank|sort|filter|which|who|how many|top|me)\b/.test(
++      lower,
++    );
++  const singleCandidateLikely =
++    Boolean(inferCandidateNameFromPrompt(normalized)) &&
++    !/\b(all|list|roster|top|how many|which|who)\b/.test(lower);
++
++  if (singleCandidateLikely && !explicitCollectionIntent) return "";
++  if (!((listVerb && (rosterEntity || rosterQualifier)) || (rosterEntity && rosterQualifier))) return "";
++
++  if (/\bdietitians?\b/.test(lower)) {
++    return `dietitians/${normalized}`;
++  }
++  return `candidates/${normalized}`;
++}
++
+ function inferCandidateUrlInput(input: {
+   selectedContext: SelectedCandidateContext | null;
+   uiContext?: { threadId?: string; candidateId?: string; candidateName?: string };
+@@ -892,8 +1088,24 @@ function inferCandidateUrlInput(input: {
+   const uuidMatch = promptText.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i);
+   if (uuidMatch) return uuidMatch[0];
+ 
+-  const novaMatch = promptText.match(/\b\d{6,10}\b/);
+-  if (novaMatch) return novaMatch[0];
++  const labeledNumericIdMatch = promptText.match(
++    /\b(candidate[_\s-]?id|nova[_\s-]?id|candidate|nova)\b[\s:#-]{0,12}(\d{6,10})\b/i,
++  );
++  if (labeledNumericIdMatch?.[2]) return labeledNumericIdMatch[2];
++
++  if (/\b(candidate|nova|profile)\b/i.test(promptText)) {
++    const numericMatches = Array.from(promptText.matchAll(/\b\d{6,10}\b/g));
++    for (const match of numericMatches) {
++      const value = readString(match[0]);
++      if (!value) continue;
++      const start = Number(match.index || 0);
++      const leftWindow = promptText.slice(Math.max(0, start - 24), start).toLowerCase();
++      if (/\b(call|text|sms|phone|tel|mobile)\b/.test(leftWindow)) continue;
++      const rightWindow = promptText.slice(start + value.length, start + value.length + 8);
++      if (/[%$]/.test(rightWindow) || /[%$]/.test(leftWindow)) continue;
++      return value;
++    }
++  }
+ 
+   const fromPromptName = inferCandidateNameFromPrompt(promptText);
+   if (fromPromptName) return fromPromptName;
+@@ -905,21 +1117,51 @@ function inferCandidateUrlInput(input: {
+ }
+ 
+ function inferCandidateNameFromPrompt(prompt: string): string {
+-  const normalized = readString(prompt)?.replace(/\s+/g, " ") || "";
++  const normalized = readString(prompt).replace(/\s+/g, " ");
+   if (!normalized) return "";
+ 
+-  const byVerb = normalized.match(
+-    /\b(?:look up|pull up|find|get|show|summarize|open|status(?: of)?|move|update|draft)\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on)\b|[?.!,]|$)/i,
+-  );
+-  const byCandidate = normalized.match(
++  const patterns = [
++    /\b(?:look up|pull up|find|get|show|summarize|open|status(?: of)?|move|update|draft|about|status of|how is|with|for|tell me about|check on)\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on|with|about)\b|[?.!,]|$)/i,
+     /\bcandidate\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on)\b|[?.!,]|$)/i,
+-  );
++    /\b([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})'s\s+(?:assignment|status|profile|contract|availability|email|phone|details)\b/i,
++  ];
++
++  let candidatePhrase = "";
++  for (const pattern of patterns) {
++    const match = normalized.match(pattern);
++    if (match?.[1]) {
++      candidatePhrase = readString(match[1]);
++      if (candidatePhrase) break;
++    }
++  }
+ 
+-  const candidatePhrase = readString(byVerb?.[1] || byCandidate?.[1]) || "";
+   if (!candidatePhrase) return "";
+ 
+   const lowered = candidatePhrase.toLowerCase();
+-  if (["him", "her", "them", "this candidate", "that candidate", "candidate"].includes(lowered)) {
++  if (
++    [
++      "me",
++      "my",
++      "us",
++      "our",
++      "him",
++      "her",
++      "them",
++      "this candidate",
++      "that candidate",
++      "candidate",
++      "the candidate",
++      "the margin",
++      "a pay",
++      "pay package",
++    ].includes(lowered)
++  ) {
++    return "";
++  }
++
++  if (
++    /\b(candidates?|dietitians?|nurses?|travelers?|prestarts?|roster|list)\b/.test(lowered)
++  ) {
+     return "";
+   }
+ 
+@@ -961,47 +1203,6 @@ function inferCandidateInputFromHistory(history?: { role: string; text: string }
+   return "";
+ }
+ 
+-function buildCandidateGroundingResolverUrl(request: NextRequest, candidateInput: string): string | null {
+-  const host = readString(request.headers.get("x-forwarded-host")) || readString(request.headers.get("host"));
+-  if (!host) return null;
+-  const protocol = readString(request.headers.get("x-forwarded-proto")) || "https";
+-  return `${protocol}://${host}/api/grounding/c/${encodeURIComponent(candidateInput)}`;
+-}
+-
+-function buildCandidateGroundingPageUrl(request: NextRequest, candidateInput: string): string | null {
+-  const host = readString(request.headers.get("x-forwarded-host")) || readString(request.headers.get("host"));
+-  if (!host) return null;
+-  const protocol = readString(request.headers.get("x-forwarded-proto")) || "https";
+-  return `${protocol}://${host}/c/${encodeURIComponent(candidateInput)}`;
+-}
+-
+-function extractCandidateGroundingJsonFromPage(html: string): string | null {
+-  const match = html.match(/<script[^>]*id=["']candidate-grounding-json["'][^>]*>([\s\S]*?)<\/script>/i);
+-  if (!match) return null;
+-  const parsed = readString(match[1]);
+-  if (!parsed) return null;
+-  try {
+-    JSON.parse(parsed);
+-    return parsed;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+-function extractCandidateGroundingJsonFromHub(payload: unknown): string | null {
+-  const parsed = asJsonRecord(payload);
+-  const candidate = asJsonRecord(parsed?.candidate);
+-  if (!candidate) return null;
+-  const serialized = JSON.stringify(candidate);
+-  if (!serialized) return null;
+-  try {
+-    JSON.parse(serialized);
+-    return serialized;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+ const TEMPLATE_CATALOG = [
+   ...OUTREACH_EMAIL_TEMPLATES,
+   ...OPS_EMAIL_TEMPLATES,
+@@ -1082,15 +1283,15 @@ function buildInitialOutreachDraft(args: Record<string, unknown>): RenderedEmail
+   const grossWeeklyPayFormatted = formatCurrency(grossWeeklyPay);
+   const weeklyHoursText = Number.isInteger(weeklyHours) ? String(weeklyHours) : String(weeklyHours);
+ 
+-  const subject = `${specialty} Assignment - ${facilityName} | ${grossWeeklyPayFormatted}/week`;
++  const subject = `${specialty} Assignment at ${facilityName} | ${grossWeeklyPayFormatted}/week`;
+   const body = [
+     `Hi ${firstName},`,
+     ``,
+-    `Thanks for your interest in the ${specialty} position at ${facilityName}. Here's the full breakdown - this looks like a strong fit for your background:`,
++    `Thanks for your interest in the ${specialty} position at ${facilityName}. Here's the full breakdown, this looks like a strong fit for your background:`,
+     ``,
+     `Facility: ${facilityName}`,
+     `Location: ${city}, ${state}`,
+-    `Assignment Dates: ${startDate} - ${endDate}`,
++    `Assignment Dates: ${startDate} to ${endDate}`,
+     `Shifts & Hours: ${shiftType} (${weeklyHoursText} hours/week)`,
+     ``,
+     `Pay Package:`,
+@@ -1098,7 +1299,7 @@ function buildInitialOutreachDraft(args: Record<string, unknown>): RenderedEmail
+     `Meals & Housing Stipend: ${weeklyStipendFormatted}/week`,
+     `Total Gross Weekly Pay: ${grossWeeklyPayFormatted}`,
+     ``,
+-    `This role is moving quickly - I can get you submitted today if everything looks good.`,
++    `This role is moving quickly, I can get you submitted today if everything looks good.`,
+     ``,
+     `To move forward, please confirm:`,
+     `- Are you available to start ${startDate}?`,
+@@ -1192,7 +1393,7 @@ function buildPayPackageSnippetDraft(args: Record<string, unknown>): RenderedEma
+   const body = [
+     `Facility: ${facilityName}`,
+     `Location: ${city}, ${state}`,
+-    `Assignment Dates: ${startDate} - ${endDate}`,
++    `Assignment Dates: ${startDate} to ${endDate}`,
+     `Shifts & Hours/Week: ${shiftType} (${weeklyHoursText} hours/week)`,
+     `Specialty: ${specialty}`,
+     ``,
+@@ -1730,7 +1931,13 @@ export async function POST(request: NextRequest) {
+       selectedMarginContext?: Record<string, unknown>;
+       modelOverride?: ModelId;
+       imageIntent?: string;
+-      uiContext?: { threadId?: string; candidateId?: string; candidateName?: string; activeItems?: Array<Record<string, unknown>> };
++      uiContext?: {
++        threadId?: string;
++        candidateId?: string;
++        candidateName?: string;
++        activeItems?: Array<Record<string, unknown>>;
++        rosterDigest?: Record<string, unknown> | null;
++      };
+     };
+ 
+     if (!prompt || typeof prompt !== "string") {
+@@ -1742,7 +1949,7 @@ export async function POST(request: NextRequest) {
+     const hasImage = hasInlineImage || hasSavedImage;
+     const requestedMode = mode || "sports";
+     const activeMode =
+-      requestedMode === "facility" || requestedMode === "margins" || requestedMode === "clicks"
++      requestedMode === "facility" || requestedMode === "margins"
+         ? "ayaops"
+         : requestedMode;
+     // Architecture drift prevention: strict URL Hub routing only. No ad-hoc search tools.
+@@ -1816,18 +2023,9 @@ MODE OVERRIDE:
+ - Candidate-specific identity, status, and write actions MUST remain grounded to internal DB tools.
+ - Never fabricate internal data. Keep external claims source-cited.`;
+     }
+-    if (!hasImage && requestedMode === "clicks") {
+-      systemPrompt = `${systemPrompt}
+-
+-CLICKS WORKSPACE MODE:
+-- Prioritize click-intelligence workflows over candidate lifecycle workflows.
+-- Use fetch_interested_clicks for recent click activity and matched/unmatched lead slices.
+-- Use get_demand_trends for specialty/state demand analysis over time.
+-- Do not run mutation tools unless the user explicitly requests a write action.`;
+-    }
+-
+     // ── Build user prompt with optional candidate grounding ─────
+     let fullPrompt = prompt;
++    let hasPrefetchedAyaopsObservation = false;
+     if (isInternalRecord && internalContext?.candidate) {
+       const candidateGrounding = formatCandidateContext(internalContext.candidate as CandidateRecord);
+       fullPrompt = `${candidateGrounding}\n\n${prompt}`;
+@@ -1863,7 +2061,7 @@ candidate_name="${resolvedName}"
+ candidate_email="${resolvedEmail}"
+ current_bucket="${currentBucket}"
+ context_source="${contextSource}"
+-CRITICAL: When candidate_id is provided above, you MUST pass it directly to write tools (update_candidate_status, add_candidate_note, create_com_draft_email, update_candidate_profession). Do NOT call access_hub first — the candidate is already resolved. Call the write tool immediately with candidate_id="${authoritativeCandidateId}".]`;
++CRITICAL: When candidate_id is provided above, you MUST pass it directly to write tools (update_candidate_status, add_candidate_note, create_com_draft_email, update_candidate_profession). Do NOT call access_hub first, the candidate is already resolved. Call the write tool immediately with candidate_id="${authoritativeCandidateId}".]`;
+     }
+ 
+     // Inject grounded UI context if available (thread or inferred candidate)
+@@ -1877,11 +2075,17 @@ Rule: If the user asks to "draft a reply", "update status", or references "this
+     }
+     
+     if (activeMode === "code" && uiContext?.activeItems && Array.isArray(uiContext.activeItems)) {
++      const acceptedItems = uiContext.activeItems.filter((item) => {
++        const record = asJsonRecord(item);
++        const status = readString(record?.status);
++        return status.toLowerCase() === "accepted";
++      });
++      const activeLedgerItems = acceptedItems.length > 0 ? acceptedItems : uiContext.activeItems;
+       fullPrompt = `${fullPrompt}
+ 
+ [System note: LIVE ARCHITECTURE LEDGER
+ The following are the active architecture decisions and system rules dynamically loaded from the state ledger:
+-${JSON.stringify(uiContext.activeItems.map((item) => ({
++${JSON.stringify(activeLedgerItems.map((item) => ({
+   verdict: item.label,
+   details: item.preview,
+   status: item.status,
+@@ -1890,90 +2094,164 @@ Rule: Use this active context as the single source of truth for architectural co
+     }
+ 
+     if (activeMode === "ayaops") {
+-      const candidateUrlInput = inferCandidateUrlInput({
+-        selectedContext,
+-        uiContext,
+-        prompt,
+-        history,
+-      });
+-      const candidateResolverUrl =
+-        candidateUrlInput.length > 0
+-          ? buildCandidateGroundingResolverUrl(request, candidateUrlInput)
+-          : null;
++      const rosterDigest = normalizeAyaopsRosterDigest(uiContext?.rosterDigest);
++      if (rosterDigest) {
++        fullPrompt = `${fullPrompt}
++
++[System note: ROSTER_MAP
++You are managing ${rosterDigest.total} candidates.
++Status distribution: ${Object.entries(rosterDigest.statuses)
++  .map(([status, count]) => `${status}:${count}`)
++  .join(", ") || "none"}.
++Specialty distribution: ${Object.entries(rosterDigest.specialties)
++  .map(([specialty, count]) => `${specialty}(${count})`)
++  .join(", ") || "none"}.
++If asked for a list, prefer grounded collection retrieval and refine by intent.]`;
++      }
+ 
+-      if (candidateResolverUrl) {
++      const formatResolverCandidateOption = (entry: unknown): string => {
++        const record = asJsonRecord(entry);
++        const name = readString(record?.display_name || record?.name) || "Unknown candidate";
++        const candidateId = readString(record?.candidate_id || record?.id) || "";
++        const novaId = readString(record?.nova_id) || "";
++        const specialty = readString(record?.specialty) || "";
++        const status = readString(record?.assignment_status || record?.status) || "";
++        const facilityName = readString(record?.facility_name) || "";
++        const facilityCity = readString(record?.facility_city) || "";
++        const facilityState = readString(record?.facility_state) || "";
++        const recentActivityAt =
++          readString(record?.recent_activity_at || record?.recentActivityAt) || "";
++
++        const contextSegments: string[] = [];
++        if (specialty) contextSegments.push(`specialty: ${specialty}`);
++        if (status) contextSegments.push(`status: ${status}`);
++        if (facilityName || facilityCity || facilityState) {
++          const loc = [facilityCity, facilityState].filter(Boolean).join(", ");
++          contextSegments.push(`location: ${facilityName}${loc ? ` (${loc})` : ""}`);
++        }
++        if (recentActivityAt) contextSegments.push(`recent activity: ${recentActivityAt}`);
++
++        return `${name}${candidateId ? ` (candidate_id: ${candidateId})` : ""}${novaId ? ` (nova_id: ${novaId})` : ""}${contextSegments.length > 0 ? ` | ${contextSegments.join(" | ")}` : ""}`;
++      };
++
++      const collectionPath = inferAyaopsCollectionHubPath(prompt);
++      if (collectionPath) {
+         try {
+-          const resolverResponse = await fetch(candidateResolverUrl, {
+-            cache: "no-store",
+-            headers: { "User-Agent": "thelab-candidate-grounding-fetch/1.0" },
+-          });
+-
+-          if (resolverResponse.ok) {
+-            const resolverPayload = (await resolverResponse.json()) as Record<string, unknown>;
+-            const sourceJson = extractCandidateGroundingJsonFromHub(resolverPayload);
+-            const resolvedIdentifier = asJsonRecord(resolverPayload.resolved_identifier);
+-            const resolvedCandidateId = readString(resolvedIdentifier?.candidate_id) || "";
+-            const resolvedName = readString(resolvedIdentifier?.display_name) || "";
+-            const actionUrl = readString(resolverPayload.action_url) || "";
+-            if (sourceJson) {
++          const collectionResult = await resolveHub(collectionPath);
++          if (
++            collectionResult.status === "resolved" &&
++            collectionResult.type === "candidate_collection"
++          ) {
++            const collectionData = asJsonRecord(collectionResult.data);
++            const collectionItemsRaw = Array.isArray(collectionData?.items)
++              ? collectionData.items
++              : [];
++            const collectionItems = collectionItemsRaw
++              .slice(0, 10)
++              .map((entry) => {
++                const record = asJsonRecord(entry);
++                return {
++                  id: readString(record?.id) || null,
++                  name: readString(record?.name) || null,
++                  specialty: readString(record?.specialty) || null,
++                  profession: readString(record?.profession) || null,
++                  status: readString(record?.status || record?.assignment_status) || null,
++                  facility: readString(record?.facility_name) || null,
++                  state: readString(record?.facility_state || record?.home_state) || null,
++                  assignment_end: readString(record?.assignment_end) || null,
++                  last_contact_at: readString(record?.last_contact_at) || null,
++                };
++              })
++              .filter((entry) => Boolean(entry.name));
++            const countRaw = Number(collectionData?.count);
++            const count = Number.isFinite(countRaw) ? countRaw : collectionItemsRaw.length;
++            const observationPayload = {
++              type: collectionResult.type,
++              status: collectionResult.status,
++              summary: collectionResult.summary,
++              count,
++              filters_applied: asJsonRecord(collectionData?.filters_applied) || {},
++              capability_gaps: Array.isArray(collectionData?.capability_gaps)
++                ? collectionData?.capability_gaps
++                : [],
++              items: collectionItems,
++            };
++            const observationJson = JSON.stringify(observationPayload);
++            if (observationJson) {
++              fullPrompt = `${fullPrompt}
++
++[System note: CURRENT_OBSERVATION (collection prefetch from URL hub)
++${observationJson}]`;
++              hasPrefetchedAyaopsObservation = true;
++            }
++          } else {
++            const summary = readString(collectionResult.summary);
++            if (summary) {
+               fullPrompt = `${fullPrompt}
+ 
++[System note: Collection prefetch returned non-resolved status.
++path="${collectionPath}"
++summary="${summary}"]`;
++            }
++          }
++        } catch (sourceErr) {
++          console.warn("[candidate_collection_prefetch] resolve failed:", sourceErr);
++        }
++      }
++
++      if (!collectionPath) {
++        const candidateUrlInput = inferCandidateUrlInput({
++          selectedContext,
++          uiContext,
++          prompt,
++          history,
++        });
++        if (candidateUrlInput.length > 0) {
++          try {
++            const resolverPayload = await resolveHub(`candidates/${candidateUrlInput}`);
++            if (resolverPayload.status === "resolved") {
++              const sourceJson = JSON.stringify(asJsonRecord(resolverPayload.data) || {});
++              const resolvedCandidateId = readString(resolverPayload.id);
++              const resolvedName = readString(
++                asJsonRecord(resolverPayload.data)?.display_name || resolverPayload.summary,
++              );
++              if (sourceJson) {
++                fullPrompt = `${fullPrompt}
++
+ [System note: Dynamic candidate grounding hub resolved candidate context for this turn.
+-resolver_url="${candidateResolverUrl}"
+ resolved_candidate_id="${resolvedCandidateId}"
+ resolved_candidate_name="${resolvedName}"
+-action_url="${actionUrl}"
+ Use this JSON as authoritative candidate read context:
+ ${sourceJson}]`;
+-            }
+-          } else if (resolverResponse.status === 409) {
+-            const resolverPayload = (await resolverResponse.json()) as Record<string, unknown>;
+-            const candidates = Array.isArray(resolverPayload.candidates)
+-              ? resolverPayload.candidates
+-                  .map((entry) => {
+-                    const record = asJsonRecord(entry);
+-                    const name = readString(record?.display_name) || "Unknown Candidate";
+-                    const candidateId = readString(record?.candidate_id) || "";
+-                    const novaId = readString(record?.nova_id) || "";
+-                    return `${name}${candidateId ? ` (candidate_id: ${candidateId})` : ""}${novaId ? ` (nova_id: ${novaId})` : ""}`;
+-                  })
+-                  .filter(Boolean)
+-                  .slice(0, 5)
+-              : [];
+-            if (candidates.length > 0) {
+-              fullPrompt = `${fullPrompt}
++                hasPrefetchedAyaopsObservation = true;
++              }
++            } else if (resolverPayload.status === "ambiguous") {
++              const candidates = Array.isArray(resolverPayload.alternatives)
++                ? resolverPayload.alternatives
++                    .map((entry) => formatResolverCandidateOption(entry))
++                    .filter(Boolean)
++                    .slice(0, 5)
++                : [];
++              if (candidates.length > 0) {
++                fullPrompt = `${fullPrompt}
+ 
+ [System note: Candidate resolver found multiple matches for "${candidateUrlInput}".
+ Do not guess. Ask the user to pick one of these:
+ - ${candidates.join("\n- ")}]`;
+-            }
+-          } else {
+-            console.warn(
+-              `[candidate_url_grounding] non-200 response for ${candidateResolverUrl}: ${resolverResponse.status}`,
+-            );
+-
+-            const candidatePageUrl = buildCandidateGroundingPageUrl(request, candidateUrlInput);
+-            if (candidatePageUrl) {
+-              const pageResponse = await fetch(candidatePageUrl, {
+-                cache: "no-store",
+-                headers: { "User-Agent": "thelab-candidate-grounding-fetch/1.0" },
+-              });
+-              if (pageResponse.ok) {
+-                const pageHtml = await pageResponse.text();
+-                const pageJson = extractCandidateGroundingJsonFromPage(pageHtml);
+-                if (pageJson) {
+-                  fullPrompt = `${fullPrompt}
+-
+-[System note: Canonical candidate URL grounding was loaded from page fallback.
+-source_url="${candidatePageUrl}"
+-Use this JSON as authoritative candidate read context:
+-${pageJson}]`;
+-                }
+               }
++            } else if (resolverPayload.status === "not_found") {
++              const resolverMessage =
++                readString(resolverPayload.summary) ||
++                `No exact candidate match for "${candidateUrlInput}".`;
++              fullPrompt = `${fullPrompt}
++
++[System note: Candidate resolver found zero exact matches for "${candidateUrlInput}".
++Resolver message: ${resolverMessage}
++Do not guess. Ask the user to clarify the candidate identity.]`;
+             }
++          } catch (sourceErr) {
++            console.warn("[candidate_url_grounding] resolveHub failed:", sourceErr);
+           }
+-        } catch (sourceErr) {
+-          console.warn("[candidate_url_grounding] fetch failed:", sourceErr);
+         }
+       }
+     }
+@@ -1982,7 +2260,8 @@ ${pageJson}]`;
+     if (activeMode === "ayaops") {
+       systemPrompt = `${systemPrompt}
+ 
+-Rule: If any tool returns error_code "AMBIGUOUS_MATCH" with alternatives, DO NOT retry the search. Stop immediately and present the alternatives to the user. Ask them to choose.`;
++Rule: If any tool returns error_code "AMBIGUOUS_MATCH" or "AMBIGUOUS_CANDIDATE" with alternatives, DO NOT retry the search. Stop immediately and present the alternatives to the user with context so they can choose.
++Rule: If any tool returns error_code "CANDIDATE_NOT_FOUND", ask the user for clarification (full name, candidate ID, or Nova ID). Do not guess.`;
+     }
+ 
+     if (requestedMode === "margins") {
+@@ -2055,7 +2334,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+             );
+             controller.enqueue(
+               encoder.encode(
+-                `data: ${JSON.stringify({
++                `data: ${JSON.stringify(buildWriteResultEvent({
+                   type: "write_result",
+                   outcome: "failed",
+                   action: "update_candidate_status",
+@@ -2071,7 +2350,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+                       ? "selected_context_missing"
+                       : "tool_execution_failed",
+                   },
+-                })}\n\n`,
++                }))}\n\n`,
+               ),
+             );
+             controller.enqueue(
+@@ -2124,7 +2403,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+ 
+           controller.enqueue(
+             encoder.encode(
+-              `data: ${JSON.stringify({
++              `data: ${JSON.stringify(buildWriteResultEvent({
+                 type: "write_result",
+                 outcome,
+                 action: "update_candidate_status",
+@@ -2132,7 +2411,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+                 rowsUpdated,
+                 code: null,
+                 payload: resultObj,
+-              })}\n\n`,
++              }))}\n\n`,
+             ),
+           );
+           controller.enqueue(
+@@ -2145,8 +2424,8 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+                     : outcome === "no_change"
+                       ? `${candidateName} is already in Offer status (no change).`
+                       : oldStatus && newStatus
+-                        ? `Updated ${candidateName} status: ${oldStatus} -> ${newStatus}.`
+-                        : `Updated ${candidateName} to Offer status.`,
++                        ? `${candidateName}: ${oldStatus} to ${newStatus}.`
++                        : `${candidateName}: Offer status updated.`,
+               })}\n\n`,
+             ),
+           );
+@@ -2186,7 +2465,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+         start(controller) {
+           controller.enqueue(
+             encoder.encode(
+-              `data: ${JSON.stringify({
++              `data: ${JSON.stringify(buildWriteResultEvent({
+                 type: "write_result",
+                 outcome: "failed",
+                 action: "ingest_ringcentral_thread",
+@@ -2198,7 +2477,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+                   error:
+                     "Could not parse a valid RingCentral thread JSON object. Check quotes/braces and remove trailing commas.",
+                 },
+-              })}\n\n`,
++              }))}\n\n`,
+             ),
+           );
+           controller.enqueue(
+@@ -2234,7 +2513,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+         start(controller) {
+           controller.enqueue(
+             encoder.encode(
+-              `data: ${JSON.stringify({
++              `data: ${JSON.stringify(buildWriteResultEvent({
+                 type: "write_result",
+                 outcome: "failed",
+                 action: "ingest_margin_payload",
+@@ -2246,7 +2525,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+                   error:
+                     "Could not parse a valid aya_margin_calculator JSON object. Check quotes/braces and remove trailing commas.",
+                 },
+-              })}\n\n`,
++              }))}\n\n`,
+             ),
+           );
+           controller.enqueue(
+@@ -2287,7 +2566,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+         start(controller) {
+           controller.enqueue(
+             encoder.encode(
+-              `data: ${JSON.stringify({
++              `data: ${JSON.stringify(buildWriteResultEvent({
+                 type: "write_result",
+                 outcome: "failed",
+                 action: "ingest_nova_profile",
+@@ -2299,7 +2578,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+                   error:
+                     "Could not parse a valid nova_candidate_profile JSON object. Check quotes/braces and remove trailing commas.",
+                 },
+-              })}\n\n`,
++              }))}\n\n`,
+             ),
+           );
+           controller.enqueue(
+@@ -2360,7 +2639,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
+ 
+         fullPrompt = `${fullPrompt}
+ 
+-[System note: ingest_ringcentral_thread executed successfully before this turn.
++[System note: ingest_ringcentral_thread executed before this turn.
+ thread_id="${String(ringcentralResult.thread_id || "")}"
+ event_id="${String(ringcentralResult.event_id || "")}"
+ candidate_link_status="${String(ringcentralResult.candidate_link_status || "")}"
+@@ -2374,7 +2653,7 @@ Return only operational summary: save status, link status, and next best action.
+           start(controller) {
+             controller.enqueue(
+               encoder.encode(
+-                `data: ${JSON.stringify({
++                `data: ${JSON.stringify(buildWriteResultEvent({
+                   type: "write_result",
+                   outcome: "failed",
+                   action: "ingest_ringcentral_thread",
+@@ -2385,7 +2664,7 @@ Return only operational summary: save status, link status, and next best action.
+                     code: "RINGCENTRAL_INGEST_FAILED",
+                     error: ringcentralMessage,
+                   },
+-                })}\n\n`,
++                }))}\n\n`,
+               ),
+             );
+             controller.enqueue(
+@@ -2462,7 +2741,7 @@ Return only operational summary: save status, link status, and next best action.
+ 
+         fullPrompt = `${fullPrompt}
+ 
+-[System note: ingest_margin_payload executed successfully before this turn. Margin payload has been saved to margin ledger event_id "${String(marginResult.event_id || "")}".]`;
++[System note: ingest_margin_payload executed before this turn. Margin payload is persisted with event_id "${String(marginResult.event_id || "")}".]`;
+       } catch (marginErr) {
+         const marginMessage = marginErr instanceof Error ? marginErr.message : String(marginErr);
+         const encoder = new TextEncoder();
+@@ -2470,7 +2749,7 @@ Return only operational summary: save status, link status, and next best action.
+           start(controller) {
+             controller.enqueue(
+               encoder.encode(
+-                `data: ${JSON.stringify({
++                `data: ${JSON.stringify(buildWriteResultEvent({
+                   type: "write_result",
+                   outcome: "failed",
+                   action: "ingest_margin_payload",
+@@ -2481,7 +2760,7 @@ Return only operational summary: save status, link status, and next best action.
+                     code: "MARGIN_INGEST_FAILED",
+                     error: marginMessage,
+                   },
+-                })}\n\n`,
++                }))}\n\n`,
+               ),
+             );
+             controller.enqueue(
+@@ -2526,7 +2805,7 @@ Return only operational summary: save status, link status, and next best action.
+           start(controller) {
+             controller.enqueue(
+               encoder.encode(
+-                `data: ${JSON.stringify({
++                `data: ${JSON.stringify(buildWriteResultEvent({
+                   type: "write_result",
+                   outcome: "failed",
+                   action: "ingest_nova_profile",
+@@ -2537,7 +2816,7 @@ Return only operational summary: save status, link status, and next best action.
+                     code: "PROFILE_INGEST_FAILED",
+                     error: ingestErrorMessage,
+                   },
+-                })}\n\n`,
++                }))}\n\n`,
+               ),
+             );
+             controller.enqueue(
+@@ -2603,7 +2882,7 @@ Return only operational summary: save status, link status, and next best action.
+ 
+       fullPrompt = `${fullPrompt}
+ 
+-[System note: ingest_nova_profile already executed successfully before this turn. Candidate is now persisted in the internal DB. Use candidate_id "${canonicalCandidateId}"${novaId ? ` (nova_id "${novaId}")` : ""} for any follow-up add_candidate_note or create_com_draft_email action.]`;
++[System note: ingest_nova_profile already executed before this turn. Candidate is persisted for follow-up actions. Use candidate_id "${canonicalCandidateId}"${novaId ? ` (nova_id "${novaId}")` : ""} for any add_candidate_note or create_com_draft_email action.]`;
+     }
+ 
+     // ── Grounded Write Interceptor ─────────────────────────────────
+@@ -2756,6 +3035,9 @@ Return only operational summary: save status, link status, and next best action.
+       ];
+     } else {
+       tools = [{ googleSearch: {} }];
++      if (activeMode === "sports") {
++        tools.push({ functionDeclarations: [ACCESS_HUB_DECLARATION] });
++      }
+       if (activeMode === "worldcup") {
+         tools.push({ functionDeclarations: SANDBOX_TOOL_DECLARATIONS });
+       }
+@@ -2763,12 +3045,12 @@ Return only operational summary: save status, link status, and next best action.
+ 
+     const declaredToolNames =
+       activeMode === "ayaops"
+-        ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...AYAOPS_READ_TOOL_DECLARATIONS]
++        ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...AYAOPS_READ_TOOL_DECLARATIONS, ACCESS_HUB_DECLARATION]
+           .map((tool) => String((tool as { name?: string }).name || ""))
+           .filter(Boolean)
+         : [];
+ 
+-    const toolPolicy = classifyToolRequirement({
++    const rawToolPolicy = classifyToolRequirement({
+       // Important: classify write intent from the user's raw prompt only.
+       // Using the expanded prompt can create false positives because
+       // injected system notes contain verbs like "write"/"update".
+@@ -2776,17 +3058,34 @@ Return only operational summary: save status, link status, and next best action.
+       availableToolNames: declaredToolNames,
+       mode: activeMode,
+     });
++    const toolPolicy =
++      activeMode === "ayaops" &&
++      hasPrefetchedAyaopsObservation &&
++      rawToolPolicy.requiredToolKind === "read"
++        ? {
++            ...rawToolPolicy,
++            readGroundingIntent: false,
++            requiredToolKind: "none",
++            toolRequired: false,
++          }
++        : rawToolPolicy;
+ 
+-    if (toolPolicy.toolRequired && !toolPolicy.hasMatchingWriteTool) {
++    if (toolPolicy.toolRequired && !toolPolicy.hasMatchingRequiredTool) {
++      const requiresWrite = toolPolicy.requiredToolKind === "write";
+       const payload = {
+         type: "error",
+-        code: "TOOL_UNAVAILABLE_FOR_WRITE_INTENT",
+-        message:
+-          "This request requires a write-capable tool, but no matching write tool is currently available. Please use a supported execute path or ask for a read-only lookup.",
++        code: requiresWrite
++          ? "TOOL_UNAVAILABLE_FOR_WRITE_INTENT"
++          : "TOOL_UNAVAILABLE_FOR_READ_INTENT",
++        message: requiresWrite
++          ? "This request requires a write-capable tool, but no matching write tool is currently available. Please use a supported execute path or ask for a read-only lookup."
++          : "This request requires a grounded read tool, but no matching read tool is currently available. Please retry in AyaOps mode.",
+       };
+ 
+       console.warn(`[tool_policy] ${JSON.stringify({
+-        event: "TOOL_UNAVAILABLE_FOR_WRITE_INTENT",
++        event: requiresWrite
++          ? "TOOL_UNAVAILABLE_FOR_WRITE_INTENT"
++          : "TOOL_UNAVAILABLE_FOR_READ_INTENT",
+         tool_required: true,
+         tool_called: false,
+         tool_name: "",
+@@ -2794,6 +3093,7 @@ Return only operational summary: save status, link status, and next best action.
+         simulated_tool_text_detected: false,
+         retry_count: 0,
+         matched_verb: toolPolicy.matchedVerb,
++        required_tool_kind: toolPolicy.requiredToolKind,
+       })}`);
+ 
+       const encoder = new TextEncoder();
+@@ -2848,8 +3148,13 @@ Return only operational summary: save status, link status, and next best action.
+           if (activeMode === "ayaops") {
+             const MAX_TOOL_ROUNDS = 4;
+             const MAX_STRICT_RETRIES = 1;
+-            const emit = (payload: Record<string, unknown>) =>
+-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
++            const emit = (payload: Record<string, unknown>) => {
++              const normalized =
++                String(payload.type || "") === "write_result"
++                  ? buildWriteResultEvent(payload)
++                  : payload;
++              controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalized)}\n\n`));
++            };
+ 
+             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             const collectRound = async (stream: any): Promise<{
+@@ -2942,6 +3247,7 @@ Return only operational summary: save status, link status, and next best action.
+             let activeCandidateInput = selectedContextCandidateInput;
+             let activeCandidateEmail = selectedContext?.candidate_email || "";
+             let lastNonEmptyModelText = "";
++            let lastHubReadResult: Record<string, unknown> | null = null;
+ 
+             if (preIngestWriteEvent) {
+               emit(preIngestWriteEvent);
+@@ -3004,14 +3310,14 @@ Return only operational summary: save status, link status, and next best action.
+                     executionOutcomes.push({
+                       ok: false,
+                       name,
+-                      error: `Tool '${name}' is not available in AyaOps URL-grounded mode.`,
++                      error: `Tool '${name}' is not available in the current mode.`,
+                     });
+                     toolResponses.push({
+                       functionResponse: {
+                         name,
+                         response: {
+                           result: null,
+-                          error: `Tool '${name}' is not available in AyaOps URL-grounded mode.`,
++                          error: `Tool '${name}' is not available in the current mode.`,
+                         },
+                       },
+                     });
+@@ -3043,7 +3349,7 @@ Return only operational summary: save status, link status, and next best action.
+                     type: "tool_status",
+                     tool: name,
+                     status: "running",
+-                    label: TOOL_LABELS[name] || `Running ${name.replace(/_/g, " ")}…`,
++                    label: TOOL_LABELS[name] || name.replace(/_/g, " "),
+                   });
+ 
+                   const toolStartTime = Date.now();
+@@ -3182,6 +3488,9 @@ Return only operational summary: save status, link status, and next best action.
+                     executionOutcomes.push({ ok: false, name, error: toolResult.error });
+                   } else {
+                     executionOutcomes.push({ ok: true, name });
++                    if (name === "access_hub" && toolResult.result && typeof toolResult.result === "object") {
++                      lastHubReadResult = toolResult.result as Record<string, unknown>;
++                    }
+ 
+                     if (name === "get_internal_grounding_context" && toolResult.result && typeof toolResult.result === "object") {
+                       const refs = (toolResult.result as { references?: unknown }).references;
+@@ -3296,7 +3605,7 @@ Return only operational summary: save status, link status, and next best action.
+               if (turnDecision.action === "emit_text") {
+                 let textToEmit = finalText;
+                 if (sandboxTaskCreated) {
+-                  textToEmit = "Preview ready — Review in Sandbox";
++                  textToEmit = "Preview ready. Review in Sandbox.";
+                 }
+                 if (internalReferences.length > 0 && !/\[INT-\d+\]/i.test(textToEmit)) {
+                   const refLines = internalReferences
+@@ -3330,8 +3639,95 @@ Return only operational summary: save status, link status, and next best action.
+ 
+               const errorCode =
+                 String(turnDecision.code || "TOOL_REQUIRED_FLOW_FAILED").toUpperCase();
++              if (
++                errorCode === "TOOL_NOT_CALLED_WHEN_REQUIRED" &&
++                toolPolicy.requiredToolKind === "read"
++              ) {
++                const fallbackHubPath = deriveAyaopsReadFallbackHubPath(
++                  prompt,
++                  activeCandidateInput || selectedContextCandidateInput || "",
++                );
++                if (fallbackHubPath) {
++                  emit({
++                    type: "tool_status",
++                    tool: "access_hub",
++                    status: "running",
++                    label: TOOL_LABELS.access_hub || "Hub lookup",
++                  });
++
++                  let fallbackResult: Awaited<ReturnType<typeof resolveHub>> | null = null;
++                  let fallbackError = "";
++                  const fallbackStart = Date.now();
++                  try {
++                    fallbackResult = await resolveHub(fallbackHubPath);
++                  } catch (fallbackErr) {
++                    fallbackError =
++                      fallbackErr instanceof Error ? fallbackErr.message : "hub fallback failed";
++                  }
++
++                  emit({
++                    type: "tool_status",
++                    tool: "access_hub",
++                    status: fallbackError ? "failed" : "ok",
++                    latency_ms: Date.now() - fallbackStart,
++                    label: fallbackError
++                      ? `${TOOL_LABELS_DONE.access_hub || "Record loaded"} failed`
++                      : TOOL_LABELS_DONE.access_hub || "Record loaded",
++                  });
++
++                  if (!fallbackError && fallbackResult) {
++                    telemetry.tool_called = true;
++                    telemetry.tool_execution_success = true;
++                    hasExecutedTool = true;
++                    calledToolNames.add("access_hub");
++                    lastHubReadResult = fallbackResult as Record<string, unknown>;
++                    logToolPolicy("TOOL_AUTO_READ_FALLBACK", {
++                      round,
++                      fallback_path: fallbackHubPath,
++                    });
++
++                    roundContents = [
++                      ...roundContents,
++                      { role: "model", parts: roundParts },
++                      {
++                        role: "user",
++                        parts: [
++                          {
++                            functionResponse: {
++                              name: "access_hub",
++                              response: { result: fallbackResult },
++                            },
++                          },
++                        ],
++                      },
++                    ];
++
++                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
++                    const fallbackConfig: any = cachedContentName
++                      ? { cachedContent: cachedContentName, temperature: 1.0 }
++                      : { tools, temperature: 1.0, systemInstruction: systemPrompt };
++
++                    roundStream = await ai.models.generateContentStream({
++                      model: geminiModel,
++                      contents: roundContents,
++                      config: fallbackConfig,
++                    });
++                    round += 1;
++                    continue;
++                  }
++                }
++              }
++              if (errorCode === "EMPTY_RESPONSE" && lastHubReadResult) {
++                const fallbackText = buildAyaopsHubFallbackText(lastHubReadResult);
++                if (fallbackText) {
++                  emit({ type: "text", text: fallbackText });
++                  logToolPolicy("TERMINAL_TEXT_FROM_HUB_FALLBACK", { round });
++                  didEmitTerminal = true;
++                  break;
++                }
++              }
+               if (sandboxTaskCreated && errorCode !== "TOOL_EXECUTION_FAILED") {
+-                emit({ type: "text", text: "Preview ready — Review in Sandbox" });
++                emit({ type: "text", text: "Preview ready. Review in Sandbox." });
+                 didEmitTerminal = true;
+                 break;
+               }
+@@ -3458,7 +3854,7 @@ Return only operational summary: save status, link status, and next best action.
+           if (sandboxTaskCreated && !standardTextEmitted) {
+             controller.enqueue(
+               encoder.encode(
+-                `data: ${JSON.stringify({ type: "text", text: "Preview ready — Review in Sandbox" })}\n\n`,
++                `data: ${JSON.stringify({ type: "text", text: "Preview ready. Review in Sandbox." })}\n\n`,
+               ),
+             );
+           }
+diff --git a/src/app/chat/page.tsx b/src/app/chat/page.tsx
+index bc30531..ec823dc 100644
+--- a/src/app/chat/page.tsx
++++ b/src/app/chat/page.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import { useReducer, useRef, useEffect, useCallback, useState, useMemo, FormEvent } from "react";
+-import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, UserPlus, Calculator } from "lucide-react";
++import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, UserPlus, Calculator, Link2, Users, CirclePlus } from "lucide-react";
+ import Link from "next/link";
+ import { useAuth } from "@/context/AuthContext";
+ import type { CommitAction, SandboxPanelMode, SandboxPreview, SandboxTask } from "@/lib/types/sandbox";
+@@ -19,6 +19,7 @@ import { MODES } from "@/lib/chat-modes";
+ 
+ import { ChatInput } from "@/components/chat/ChatInput";
+ import { ChatMessages } from "@/components/chat/ChatMessages";
++import { PicksPanel } from "@/components/picks/PicksPanel";
+ import {
+   formatMarkdown, formatCopyReadyText, isCopyReadyFenceLanguage, isLikelyRawPayloadBlock,
+   buildCopyOnlyMarkdown, buildAssistantDisplayContent, buildUserDisplayContent, formatMessageTimestamp,
+@@ -26,7 +27,7 @@ import {
+   workspaceScopeFor, getSavedMode, readStringSafe, readNumberSafe, readPercentDecimal, MODE_KEY, storageKey,
+   formatShortDate, formatLongDate, formatDateTime, marginDeltaPoints, formatMarginDelta,
+   formatRelativeTime, formatShiftWindow, parseTimeToMinutes, formatShiftCadence,
+-  formatAssignmentWindow, assignmentProgress, formatTouchPriorityReason, formatSubmissionDifficulty,
++  formatAssignmentWindow, assignmentProgress, formatSubmissionDifficulty,
+   formatTournamentStage, normalizeStateToCode, inferHealthcareContextFromPrompt,
+   inferHealthcareContextFromLabel, normalizeTextToken, buildLicensingReferenceUrl,
+   resolveHealthcareEntityFromPrompt
+@@ -37,9 +38,10 @@ const CLEAN_COPY_MODES = new Set<ConsoleMode>([
+   "sports",
+   "worldcup",
+   "ayaops",
++  "clicks",
+   "facility",
+   "margins",
+-  "clicks",
++  "deals",
+ ]);
+ 
+ const MODE_CONTEXT_HINTS: Record<ConsoleMode, string> = {
+@@ -48,10 +50,11 @@ const MODE_CONTEXT_HINTS: Record<ConsoleMode, string> = {
+   code: "Ask for architecture, debugging, implementation, or reviews.",
+   worldcup: "Ask about matches, tactical reads, line movement, and today’s slate.",
+   ayaops: "Ask about candidates, facilities, rates, deadlines, and message threads.",
++  clicks: "Ask about interested clicks, matched candidates, and tracked listings.",
+   facility: "Ask about submittal rules, cancellation risk, extensions, and facility load.",
+   margins: "Ask for the margin read, execution risk, and next best action.",
+-  agent: "Describe a browser task — the AI will produce structured steps, selectors, and assertions.",
+-  clicks: "Ask about interested clicks, market demand, matched leads, and system performance.",
++  agent: "Describe a browser task. The AI will produce structured steps, selectors, and assertions.",
++  deals: "Ask about high margin assignments, deals closing this week, and at-risk contracts.",
+ };
+ 
+ const CAPABILITY_OPTIONS: { value: ModelOverride; label: string; hint: string }[] = [
+@@ -102,6 +105,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
+             text: action.payload.text,
+             timestamp: new Date(),
+             isStreaming: false,
++            isRetryableError: false,
++            retryCount: 0,
++            lastFailureText: null,
++            lastFailureCode: null,
++            lastFailureAt: null,
+             workspaceScope: action.payload.workspaceScope || null,
+           },
+         ],
+@@ -117,10 +125,40 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
+             text: "",
+             timestamp: new Date(),
+             isStreaming: true,
++            isRetryableError: false,
++            retryCount: 0,
++            requestUserMessageId: action.payload.requestUserMessageId || null,
++            lastFailureText: null,
++            lastFailureCode: null,
++            lastFailureAt: null,
+             workspaceScope: action.payload.workspaceScope || null,
+           },
+         ]
+       };
++    case "RETRY_ASSISTANT_STREAM":
++      return {
++        ...state,
++        loading: true,
++        messages: state.messages.map((m) => {
++          if (m.id !== action.payload.id) return m;
++          return {
++            ...m,
++            text: "",
++            timestamp: new Date(),
++            isStreaming: true,
++            isRetryableError: false,
++            retryCount: (typeof m.retryCount === "number" ? m.retryCount : 0) + 1,
++            writeResult: undefined,
++            toolStatuses: undefined,
++            citations: undefined,
++            queries: undefined,
++            codeBlocks: undefined,
++            durationMs: undefined,
++            modelProvider: undefined,
++            modelId: undefined,
++          };
++        }),
++      };
+     case "APPEND_ASSISTANT_CHUNK":
+       return {
+         ...state, loading: false,
+@@ -161,27 +199,38 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
+             durationMs: action.payload.durationMs,
+             modelProvider: action.payload.modelProvider,
+             modelId: action.payload.modelId,
++            isRetryableError: false,
+             writeResult: m.writeResult || inferred || undefined,
+           };
+         })
+       };
+     case "ERROR_ASSISTANT_STREAM":
+-      return {
+-        ...state, loading: false,
+-        messages: state.messages.map((m) =>
+-          m.id === action.payload.id
+-            ? {
+-              ...m,
+-              isStreaming: false,
+-              text: humanizeStreamError(action.payload.error, action.payload.code),
+-              writeResult: {
+-                outcome: "failed",
+-                code: action.payload.code || "STREAM_ERROR",
+-              },
+-            }
+-            : m
+-        )
+-      };
++      {
++        const failedAt = new Date().toISOString();
++        return {
++          ...state, loading: false,
++          messages: state.messages.map((m) =>
++            m.id === action.payload.id
++              ? (() => {
++                const errorText = humanizeStreamError(action.payload.error, action.payload.code);
++                return {
++                  ...m,
++                  isStreaming: false,
++                  isRetryableError: true,
++                  text: errorText,
++                  lastFailureText: errorText,
++                  lastFailureCode: action.payload.code || "STREAM_ERROR",
++                  lastFailureAt: failedAt,
++                  writeResult: {
++                    outcome: "failed",
++                    code: action.payload.code || "STREAM_ERROR",
++                  },
++                };
++              })()
++              : m
++          )
++        };
++      }
+     case "ADD_CODE_BLOCK":
+       return {
+         ...state,
+@@ -290,39 +339,113 @@ function inferWriteResultFromText(text: string): WriteResultMeta | null {
+ function humanizeStreamError(error: string, code?: string): string {
+   const raw = String(error || "").trim();
+   const lowered = raw.toLowerCase();
+-  if (!raw) return "I couldn’t complete that request. Please try again.";
++  if (!raw) return "Request could not be completed. Please try again.";
+ 
+   if (lowered.includes("internal lookup failed")) {
+-    return "I couldn’t complete that lookup. Try candidate name or ID and retry.";
++    return "Lookup could not be completed. Try candidate name or ID and retry.";
+   }
+   if (lowered.includes("tool-required request was not executed") || lowered.includes("internal lookup loop limit")) {
+-    return "I couldn’t finish that lookup yet. Try the candidate name or ID and I’ll retry.";
++    return "Lookup is incomplete. Try candidate name or ID and retry.";
+   }
+   if (lowered.includes("unsupported built-in function") || lowered.includes("unimplemented")) {
+     return "That lookup is temporarily unavailable. Please retry in a moment.";
+   }
+   if (lowered.includes("permission_denied") || lowered.includes("unauthenticated")) {
+-    return "I couldn’t access that record right now. Please retry.";
++    return "That record is unavailable right now. Please retry.";
+   }
+   if (lowered.includes("deadline_exceeded") || lowered.includes("timeout")) {
+     return "That request timed out. Please retry.";
+   }
+   if (lowered.includes("to_email is required")) {
+-    return "I couldn’t draft that yet because the candidate email is missing.";
++    return "Draft cannot be generated because the candidate email is missing.";
+   }
+   if (lowered.includes("connection failed")) {
+-    return "I lost connection while fetching that. Try again in a moment.";
++    return "Connection dropped while fetching that. Try again in a moment.";
+   }
+   if (lowered.includes("malformed nova payload")) {
+-    return "I couldn’t read that payload format. Paste the full JSON block and I’ll process it.";
++    return "Payload format is invalid. Paste the full JSON block and retry.";
+   }
+   if (code === "STREAM_ERROR") {
+-    return "I ran into a temporary stream issue. Please retry.";
++    return "Temporary stream issue. Please retry.";
+   }
+   if (code === "TOOL_EXECUTION_FAILED" && error && error.length > 5) {
+     return `Tool execution failed: ${error}`;
+   }
+-  return "I couldn’t complete that request. Please try again.";
++  return "Request could not be completed. Please try again.";
++}
++
++function summarizeThreadLabel(text: string, maxLength = 52): string {
++  const firstLine = String(text || "")
++    .split("\n")
++    .map((line) => line.trim())
++    .find(Boolean) || "";
++  const cleaned = firstLine
++    .replace(/\s+/g, " ")
++    .replace(/^["'`]+|["'`]+$/g, "")
++    .trim();
++  if (!cleaned) return "";
++  if (cleaned.length <= maxLength) return cleaned;
++  return `${cleaned.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
++}
++
++function shortStableHash(value: string): string {
++  let hash = 0x811c9dc5;
++  for (let i = 0; i < value.length; i += 1) {
++    hash ^= value.charCodeAt(i);
++    hash = Math.imul(hash, 0x01000193);
++  }
++  return (hash >>> 0).toString(16).padStart(8, "0");
++}
++
++function deriveWriteTransactionId(input: {
++  action?: string | null;
++  outcome?: string | null;
++  rowsUpdated?: number | null;
++  payload?: Record<string, unknown> | null;
++}): string {
++  const payload = input.payload || {};
++  const changedFields =
++    payload.changed_fields && typeof payload.changed_fields === "object"
++      ? JSON.stringify(payload.changed_fields)
++      : "";
++  const signature = [
++    String(input.action || payload.action || ""),
++    String(input.outcome || payload.outcome || ""),
++    String(input.rowsUpdated ?? payload.rows_updated ?? ""),
++    String(payload.object_type || ""),
++    String(payload.candidate_id || ""),
++    String(payload.nova_id || ""),
++    String(payload.thread_id || ""),
++    String(payload.note_id || ""),
++    String(payload.event_id || ""),
++    String(payload.write_timestamp || payload.updated_at || payload.created_at || ""),
++    changedFields,
++  ].join("|");
++  return `tx_${shortStableHash(signature)}`;
++}
++
++function writeMessageScore(message: Message): number {
++  let score = 0;
++  if (!message.isStreaming) score += 2;
++  if (!message.isRetryableError) score += 2;
++  if ((message.text || "").trim().length > 0) score += 2;
++  const outcome = message.writeResult?.outcome;
++  if (outcome === "updated" || outcome === "inserted" || outcome === "no_change") score += 3;
++  if (outcome === "failed") score -= 2;
++  score += Number(message.timestamp ? new Date(message.timestamp).getTime() : 0) / 1_000_000_000_000;
++  return score;
++}
++
++function sanitizeToolStatusLabel(value: unknown): string {
++  const raw = String(value || "").trim();
++  if (!raw) return "Working";
++
++  const withoutEmojiPrefix = raw
++    .replace(/^[\s\u200B-\u200D\uFEFF\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]+/gu, "")
++    .replace(/^[\s•·\-–—:]+/g, "")
++    .trim();
++
++  return withoutEmojiPrefix || "Working";
+ }
+ 
+ 
+@@ -602,12 +725,16 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
+     const candidates = summary.items.filter((item) => Boolean(item.label));
+     if (candidates.length === 0) return [];
+     const ranked = [...candidates].sort((a, b) => {
+-      const aScore = typeof a.touchPriorityScore === "number" ? a.touchPriorityScore : -1;
+-      const bScore = typeof b.touchPriorityScore === "number" ? b.touchPriorityScore : -1;
+-      if (aScore !== bScore) return bScore - aScore;
+-      const aDays = typeof a.touchDaysToEnd === "number" ? a.touchDaysToEnd : Number.POSITIVE_INFINITY;
+-      const bDays = typeof b.touchDaysToEnd === "number" ? b.touchDaysToEnd : Number.POSITIVE_INFINITY;
+-      return aDays - bDays;
++      const aDays =
++        typeof a.touchDaysToEnd === "number" && Number.isFinite(a.touchDaysToEnd)
++          ? a.touchDaysToEnd
++          : Number.POSITIVE_INFINITY;
++      const bDays =
++        typeof b.touchDaysToEnd === "number" && Number.isFinite(b.touchDaysToEnd)
++          ? b.touchDaysToEnd
++          : Number.POSITIVE_INFINITY;
++      if (aDays !== bDays) return aDays - bDays;
++      return String(a.label || "").localeCompare(String(b.label || ""));
+     });
+ 
+     const top = ranked[0];
+@@ -624,7 +751,7 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
+       {
+         id: "ops-priority",
+         title: `${top.label} needs attention`,
+-        detail: top.touchPriorityReason || `${top.specialty || top.profession || "Traveler"} · ${top.facilityName || "Facility not set"}`,
++        detail: `${top.specialty || top.profession || "Traveler"} · ${top.facilityName || "Facility not set"}`,
+         prompt: `Prep the follow-up message for ${top.label}.`,
+         actionLabel: "Draft follow-up",
+         tone: "attention",
+@@ -638,7 +765,7 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
+         detail:
+           typeof dueSoon.touchDaysToEnd === "number"
+             ? `${dueSoon.touchDaysToEnd} day${dueSoon.touchDaysToEnd === 1 ? "" : "s"} to assignment end`
+-            : dueSoon.touchPriorityReason || "Deadline risk detected",
++            : "Deadline risk detected",
+         prompt: `What is blocking ${dueSoon.label} and what should I do next?`,
+         actionLabel: "Open plan",
+       });
+@@ -659,6 +786,48 @@ function buildTodayCards(mode: ConsoleMode, summary: SummaryData | null): TodayC
+   return [];
+ }
+ 
++function buildAyaopsRosterDigest(summary: SummaryData | null): Record<string, unknown> | null {
++  if (!summary || !Array.isArray(summary.items) || summary.items.length === 0) return null;
++
++  const statusCounts = new Map<string, number>();
++  const specialtyCounts = new Map<string, number>();
++
++  for (const item of summary.items) {
++    const rawStatus = String(item.derivedCurrentStatus || item.assignmentStatus || item.status || "")
++      .trim()
++      .toLowerCase();
++    let statusKey = rawStatus;
++    if (rawStatus.includes("pending_start") || rawStatus.includes("prestart")) statusKey = "prestart";
++    else if (rawStatus === "active" || rawStatus.includes("working")) statusKey = "working";
++    else if (rawStatus.includes("in_pipeline") || rawStatus.includes("submitted")) statusKey = "submitted";
++    else if (rawStatus.includes("completed")) statusKey = "completed";
++    else if (rawStatus.includes("cancel")) statusKey = "cancelled";
++    if (statusKey) {
++      statusCounts.set(statusKey, (statusCounts.get(statusKey) || 0) + 1);
++    }
++
++    const specialtyKey = String(item.specialty || item.profession || "")
++      .trim()
++      .toLowerCase();
++    if (specialtyKey) {
++      specialtyCounts.set(specialtyKey, (specialtyCounts.get(specialtyKey) || 0) + 1);
++    }
++  }
++
++  const normalizeMap = (map: Map<string, number>) =>
++    Object.fromEntries(
++      Array.from(map.entries())
++        .sort((a, b) => b[1] - a[1])
++        .slice(0, 12),
++    );
++
++  return {
++    total: summary.items.length,
++    statuses: normalizeMap(statusCounts),
++    specialties: normalizeMap(specialtyCounts),
++  };
++}
++
+ // LeftPanel moved to src/components/chat/LeftPanel.tsx
+ import { LeftPanel } from "@/components/chat/LeftPanel";
+ 
+@@ -671,6 +840,7 @@ function RightPanel({
+   imagesLoading,
+   onUseImage,
+   onTogglePin,
++  onAddCandidate,
+   onLinkCandidate,
+   onProcessCredential,
+   selectedCandidateId,
+@@ -682,6 +852,7 @@ function RightPanel({
+   imagesLoading: boolean;
+   onUseImage: (image: SavedImage) => void;
+   onTogglePin: (image: SavedImage) => void;
++  onAddCandidate: (image: SavedImage) => void;
+   onLinkCandidate: (image: SavedImage) => void;
+   onProcessCredential?: (image: SavedImage) => void;
+   selectedCandidateId: string | null;
+@@ -774,7 +945,7 @@ function RightPanel({
+                     onClick={() => onUseImage(image)}
+                     title="Use this screenshot in chat"
+                   >
+-                    <img src={image.previewUrl} alt="Saved screenshot" className="rp-image-thumb" />
++                    <img src={image.previewUrl} alt="Recent screenshot" className="rp-image-thumb" />
+                   </button>
+                   <div className="rp-image-meta">
+                     <div className="rp-image-top">
+@@ -787,6 +958,9 @@ function RightPanel({
+                     </div>
+                     <div className="rp-image-actions">
+                       <button className="rp-image-action" onClick={() => onUseImage(image)}>Use in chat</button>
++                      <button className="rp-image-action" onClick={() => onAddCandidate(image)}>
++                        Add candidate
++                      </button>
+                       <button className="rp-image-action" onClick={() => onTogglePin(image)}>
+                         {image.isPinned ? "Unpin" : "Pin"}
+                       </button>
+@@ -920,6 +1094,7 @@ export default function ChatPage() {
+   const [approvingSnapshotMessageId, setApprovingSnapshotMessageId] = useState<string | null>(null);
+   const [mobileRailOpen, setMobileRailOpen] = useState(false);
+   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
++  const [ayaAdminMode, setAyaAdminMode] = useState(false);
+ 
+   // Artifact Canvas
+   const [artifactContent, setArtifactContent] = useState<string | null>(null);
+@@ -944,20 +1119,51 @@ export default function ChatPage() {
+   const lastAutoOpenedMsgIdRef = useRef<string | null>(null);
+ 
+   const modeConfig = MODES[state.mode];
+-  const isOpsMode = state.mode === "ayaops" || state.mode === "facility" || state.mode === "margins";
++  const isOpsMode =
++    state.mode === "ayaops" ||
++    state.mode === "facility" ||
++    state.mode === "margins" ||
++    state.mode === "deals";
+   const isReadWorkspaceMode = state.mode === "facility" || state.mode === "margins";
+   const activeWorkspaceScope = useMemo(
+     () => workspaceScopeFor(state.mode, selectedWorkspaceItem),
+     [state.mode, selectedWorkspaceItem],
+   );
+-  const visibleMessages = useMemo(
+-    () => (
+-      activeWorkspaceScope
+-        ? state.messages.filter((message) => message.workspaceScope === activeWorkspaceScope)
+-        : state.messages
+-    ),
+-    [activeWorkspaceScope, state.messages],
+-  );
++  const visibleMessages = useMemo(() => {
++    const scoped = activeWorkspaceScope
++      ? state.messages.filter((message) => message.workspaceScope === activeWorkspaceScope)
++      : state.messages;
++
++    const deduped: Message[] = [];
++    const txIndex = new Map<string, number>();
++
++    for (const message of scoped) {
++      if (message.role !== "assistant") {
++        deduped.push(message);
++        continue;
++      }
++
++      const transactionId = readStringSafe(message.writeResult?.transactionId || "");
++      if (!transactionId) {
++        deduped.push(message);
++        continue;
++      }
++
++      const existingIndex = txIndex.get(transactionId);
++      if (existingIndex == null) {
++        txIndex.set(transactionId, deduped.length);
++        deduped.push(message);
++        continue;
++      }
++
++      const current = deduped[existingIndex];
++      if (writeMessageScore(message) >= writeMessageScore(current)) {
++        deduped[existingIndex] = message;
++      }
++    }
++
++    return deduped;
++  }, [activeWorkspaceScope, state.messages]);
+   const todayCards = useMemo(() => buildTodayCards(state.mode, summary), [state.mode, summary]);
+ 
+   const marginTimeline = useMemo(
+@@ -1153,6 +1359,48 @@ export default function ChatPage() {
+                 .filter((item): item is PanelItem => Boolean(item))
+               : rawItems.filter((entry): entry is PanelItem => Boolean(entry && typeof entry === "object")) as PanelItem[];
+ 
++        const sportsPicksRaw = Array.isArray(payload.sportsPicks) ? payload.sportsPicks : [];
++        const sportsPicks: PanelItem[] = sportsPicksRaw
++          .map((entry, index) => {
++            if (!entry || typeof entry !== "object") return null;
++            const row = entry as Record<string, unknown>;
++            const id = readStringSafe(row.id) || `pick-${index + 1}`;
++            const display = readStringSafe(row.display) || readStringSafe(row.label) || id;
++            return {
++              id,
++              label: display,
++              display,
++              gameId: readStringSafe(row.game_id) || null,
++              marketType: readStringSafe(row.market_type) || null,
++              sideToken: readStringSafe(row.side) || null,
++              line: readNumberSafe(row.line),
++              priority: readStringSafe(row.priority) || null,
++              kicker: readStringSafe(row.kicker) || null,
++              rationale: readStringSafe(row.rationale) || null,
++              event_status: readStringSafe(row.event_status) || null,
++              grading_status: readStringSafe(row.grading_status) || null,
++              result: readNumberSafe(row.result),
++              settlementValue: readNumberSafe(row.settlement_value),
++              live: row.live && typeof row.live === "object" && !Array.isArray(row.live)
++                ? row.live as Record<string, unknown>
++                : null,
++              is_live_stale: Boolean(row.is_live_stale),
++              ticker: readStringSafe(row.ticker) || null,
++              oddsAmerican: readNumberSafe(row.odds_american),
++              lineObservedAt: readStringSafe(row.line_observed_at) || null,
++              closingLine: readNumberSafe(row.closing_line),
++              hubUrl: readStringSafe(row.hub_url) || null,
++              apiUrl: readStringSafe(row.api_url) || null,
++              publicUrl: readStringSafe(row.public_url) || null,
++            } as PanelItem;
++          })
++          .filter((item): item is PanelItem => Boolean(item));
++
++        const sportsTrackRecordRaw =
++          payload.sportsTrackRecord && typeof payload.sportsTrackRecord === "object"
++            ? payload.sportsTrackRecord as Record<string, unknown>
++            : null;
++
+         setSummary({
+           pulse,
+           items: normalizedItems,
+@@ -1162,6 +1410,19 @@ export default function ChatPage() {
+           topProfessions: Array.isArray(payload.topProfessions)
+             ? payload.topProfessions as { name: string; count: number }[]
+             : undefined,
++          sportsPicks,
++          sportsTrackRecord: sportsTrackRecordRaw
++            ? {
++              sample_size: readNumberSafe(sportsTrackRecordRaw.sample_size) || 0,
++              wins: readNumberSafe(sportsTrackRecordRaw.wins) || 0,
++              losses: readNumberSafe(sportsTrackRecordRaw.losses) || 0,
++              pushes: readNumberSafe(sportsTrackRecordRaw.pushes) || 0,
++              voids: readNumberSafe(sportsTrackRecordRaw.voids) || 0,
++              units: readNumberSafe(sportsTrackRecordRaw.units) || 0,
++              record: readStringSafe(sportsTrackRecordRaw.record) || "0 to 0 to 0",
++              matured: Boolean(sportsTrackRecordRaw.matured),
++            }
++            : null,
+         });
+       } else {
+         let errorMessage = `Summary request failed (${res.status})`;
+@@ -1380,12 +1641,17 @@ export default function ChatPage() {
+ 
+     if (state.mode === "sports") {
+       setSelectedWorkspaceItem(null);
+-      const matchup = item.away && item.home
+-        ? `${item.away} vs ${item.home}`
+-        : item.label;
+       dispatch({ type: "SET_SELECTED_CANDIDATE", payload: null });
+-      dispatch({ type: "SET_INPUT", payload: `What's the latest on ${matchup}?` });
+-      inputRef.current?.focus();
++      const canonicalUrl = item.publicUrl || item.apiUrl || item.hubUrl || "";
++      if (canonicalUrl) {
++        window.open(canonicalUrl, "_blank", "noopener,noreferrer");
++      } else {
++        const matchup = item.away && item.home
++          ? `${item.away} vs ${item.home}`
++          : item.label;
++        dispatch({ type: "SET_INPUT", payload: `What's the latest on ${matchup}?` });
++        inputRef.current?.focus();
++      }
+       return;
+     }
+ 
+@@ -1427,7 +1693,8 @@ export default function ChatPage() {
+     }
+ 
+     if (state.mode === "ayaops" && item.id) {
+-      setSelectedWorkspaceItem(null);
++      setSelectedWorkspaceItem(item);
++      if (!item.id || !item.label) throw new Error("AYA_OPS_INVARIANT: Candidate lacks minimum identity for Top Bar hydration.");
+       try {
+         const res = await fetch(`/api/candidates/${item.id}`);
+         if (res.ok) {
+@@ -1441,15 +1708,10 @@ export default function ChatPage() {
+               contextText: data.contextText,
+             },
+           });
+-          const scorePrefix =
+-            typeof item.touchPriorityScore === "number"
+-              ? `Priority score ${item.touchPriorityScore}/100${item.touchPriorityReason ? ` (${item.touchPriorityReason})` : ""}. `
+-              : "";
+-          const noteSeed = item.touchNoteSeed ? `Use this outreach context: ${item.touchNoteSeed}. ` : "";
+           dispatch({
+             type: "SET_INPUT",
+             payload:
+-              `${scorePrefix}Summarize ${data.candidate.name || item.label}'s current status, then draft a short recruiter touch-base note I can paste into the record today. ${noteSeed}`.trim(),
++              `Summarize ${data.candidate.name || item.label}'s current status, then draft a short recruiter touch-base note I can paste into the record today.`,
+           });
+           inputRef.current?.focus();
+           return;
+@@ -1471,6 +1733,33 @@ export default function ChatPage() {
+     inputRef.current?.focus();
+   };
+ 
++  const handleAddCandidateFromSavedImage = (image: SavedImage) => {
++    dispatch({ type: "SET_PENDING_IMAGE", payload: null });
++    dispatch({ type: "SET_IMAGE_INTENT", payload: "add_candidate" });
++    setPendingSavedImage(image);
++    if (!state.input.trim()) {
++      dispatch({ type: "SET_INPUT", payload: "Add this candidate to the system from the screenshot." });
++    }
++    inputRef.current?.focus();
++  };
++
++  const handleQuickAddCandidate = () => {
++    if (state.loading || uploadingImage) return;
++    if (state.mode !== "ayaops") {
++      switchMode("ayaops");
++    }
++    dispatch({ type: "SET_PENDING_IMAGE", payload: null });
++    setPendingSavedImage(null);
++    dispatch({ type: "SET_IMAGE_INTENT", payload: "add_candidate" });
++    if (!state.input.trim()) {
++      dispatch({ type: "SET_INPUT", payload: "Add this candidate to the system from the screenshot." });
++    }
++    window.setTimeout(() => {
++      fileInputRef.current?.click();
++    }, 0);
++    inputRef.current?.focus();
++  };
++
+   const handleToggleImagePin = async (image: SavedImage) => {
+     try {
+       await fetch("/api/evidence/pin", {
+@@ -1596,6 +1885,12 @@ export default function ChatPage() {
+               objectType: "healthcare_research_snapshot",
+               rowsUpdated: 1,
+               code: null,
++              transactionId: deriveWriteTransactionId({
++                action: "approve_research_snapshot",
++                outcome,
++                rowsUpdated: 1,
++                payload: result,
++              }),
+               payload: result,
+             },
+           },
+@@ -1604,11 +1899,11 @@ export default function ChatPage() {
+         const summaryLine = readStringSafe(result.change_summary);
+         if (isFirstVersion) {
+           appendAssistantSystemMessage(
+-            `✓ Approved snapshot saved for ${context.state} · ${context.profession}. First approved version captured.`,
++            `Approved snapshot recorded for ${context.state} · ${context.profession}. First approved version captured.`,
+           );
+         } else {
+           appendAssistantSystemMessage(
+-            `✓ Approved snapshot saved for ${context.state} · ${context.profession}. ${summaryLine || "Comparison recorded."}`,
++            `Approved snapshot recorded for ${context.state} · ${context.profession}. ${summaryLine || "Comparison recorded."}`,
+           );
+         }
+ 
+@@ -1619,7 +1914,7 @@ export default function ChatPage() {
+         }
+       } catch (error) {
+         const messageText = error instanceof Error ? error.message : "Approval failed";
+-        appendAssistantSystemMessage(`✗ Snapshot approval failed: ${messageText}`);
++        appendAssistantSystemMessage(`Snapshot approval failed: ${messageText}`);
+       } finally {
+         setApprovingSnapshotMessageId(null);
+       }
+@@ -1715,6 +2010,12 @@ export default function ChatPage() {
+               objectType: "candidate",
+               rowsUpdated: 1,
+               code: null,
++              transactionId: deriveWriteTransactionId({
++                action: "candidate_ingest",
++                outcome,
++                rowsUpdated: 1,
++                payload: result as Record<string, unknown>,
++              }),
+               payload: result,
+             },
+           },
+@@ -1753,7 +2054,7 @@ export default function ChatPage() {
+   const handleProcessCredential = async (image: SavedImage) => {
+     dispatch({
+       type: "ADD_ASSISTANT_MESSAGE",
+-      payload: { id: String(Date.now()), text: `🔄 Processing credential OCR for image: ${image.imageId}...` }
++      payload: { id: String(Date.now()), text: `Processing credential OCR for image: ${image.imageId}...` }
+     });
+     try {
+       const res = await fetch("/api/credentials/intake", {
+@@ -1852,7 +2153,7 @@ export default function ChatPage() {
+           error,
+           resolvedAt: new Date(),
+         }));
+-        appendAssistantSystemMessage(`✗ Failed: ${error}`);
++        appendAssistantSystemMessage(`Commit failed: ${error}`);
+         return;
+       }
+ 
+@@ -1864,21 +2165,21 @@ export default function ChatPage() {
+       }));
+       const actionName = payload.result?.action || "";
+       if (actionName === "send_email_now") {
+-        appendAssistantSystemMessage(`✓ Sent: ${task.title}`);
++        appendAssistantSystemMessage(`Sent: ${task.title}`);
+       } else if (actionName === "create_email_draft") {
+-        appendAssistantSystemMessage(`✓ Draft saved: ${task.title}`);
++        appendAssistantSystemMessage(`Draft created: ${task.title}`);
+       } else if (actionName === "create_agent_handoff_task") {
+         const handoffUrl =
+           typeof payload.result?.handoff_url === "string" && payload.result.handoff_url
+             ? payload.result.handoff_url
+             : null;
+         if (handoffUrl) {
+-          appendAssistantSystemMessage(`✓ Handoff ready: ${task.title}\n${handoffUrl}`);
++          appendAssistantSystemMessage(`Handoff ready: ${task.title}\n${handoffUrl}`);
+         } else {
+-          appendAssistantSystemMessage(`✓ Handoff task created: ${task.title}`);
++          appendAssistantSystemMessage(`Handoff task created: ${task.title}`);
+         }
+       } else {
+-        appendAssistantSystemMessage(`✓ Published: ${task.title}`);
++        appendAssistantSystemMessage(`Published: ${task.title}`);
+       }
+     } catch (error) {
+       const message = error instanceof Error ? error.message : "Unknown sandbox commit error";
+@@ -1888,7 +2189,7 @@ export default function ChatPage() {
+         error: message,
+         resolvedAt: new Date(),
+       }));
+-      appendAssistantSystemMessage(`✗ Failed: ${message}`);
++      appendAssistantSystemMessage(`Commit failed: ${message}`);
+     } finally {
+       setPendingSandboxCommitId(null);
+     }
+@@ -1901,42 +2202,82 @@ export default function ChatPage() {
+       feedback: feedback || null,
+       resolvedAt: new Date(),
+     }));
+-    appendAssistantSystemMessage("↩ Regenerating with feedback...");
++    appendAssistantSystemMessage("Regenerating with feedback...");
+   }, [appendAssistantSystemMessage, updateSandboxTask]);
+ 
+-  const handleSubmit = async (e?: FormEvent, promptOverride?: string) => {
+-    if (e) e.preventDefault();
+-    const hasPendingImage = Boolean(state.pendingImage || pendingSavedImage);
+-    const prompt = (promptOverride ?? state.input).trim() || (hasPendingImage ? "What's in this image?" : "");
+-    if ((!prompt && !hasPendingImage) || state.loading) return;
+-    const requestWorkspaceScope = workspaceScopeFor(state.mode, selectedWorkspaceItem);
++  const handleEditSandboxEmailDraft = useCallback((
++    taskId: string,
++    draft: { toEmail: string; cc: string[]; subject: string; body: string },
++  ) => {
++    updateSandboxTask(taskId, (current) => {
++      if (current.preview.type !== "email_draft") return current;
++
++      const normalizedTo = String(draft.toEmail || "").trim();
++      const normalizedCc = Array.isArray(draft.cc)
++        ? draft.cc.map((entry) => String(entry || "").trim()).filter(Boolean)
++        : [];
++      const normalizedSubject = String(draft.subject || "");
++      const normalizedBody = String(draft.body || "");
++
++      const previewChanged =
++        current.preview.toEmail !== normalizedTo ||
++        current.preview.subject !== normalizedSubject ||
++        current.preview.body !== normalizedBody ||
++        current.preview.cc.join(",") !== normalizedCc.join(",");
++
++      if (!previewChanged) return current;
++
++      const nextPreview = {
++        ...current.preview,
++        toEmail: normalizedTo,
++        cc: normalizedCc,
++        subject: normalizedSubject,
++        body: normalizedBody,
++      };
+ 
+-    const sentImage = state.pendingImage;
+-    const sentSavedImage = pendingSavedImage;
+-    const uId = uid();
+-    dispatch({
+-      type: "ADD_USER_MESSAGE",
+-      payload: {
+-        text: prompt,
+-        id: uId,
+-        imageUrl: sentImage || sentSavedImage?.previewUrl || undefined,
+-        workspaceScope: requestWorkspaceScope,
+-      },
+-    });
+-    setPendingSavedImage(null);
++      let nextCommitAction = current.commitAction;
++      if (current.commitAction.type === "create_email_draft" || current.commitAction.type === "send_email_now") {
++        nextCommitAction = {
++          ...current.commitAction,
++          toEmail: normalizedTo,
++          cc: normalizedCc,
++          subject: normalizedSubject,
++          body: normalizedBody,
++        };
++      }
+ 
+-    const aId = uid();
+-    dispatch({
+-      type: "START_ASSISTANT_STREAM",
+-      payload: { id: aId, workspaceScope: requestWorkspaceScope },
++      return {
++        ...current,
++        preview: nextPreview,
++        commitAction: nextCommitAction,
++      };
+     });
+-    startTimeRef.current = performance.now();
++  }, [updateSandboxTask]);
++
++  type RunAssistantStreamParams = {
++    prompt: string;
++    assistantMessageId: string;
++    requestWorkspaceScope: string | null;
++    sentImage: string | null;
++    sentSavedImage: SavedImage | null;
++    sentImageIntent: ImageIntent;
++    historySeedMessages: Message[];
++  };
+ 
++  const runAssistantStream = async ({
++    prompt,
++    assistantMessageId,
++    requestWorkspaceScope,
++    sentImage,
++    sentSavedImage,
++    sentImageIntent,
++    historySeedMessages,
++  }: RunAssistantStreamParams) => {
+     try {
+       const historyBase = requestWorkspaceScope
+-        ? state.messages.filter((message) => message.workspaceScope === requestWorkspaceScope)
+-        : state.messages;
+-      const history = historyBase.slice(-10).map(m => ({ role: m.role, text: m.text }));
++        ? historySeedMessages.filter((message) => message.workspaceScope === requestWorkspaceScope)
++        : historySeedMessages;
++      const history = historyBase.slice(-10).map((message) => ({ role: message.role, text: message.text }));
+       const healthcareEntity =
+         state.mode === "healthcare"
+           ? resolveHealthcareEntityFromPrompt(prompt, summary?.items || [], selectedWorkspaceItem)
+@@ -2015,8 +2356,7 @@ export default function ChatPage() {
+           })()
+           : null;
+ 
+-      const selectedCandidateContext =
+-        selectedContextFromSelection || selectedContextFromRail || null;
++      const selectedCandidateContext = selectedContextFromSelection || selectedContextFromRail || null;
+ 
+       const selectedMarginContext: SelectedMarginContextPayload | null =
+         state.mode === "margins" && selectedWorkspaceItem
+@@ -2040,9 +2380,9 @@ export default function ChatPage() {
+             shift_end: selectedWorkspaceItem.shiftEnd || null,
+           }
+           : null;
++      const rosterDigest =
++        state.mode === "ayaops" ? buildAyaopsRosterDigest(summary) : null;
+ 
+-      // Build request body with optional retrieval policy for internal records
+-      const sentImageIntent = state.imageIntent;
+       const chatBody: Record<string, unknown> = {
+         prompt,
+         history,
+@@ -2057,6 +2397,7 @@ export default function ChatPage() {
+           candidateId: selectedCandidateContext?.candidate_id || null,
+           candidateName: selectedCandidateContext?.candidate_name || null,
+           activeItems: state.mode === "code" ? summary?.items : undefined,
++          rosterDigest,
+         },
+       };
+ 
+@@ -2119,18 +2460,21 @@ export default function ChatPage() {
+               if (!hasReferenceLink) {
+                 const referenceLine = `\n\nReference page: [${healthcareEntity.label}](${healthcareEntity.url})`;
+                 assistantTextBuffer += referenceLine;
+-                dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: aId, textChunk: referenceLine } });
++                dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: assistantMessageId, textChunk: referenceLine } });
+               }
+             }
+             const elapsed = Math.round(performance.now() - startTimeRef.current);
+-            dispatch({ type: "FINISH_ASSISTANT_STREAM", payload: { id: aId, durationMs: elapsed, modelProvider, modelId } });
++            dispatch({
++              type: "FINISH_ASSISTANT_STREAM",
++              payload: { id: assistantMessageId, durationMs: elapsed, modelProvider, modelId },
++            });
+             continue;
+           }
+           try {
+             const parsed = JSON.parse(dataStr);
+             if (parsed.type === "text") {
+               assistantTextBuffer += String(parsed.text || "");
+-              dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: aId, textChunk: parsed.text } });
++              dispatch({ type: "APPEND_ASSISTANT_CHUNK", payload: { id: assistantMessageId, textChunk: parsed.text } });
+             } else if (
+               parsed.type === "sandbox_document" ||
+               parsed.type === "sandbox_db_write" ||
+@@ -2174,14 +2518,17 @@ export default function ChatPage() {
+                 error: null,
+                 conversationId: conversationIdRef.current || "",
+                 mode: state.mode,
+-                messageId: aId,
++                messageId: assistantMessageId,
+               });
+ 
+               if (!announcedSandboxTasksRef.current.has(taskId)) {
+                 announcedSandboxTasksRef.current.add(taskId);
+                 dispatch({
+                   type: "APPEND_ASSISTANT_CHUNK",
+-                  payload: { id: aId, textChunk: `${isOpsMode ? "\n\n" : ""}Preview ready: ${title} — Review in Sandbox` },
++                  payload: {
++                    id: assistantMessageId,
++                    textChunk: `${isOpsMode ? "\n\n" : ""}Preview ready: ${title}. Review in Sandbox.`,
++                  },
+                 });
+               }
+             } else if (parsed.type === "write_result") {
+@@ -2191,24 +2538,34 @@ export default function ChatPage() {
+                   parsed.payload && typeof parsed.payload === "object"
+                     ? (parsed.payload as Record<string, unknown>)
+                     : undefined;
++                const transactionIdRaw =
++                  (typeof parsed.transaction_id === "string" && parsed.transaction_id.trim()) ||
++                  (typeof parsed.transactionId === "string" && parsed.transactionId.trim()) ||
++                  "";
++                const transactionId =
++                  transactionIdRaw ||
++                  deriveWriteTransactionId({
++                    action: typeof parsed.action === "string" ? parsed.action : undefined,
++                    outcome,
++                    rowsUpdated: typeof parsed.rowsUpdated === "number" ? parsed.rowsUpdated : null,
++                    payload: writePayload || null,
++                  });
+                 dispatch({
+                   type: "SET_ASSISTANT_WRITE_RESULT",
+                   payload: {
+-                    id: aId,
++                    id: assistantMessageId,
+                     writeResult: {
+                       outcome,
+                       action: typeof parsed.action === "string" ? parsed.action : undefined,
+                       objectType: typeof parsed.objectType === "string" ? parsed.objectType : undefined,
+                       rowsUpdated: typeof parsed.rowsUpdated === "number" ? parsed.rowsUpdated : null,
+                       code: typeof parsed.code === "string" ? parsed.code : null,
++                      transactionId,
+                       payload: writePayload,
+                     },
+                   },
+                 });
+ 
+-                // ── Reactive left rail update ──────────────────────
+-                // When a status write lands, update the matching candidate
+-                // card in the left rail immediately — no refresh needed.
+                 if (
+                   (parsed.action === "update_candidate_status" || parsed.action === "update_candidate_profession") &&
+                   writePayload &&
+@@ -2217,9 +2574,9 @@ export default function ChatPage() {
+                   const candidateId = String(writePayload.candidate_id || "");
+                   const novaId = String(writePayload.nova_id || "");
+                   if (candidateId || novaId) {
+-                    setSummary(prev => {
++                    setSummary((prev) => {
+                       if (!prev) return prev;
+-                      const updatedItems = prev.items.map(item => {
++                      const updatedItems = prev.items.map((item) => {
+                         const itemId = item.candidateId || item.id || "";
+                         const itemNovaId = item.novaId || "";
+                         const isMatch =
+@@ -2248,18 +2605,20 @@ export default function ChatPage() {
+               dispatch({
+                 type: "ERROR_ASSISTANT_STREAM",
+                 payload: {
+-                  id: aId,
++                  id: assistantMessageId,
+                   error: parsed.message || "No response returned. Please try again.",
+                   code: typeof parsed.code === "string" ? parsed.code : undefined,
+                 },
+               });
+             } else if (parsed.type === "tool_status") {
+-              const label = typeof parsed.label === "string" ? parsed.label : String(parsed.tool || "");
++              const label = sanitizeToolStatusLabel(
++                typeof parsed.label === "string" ? parsed.label : String(parsed.tool || ""),
++              );
+               console.log(`[tool_status] ${parsed.tool} ${parsed.status} ${parsed.latency_ms ?? ""}ms`);
+               dispatch({
+                 type: "UPSERT_TOOL_STATUS",
+                 payload: {
+-                  id: aId,
++                  id: assistantMessageId,
+                   status: {
+                     tool: parsed.tool,
+                     status: parsed.status,
+@@ -2269,20 +2628,124 @@ export default function ChatPage() {
+                 }
+               });
+             } else if (parsed.type === "grounding") {
+-              dispatch({ type: "SET_ASSISTANT_GROUNDING", payload: { id: aId, citations: parsed.citations, queries: parsed.queries } });
++              dispatch({
++                type: "SET_ASSISTANT_GROUNDING",
++                payload: { id: assistantMessageId, citations: parsed.citations, queries: parsed.queries },
++              });
+             } else if (parsed.type === "executableCode") {
+-              dispatch({ type: "ADD_CODE_BLOCK", payload: { id: aId, code: parsed.code, language: parsed.language } });
++              dispatch({ type: "ADD_CODE_BLOCK", payload: { id: assistantMessageId, code: parsed.code, language: parsed.language } });
+             } else if (parsed.type === "codeExecutionResult") {
+-              dispatch({ type: "SET_CODE_RESULT", payload: { id: aId, outcome: parsed.outcome, output: parsed.output } });
++              dispatch({
++                type: "SET_CODE_RESULT",
++                payload: { id: assistantMessageId, outcome: parsed.outcome, output: parsed.output },
++              });
+             }
+-          } catch { /* malformed chunk */ }
++          } catch {
++            // Ignore malformed SSE chunks.
++          }
+         }
+       }
+     } catch (err) {
+-      dispatch({ type: "ERROR_ASSISTANT_STREAM", payload: { id: aId, error: err instanceof Error ? err.message : "Try again in a moment." } });
++      dispatch({
++        type: "ERROR_ASSISTANT_STREAM",
++        payload: {
++          id: assistantMessageId,
++          error: err instanceof Error ? err.message : "Try again in a moment.",
++          code: "STREAM_ERROR",
++        },
++      });
+     }
+   };
+ 
++  const handleSubmit = async (e?: FormEvent, promptOverride?: string) => {
++    if (e) e.preventDefault();
++    const hasPendingImage = Boolean(state.pendingImage || pendingSavedImage);
++    const prompt = (promptOverride ?? state.input).trim() || (hasPendingImage ? "What's in this image?" : "");
++    if ((!prompt && !hasPendingImage) || state.loading) return;
++    const requestWorkspaceScope = workspaceScopeFor(state.mode, selectedWorkspaceItem);
++    const sentImage = state.pendingImage;
++    const sentSavedImage = pendingSavedImage;
++    const sentImageIntent = state.imageIntent;
++
++    const userMessageId = uid();
++    dispatch({
++      type: "ADD_USER_MESSAGE",
++      payload: {
++        text: prompt,
++        id: userMessageId,
++        imageUrl: sentImage || sentSavedImage?.previewUrl || undefined,
++        workspaceScope: requestWorkspaceScope,
++      },
++    });
++    setPendingSavedImage(null);
++
++    const assistantMessageId = uid();
++    dispatch({
++      type: "START_ASSISTANT_STREAM",
++      payload: {
++        id: assistantMessageId,
++        workspaceScope: requestWorkspaceScope,
++        requestUserMessageId: userMessageId,
++      },
++    });
++    startTimeRef.current = performance.now();
++
++    await runAssistantStream({
++      prompt,
++      assistantMessageId,
++      requestWorkspaceScope,
++      sentImage,
++      sentSavedImage,
++      sentImageIntent,
++      historySeedMessages: state.messages,
++    });
++  };
++
++  const handleRetryAssistantMessage = async (assistantMessageId: string) => {
++    if (state.loading) return;
++    const assistantIndex = state.messages.findIndex(
++      (message) => message.id === assistantMessageId && message.role === "assistant",
++    );
++    if (assistantIndex < 0) return;
++
++    const assistantMessage = state.messages[assistantIndex];
++    let sourceUserIndex = -1;
++    if (assistantMessage.requestUserMessageId) {
++      sourceUserIndex = state.messages.findIndex(
++        (message) => message.id === assistantMessage.requestUserMessageId && message.role === "user",
++      );
++    }
++    if (sourceUserIndex < 0) {
++      for (let i = assistantIndex - 1; i >= 0; i -= 1) {
++        const candidate = state.messages[i];
++        if (candidate.role !== "user") continue;
++        if ((candidate.workspaceScope || null) !== (assistantMessage.workspaceScope || null)) continue;
++        sourceUserIndex = i;
++        break;
++      }
++    }
++    if (sourceUserIndex < 0) return;
++
++    const sourceUserMessage = state.messages[sourceUserIndex];
++    if (!sourceUserMessage || sourceUserMessage.role !== "user") return;
++
++    const requestWorkspaceScope = sourceUserMessage.workspaceScope || assistantMessage.workspaceScope || null;
++    const historySeedMessages = state.messages.slice(0, sourceUserIndex);
++
++    dispatch({ type: "RETRY_ASSISTANT_STREAM", payload: { id: assistantMessageId } });
++    startTimeRef.current = performance.now();
++
++    await runAssistantStream({
++      prompt: sourceUserMessage.text,
++      assistantMessageId,
++      requestWorkspaceScope,
++      sentImage: sourceUserMessage.imageUrl || null,
++      sentSavedImage: null,
++      sentImageIntent: null,
++      historySeedMessages,
++    });
++  };
++
+   const handleKeyDown = (e: React.KeyboardEvent) => {
+     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(e); }
+   };
+@@ -2292,7 +2755,85 @@ export default function ChatPage() {
+     void handleSubmit(undefined, prompt);
+   }, [handleSubmit, state.loading]);
+ 
++  useEffect(() => {
++    if (state.mode !== "ayaops" && ayaAdminMode) {
++      setAyaAdminMode(false);
++    }
++  }, [ayaAdminMode, state.mode]);
++
++  const toTitleTokens = useCallback((value: string | null | undefined): string => {
++    const normalized = String(value || "")
++      .replace(/[_-]+/g, " ")
++      .replace(/\s+/g, " ")
++      .trim();
++    if (!normalized) return "";
++    return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
++  }, []);
++
++  const initialsFor = useCallback((value: string | null | undefined): string => {
++    const label = String(value || "").trim();
++    if (!label) return "NA";
++    return label
++      .split(/\s+/)
++      .map((part) => part[0] || "")
++      .join("")
++      .slice(0, 2)
++      .toUpperCase();
++  }, []);
++
++  const activeAyaCandidate = useMemo(() => {
++    if (state.mode !== "ayaops") return null;
++    if (selectedWorkspaceItem) return selectedWorkspaceItem;
++    return (summary?.items?.[0] || null) as PanelItem | null;
++  }, [state.mode, selectedWorkspaceItem, summary?.items]);
++
++  const contextStatusLabel = useMemo(() => {
++    if (!activeAyaCandidate) return "";
++    const rawStatus =
++      activeAyaCandidate.derivedCurrentStatus ||
++      activeAyaCandidate.assignmentStatus ||
++      activeAyaCandidate.status ||
++      "in_conversation";
++    return toTitleTokens(rawStatus);
++  }, [activeAyaCandidate, toTitleTokens]);
++
++  const contextRecentAssignment = useMemo(() => {
++    if (!activeAyaCandidate) return "";
++    const location = [activeAyaCandidate.facilityName, activeAyaCandidate.facilityState]
++      .filter(Boolean)
++      .join(", ");
++    const windowLabel = formatAssignmentWindow(
++      activeAyaCandidate.assignmentStart || null,
++      activeAyaCandidate.assignmentEnd || null,
++    );
++    if (location && windowLabel && windowLabel !== "--") return `${location}, ${windowLabel}`;
++    if (location) return location;
++    return windowLabel !== "--" ? windowLabel : "";
++  }, [activeAyaCandidate]);
++
++  const candidateHubUrl = useMemo(() => {
++    if (!activeAyaCandidate) return "";
++    if (activeAyaCandidate.hubUrl) return activeAyaCandidate.hubUrl;
++    if (activeAyaCandidate.novaId) return `/c/${encodeURIComponent(activeAyaCandidate.novaId)}`;
++    if (activeAyaCandidate.id) return `/api/hub/candidates/${encodeURIComponent(activeAyaCandidate.id)}`;
++    return "";
++  }, [activeAyaCandidate]);
++
+   const messageCount = visibleMessages.filter(m => m.role === "user").length;
++  const headerScopeLabel = useMemo(() => {
++    const latestUserMessage = [...visibleMessages]
++      .reverse()
++      .find((message) => message.role === "user" && String(message.text || "").trim().length > 0);
++    const fromThread = latestUserMessage ? summarizeThreadLabel(latestUserMessage.text) : "";
++    if (fromThread) return fromThread;
++    return (
++      selectedWorkspaceItem?.label ||
++      selectedWorkspaceItem?.candidateName ||
++      selectedWorkspaceItem?.facilityName ||
++      "General follow-up"
++    );
++  }, [visibleMessages, selectedWorkspaceItem]);
++  const headerScopePrefix = isOpsMode ? "Team" : "Workspace";
+ 
+   return (
+     <div
+@@ -2300,7 +2841,7 @@ export default function ChatPage() {
+           : rightPanelMode === "sources" ? "ws-sources-open"
+             : rightPanelMode === "sandbox" ? "ws-sandbox-open"
+               : ""
+-        } ${mobileRailOpen ? "ws-mobile-rail-open" : ""} ${
++        } ws-ayaops-v2 ${mobileRailOpen ? "ws-mobile-rail-open" : ""} ${
+           leftPanelCollapsed ? "ws-left-collapsed" : ""
+         }`}
+     >
+@@ -2346,6 +2887,13 @@ export default function ChatPage() {
+       {/* Center: Header + Messages + Dock */}
+       <div className="ws-center" style={{ position: "relative" }}>
+         <header className="c-header">
++          <div className="c-header-left">
++            <div className="c-main-crumb">
++              <span className="label">{headerScopePrefix}</span>
++              <span className="sep">/</span>
++              <span className="current">{headerScopeLabel}</span>
++            </div>
++          </div>
+           <div className="c-header-right">
+             <button
+               type="button"
+@@ -2355,6 +2903,18 @@ export default function ChatPage() {
+             >
+               <PanelLeft size={15} />
+             </button>
++            {state.mode === "ayaops" && (
++              <button
++                type="button"
++                className={`c-admin-toggle ${ayaAdminMode ? "is-on" : ""}`}
++                onClick={() => setAyaAdminMode((current) => !current)}
++                aria-pressed={ayaAdminMode}
++                aria-label="Toggle admin controls"
++              >
++                <span className="c-admin-toggle-dot" />
++                Admin
++              </button>
++            )}
+             {(state.mode === "facility" || state.mode === "margins") && (
+               <button
+                 type="button"
+@@ -2382,11 +2942,12 @@ export default function ChatPage() {
+               onClick={() => setRightPanelMode("sandbox")}
+             >
+               Sandbox
+-              {sandboxTasks.length > 0 ? ` (${sandboxTasks.length})` : ""}
+             </button>
+-            <Link href="/voice" className="c-voice-link" title="Voice mode">
+-              <Mic size={16} />
+-            </Link>
++            {state.mode !== "ayaops" && (
++              <Link href="/voice" className="c-voice-link" title="Voice mode">
++                <Mic size={16} />
++              </Link>
++            )}
+             {messageCount > 0 && (
+               <button
+                 className="c-new-btn"
+@@ -2399,17 +2960,156 @@ export default function ChatPage() {
+                   ensureConversationId(state.mode);
+                 }}
+               >
+-                <Plus size={14} />
+                 New
+               </button>
+             )}
+           </div>
+         </header>
+ 
++        {state.mode === "ayaops" && activeAyaCandidate && (
++          <>
++            <section className={`c-context-bar ${ayaAdminMode ? "admin-on" : ""}`}>
++              <div className="c-context-avatar">{initialsFor(activeAyaCandidate.label || activeAyaCandidate.candidateName)}</div>
++              <div className="c-context-info">
++                <div className="c-context-row1">
++                  <span className="c-context-name">
++                    {activeAyaCandidate.label || activeAyaCandidate.candidateName || "Candidate"}
++                  </span>
++                  <span className="c-context-state">{contextStatusLabel || "In Conversation"}</span>
++                </div>
++                <div className="c-context-row2">
++                  <span>
++                    <strong>{activeAyaCandidate.specialty || activeAyaCandidate.profession || "--"}</strong>
++                  </span>
++                  {contextRecentAssignment && (
++                    <span>Recent <strong>{contextRecentAssignment}</strong></span>
++                  )}
++                </div>
++              </div>
++              <div className="c-link-cluster">
++                {activeAyaCandidate.phone ? (
++                  <a className="c-link-btn" href={`tel:${activeAyaCandidate.phone}`} title="RingCentral call">
++                    <Phone size={15} />
++                  </a>
++                ) : (
++                  <span className="c-link-btn is-disabled" aria-hidden="true"><Phone size={15} /></span>
++                )}
++                {activeAyaCandidate.rcThreadUrl || activeAyaCandidate.phone ? (
++                  <a
++                    className="c-link-btn"
++                    href={activeAyaCandidate.rcThreadUrl || `sms:${activeAyaCandidate.phone}`}
++                    target={activeAyaCandidate.rcThreadUrl ? "_blank" : undefined}
++                    rel={activeAyaCandidate.rcThreadUrl ? "noopener noreferrer" : undefined}
++                    title="RingCentral SMS"
++                  >
++                    <MessageSquare size={15} />
++                  </a>
++                ) : (
++                  <span className="c-link-btn is-disabled" aria-hidden="true"><MessageSquare size={15} /></span>
++                )}
++                {activeAyaCandidate.outlookThreadUrl || activeAyaCandidate.candidateEmail ? (
++                  <a
++                    className="c-link-btn"
++                    href={activeAyaCandidate.outlookThreadUrl || `mailto:${activeAyaCandidate.candidateEmail}`}
++                    target={activeAyaCandidate.outlookThreadUrl ? "_blank" : undefined}
++                    rel={activeAyaCandidate.outlookThreadUrl ? "noopener noreferrer" : undefined}
++                    title="Outlook thread"
++                  >
++                    <Mail size={15} />
++                  </a>
++                ) : (
++                  <span className="c-link-btn is-disabled" aria-hidden="true"><Mail size={15} /></span>
++                )}
++                <span className="c-link-divider" />
++                {activeAyaCandidate.novaUrl ? (
++                  <a className="c-link-btn" href={activeAyaCandidate.novaUrl} target="_blank" rel="noopener noreferrer" title="Nova profile">
++                    <CirclePlus size={15} />
++                  </a>
++                ) : (
++                  <span className="c-link-btn is-disabled" aria-hidden="true"><CirclePlus size={15} /></span>
++                )}
++                <span className="c-link-btn is-disabled" aria-hidden="true" title="Teams chat">
++                  <Users size={15} />
++                </span>
++                {ayaAdminMode && (
++                  <>
++                    <span className="c-link-divider" />
++                    {candidateHubUrl ? (
++                      <a className="c-link-btn c-link-btn-admin" href={candidateHubUrl} target="_blank" rel="noopener noreferrer" title="Candidate hub link">
++                        <Link2 size={15} />
++                      </a>
++                    ) : (
++                      <span className="c-link-btn c-link-btn-admin is-disabled" aria-hidden="true">
++                        <Link2 size={15} />
++                      </span>
++                    )}
++                  </>
++                )}
++              </div>
++            </section>
++
++            <section className={`c-hub-strip ${ayaAdminMode ? "is-on" : ""}`}>
++              <span className="c-hub-strip-label">Hub URL</span>
++              <span className="c-hub-url">{candidateHubUrl || "Unavailable"}</span>
++              <div className="c-hub-actions">
++                <button
++                  type="button"
++                  className="c-hub-action-btn"
++                  disabled={!candidateHubUrl}
++                  onClick={() => {
++                    if (!candidateHubUrl) return;
++                    void navigator.clipboard.writeText(candidateHubUrl);
++                  }}
++                >
++                  <Copy size={12} />
++                  Copy
++                </button>
++                <button
++                  type="button"
++                  className="c-hub-action-btn"
++                  disabled={!candidateHubUrl || !activeAyaCandidate.phone}
++                  onClick={() => {
++                    if (!candidateHubUrl || !activeAyaCandidate.phone) return;
++                    const smsBody = encodeURIComponent(candidateHubUrl);
++                    window.open(`sms:${activeAyaCandidate.phone}?body=${smsBody}`, "_self");
++                  }}
++                >
++                  <MessageSquare size={12} />
++                  Send via SMS
++                </button>
++                <a
++                  className={`c-hub-action-btn c-hub-action-btn-primary ${candidateHubUrl ? "" : "is-disabled"}`}
++                  href={candidateHubUrl || undefined}
++                  target={candidateHubUrl ? "_blank" : undefined}
++                  rel={candidateHubUrl ? "noopener noreferrer" : undefined}
++                  aria-disabled={!candidateHubUrl}
++                  onClick={(event) => {
++                    if (!candidateHubUrl) event.preventDefault();
++                  }}
++                >
++                  <ExternalLink size={12} />
++                  Open hub
++                </a>
++              </div>
++            </section>
++          </>
++        )}
++
+ 
+ 
+         {/* Today cards removed — not demo-ready */}
+ 
++        {state.mode === "sports" && (
++          <PicksPanel
++            picks={summary?.sportsPicks || []}
++            games={summary?.items || []}
++            track={summary?.sportsTrackRecord || null}
++            onPrompt={(prompt) => {
++              void handleSubmit(undefined, prompt);
++            }}
++          />
++        )}
++
+         {state.mode === "facility" && selectedWorkspaceItem && (
+           <section className="c-workspace-detail">
+             <div className="c-workspace-detail-head">
+@@ -2452,7 +3152,7 @@ export default function ChatPage() {
+             <div className="c-workspace-detail-grid">
+               <div>
+                 <span>Submittal Rules</span>
+-                <strong>{selectedWorkspaceItem.submittalRules || "—"}</strong>
++                <strong>{selectedWorkspaceItem.submittalRules || "--"}</strong>
+               </div>
+               <div>
+                 <span>Difficulty</span>
+@@ -2470,7 +3170,7 @@ export default function ChatPage() {
+               </div>
+               <div>
+                 <span>Pay vs Local COL</span>
+-                <strong>{selectedWorkspaceItem.payVsLocalCol || "—"}</strong>
++                <strong>{selectedWorkspaceItem.payVsLocalCol || "--"}</strong>
+               </div>
+               {typeof selectedWorkspaceItem.cancelRatePct === "number" && (
+                 <div>
+@@ -2711,6 +3411,7 @@ export default function ChatPage() {
+           setRightPanelMode={setRightPanelMode}
+           handleApproveHealthcareSnapshot={handleApproveHealthcareSnapshot}
+           handleAddCandidateToSystem={handleAddCandidateToSystem}
++          onRetryAssistantMessage={handleRetryAssistantMessage}
+           copyToClipboard={copyToClipboard}
+           modeConfig={modeConfig}
+         />
+@@ -2734,6 +3435,8 @@ export default function ChatPage() {
+           setModelOverride={setModelOverride}
+           uploadingImage={uploadingImage}
+           CapabilityDropdown={CapabilityDropdown}
++          showQuickAddCandidate={state.mode === "ayaops"}
++          onQuickAddCandidate={handleQuickAddCandidate}
+         />
+       </div>
+ 
+@@ -2746,6 +3449,7 @@ export default function ChatPage() {
+           imagesLoading={imagesLoading}
+           onUseImage={handleUseSavedImage}
+           onTogglePin={handleToggleImagePin}
++          onAddCandidate={handleAddCandidateFromSavedImage}
+           onLinkCandidate={handleLinkImageCandidate}
+           onProcessCredential={handleProcessCredential}
+           selectedCandidateId={state.selectedCandidate?.id || null}
+@@ -2764,6 +3468,7 @@ export default function ChatPage() {
+           onSelectTask={setActiveSandboxId}
+           onApprove={handleApproveSandboxTask}
+           onReject={handleRejectSandboxTask}
++          onEditEmailDraft={handleEditSandboxEmailDraft}
+           onClose={() => setRightPanelMode("closed")}
+           isCommitting={Boolean(pendingSandboxCommitId)}
+         />

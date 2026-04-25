@@ -908,6 +908,15 @@ body {
   border-right: none;
 }
 
+.lp-pulse-cell.lp-pulse-cell-alert {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.lp-pulse-cell.lp-pulse-cell-alert .lp-pulse-num,
+.lp-pulse-cell.lp-pulse-cell-alert .lp-pulse-k {
+  color: #b91c1c;
+}
+
 .lp-pulse-num {
   font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
   font-size: 16px;
@@ -1610,6 +1619,66 @@ body {
   background: #111827;
   color: #f9fafb;
   border-color: #111827;
+}
+
+.aya-prestart-strip {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.aya-prestart-chip {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.9);
+  color: #374151;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.aya-prestart-chip:hover {
+  border-color: rgba(0, 0, 0, 0.18);
+  color: #111827;
+}
+
+.aya-prestart-chip.active {
+  background: #111827;
+  color: #f9fafb;
+  border-color: #111827;
+}
+
+.lp-candidate-kicker-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px 4px;
+}
+
+.lp-candidate-kicker-count {
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.lp-candidate-kicker-note {
+  padding: 0 14px 8px;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7c3e2b;
 }
 
 /* ── Pipeline: Stat Filters ─────────────── */
@@ -2849,6 +2918,54 @@ body {
   max-width: 100%;
 }
 
+.c-reply-failed {
+  opacity: 0.95;
+}
+
+.c-retry-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px dashed #d7d1c6;
+  background: rgba(245, 242, 236, 0.72);
+}
+
+.c-retry-history-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a8376;
+}
+
+.c-retry-history-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #5e5952;
+}
+
+.c-retry-history-muted .c-retry-history-text {
+  opacity: 0.76;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.c-retry-history-error {
+  border-color: rgba(176, 52, 42, 0.38);
+  background: rgba(176, 52, 42, 0.06);
+}
+
+.c-retry-history-error .c-retry-history-label {
+  color: #9f4a26;
+}
+
+.c-retry-history-error .c-retry-history-text {
+  color: #7c3a1f;
+}
+
 .c-body {
   font-size: 15px;
   line-height: 1.7;
@@ -2868,6 +2985,76 @@ body {
 .c-body strong {
   font-weight: 600;
   color: #111827;
+}
+
+.c-body .c-md-section {
+  margin: 24px 0 8px;
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  color: #1f1a14;
+}
+
+.c-body .c-md-rule {
+  border: 0;
+  border-top: 1px solid #e8decc;
+  margin: 16px 0;
+}
+
+.c-body .c-md-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8a8376;
+  font-weight: 500;
+}
+
+.c-body .c-md-value-chip {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  background: #f3ecdc;
+  border: 1px solid rgba(184, 144, 74, 0.28);
+  border-radius: 3px;
+  color: #2f281d;
+  padding: 2px 7px;
+}
+
+.c-body .c-md-value-chip-action {
+  border-color: rgba(94, 116, 76, 0.34);
+  background: #edf3e8;
+  color: #26321f;
+}
+
+.c-body .c-md-value-chip-status {
+  border-color: rgba(184, 144, 74, 0.34);
+  background: #f6eedf;
+  color: #4a3f2d;
+}
+
+.c-body .c-md-value-text {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+.c-body .c-md-link-value {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #4f473a;
+  text-decoration: none;
+  border-bottom: 1px dotted #b6ab95;
+}
+
+.c-body .c-md-link-value:hover {
+  color: #2f281d;
+  border-bottom-color: #8a7e6b;
 }
 
 .c-body h3 {
@@ -2914,11 +3101,54 @@ body {
 
 .c-draft-card {
   margin-top: 4px;
-  border: 1px solid #EDE8DE;
-  border-radius: 12px;
-  background: #FAF7F2;
-  padding: 12px;
+  border: 1px solid #E2DDD4;
+  border-radius: 14px;
+  background: #FDFCFA;
   max-width: min(100%, 840px);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.c-draft-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #EDE8DE;
+  background: #F8F5F0;
+}
+
+.c-draft-header-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #0078D4;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.c-draft-header-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.c-draft-subject {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1A1A17;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-draft-to {
+  font-size: 12px;
+  color: #7A756B;
+  margin-top: 2px;
 }
 
 .c-draft-text {
@@ -2929,17 +3159,80 @@ body {
   font-size: 14px;
   line-height: 1.58;
   color: #1E1B17;
+  padding: 14px 16px;
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
+.c-draft-fields {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #EDE8DE;
+  background: #fff;
+}
+
+.c-draft-field {
+  display: grid;
+  gap: 6px;
+}
+
+.c-draft-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #7A756B;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.c-draft-input,
+.c-draft-textarea {
+  width: 100%;
+  border: 1px solid #D9D3C8;
+  border-radius: 10px;
+  background: #FDFCFA;
+  color: #1E1B17;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 9px 10px;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.c-draft-input:focus,
+.c-draft-textarea:focus {
+  outline: none;
+  border-color: #9EAAB8;
+  box-shadow: 0 0 0 3px rgba(18, 87, 160, 0.12);
+}
+
+.c-draft-textarea {
+  min-height: 190px;
+  resize: vertical;
+}
+
 .c-draft-actions {
-  margin-top: 10px;
+  padding: 0 16px 14px;
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
 .c-draft-copy-btn {
   min-height: 30px;
+}
+
+.c-action-btn-outlook {
+  background: #0078D4 !important;
+  color: #fff !important;
+  border-color: #0078D4 !important;
+  text-decoration: none;
+}
+
+.c-action-btn-outlook:hover {
+  background: #106EBE !important;
+  border-color: #106EBE !important;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 120, 212, 0.25);
 }
 
 /* Code blocks */
@@ -3114,6 +3407,17 @@ body {
   color: #9F4A26;
 }
 
+.c-action-btn-retry {
+  border-color: rgba(159, 74, 38, 0.28);
+  color: #9f4a26;
+  background: rgba(255, 238, 228, 0.55);
+}
+
+.c-action-btn-retry:hover {
+  border-color: #9f4a26;
+  background: rgba(255, 233, 217, 0.8);
+}
+
 .c-write-toggle {
   border: none;
   background: none;
@@ -3127,6 +3431,50 @@ body {
 
 .c-write-toggle:hover {
   color: #B7572E;
+}
+
+.c-write-audit {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: #7c7468;
+  line-height: 1.45;
+}
+
+.c-write-audit-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #b0a590;
+  flex-shrink: 0;
+}
+
+.c-write-audit-success {
+  color: #667356;
+}
+
+.c-write-audit-success .c-write-audit-dot {
+  background: #7a8566;
+}
+
+.c-write-audit-warning {
+  color: #8b6f3d;
+}
+
+.c-write-audit-warning .c-write-audit-dot {
+  background: #b8904a;
+}
+
+.c-write-audit-error {
+  color: #9f4a26;
+}
+
+.c-write-audit-error .c-write-audit-dot {
+  background: #b0342a;
 }
 
 .c-write-badge {
@@ -3402,6 +3750,35 @@ body {
 
 .c-attach-btn:hover {
   color: #4A4741;
+}
+
+.c-add-candidate-btn {
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(247, 244, 238, 0.9);
+  color: #2d2b27;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.c-add-candidate-btn:hover:not(:disabled) {
+  background: #f1ece2;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.c-add-candidate-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .cap-dropdown {
@@ -3856,6 +4233,24 @@ body {
   font-size: 11px;
   color: #8f877c;
   font-family: 'DM Sans', sans-serif;
+}
+
+.c-compose-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.c-compose-hint kbd {
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: #8f877c;
+  border: 1px solid #e2ddd4;
+  border-radius: 4px;
+  background: #f7f4ee;
+  padding: 2px 5px;
+  line-height: 1;
 }
 
 .c-write-failed {
@@ -5091,6 +5486,21 @@ body {
   border-radius: 10px;
 }
 
+.c-draft-fields {
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.c-draft-input,
+.c-draft-textarea {
+  font-size: 12px;
+  padding: 8px 9px;
+}
+
+.c-draft-textarea {
+  min-height: 150px;
+}
+
 .c-draft-text {
   font-size: 13px;
   line-height: 1.52;
@@ -5305,6 +5715,15 @@ body {
 
 .c-send-btn {
   box-shadow: none;
+}
+
+.c-add-candidate-btn {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.c-add-candidate-btn span {
+  display: none;
 }
 
 /* ---------- Right panel ---------- */
@@ -5793,6 +6212,18 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.sp-score {
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #2a2824;
+  text-align: right;
+  flex-shrink: 0;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
 .sp-line {
   font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
   font-size: 12px;
@@ -6048,15 +6479,54 @@ body {
   grid-template-columns: var(--left-width) minmax(0, 1fr) var(--right-width);
 }
 
+.ws-shell.ws-picks-open {
+  grid-template-columns: var(--left-width) minmax(0, 1fr) var(--right-width);
+}
+
 .ws-shell.ws-sandbox-open {
   grid-template-columns: var(--left-width) minmax(0, 1fr) 480px;
 }
 
 .ws-shell.ws-sources-open .rp-shell,
+.ws-shell.ws-picks-open .rp-shell,
 .ws-shell.ws-sandbox-open .rp-shell {
   visibility: visible;
   opacity: 1;
   overflow-y: auto;
+}
+
+.rp-shell.rp-shell-picks {
+  background: #fdfbf7;
+}
+
+.rp-picks-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 12px 16px;
+}
+
+.rp-shell-picks .picks-shell {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rp-shell-picks .picks-shell-tabs {
+  margin-bottom: 10px;
+}
+
+.rp-shell-picks .picks-shell-head {
+  margin: 0 0 10px;
+}
+
+.rp-shell-picks .picks-shell-grid {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.rp-shell-picks .pick-card {
+  padding: 12px;
 }
 
 .sb-shell {
@@ -6357,6 +6827,46 @@ body {
   gap: 4px;
 }
 
+.sb-email-field {
+  display: grid;
+  gap: 6px;
+}
+
+.sb-email-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #5f5a51;
+}
+
+.sb-email-input,
+.sb-email-textarea {
+  width: 100%;
+  border: 1px solid #d7d1c6;
+  border-radius: 8px;
+  background: #fff;
+  color: #2d2b27;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 9px;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.sb-email-input:focus,
+.sb-email-textarea:focus {
+  outline: none;
+  border-color: #9eaab8;
+  box-shadow: 0 0 0 3px rgba(18, 87, 160, 0.12);
+}
+
+.sb-email-field-subject {
+  border: 1px solid #ece7de;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
 .sb-email-subject {
   border: 1px solid #ece7de;
   border-radius: 8px;
@@ -6385,6 +6895,21 @@ body {
   font-family: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.sb-email-textarea {
+  min-height: 200px;
+  resize: vertical;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.sb-email-textarea:focus {
+  box-shadow: none;
 }
 
 .sb-actions {
@@ -6503,6 +7028,7 @@ body {
   }
 
   .ws-shell.ws-sources-open,
+  .ws-shell.ws-picks-open,
   .ws-shell.ws-sandbox-open {
     grid-template-columns: 1fr !important;
   }
@@ -6624,108 +7150,67 @@ body {
 .aya-message-tools {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
-  min-height: 36px;
+  gap: 6px;
+  margin-bottom: 10px;
+  min-height: 20px;
 }
 
 .aya-tool-chip {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-radius: 9px;
-  font-family: 'Inter', -apple-system, sans-serif;
-  font-size: 13px;
+  gap: 7px;
+  padding: 0;
+  border-radius: 0;
+  font-family: 'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
   font-weight: 500;
   width: fit-content;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.03);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(0,0,0,0.06);
-  background: rgba(255, 255, 255, 0.65);
-  transition: background 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  animation: chipEnter 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #8A7E6B;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: color 0.15s ease;
+  animation: none;
 }
 
 .aya-tool-running {
-  background: linear-gradient(90deg, rgba(22, 114, 253, 0.04) 0%, rgba(22, 114, 253, 0.08) 50%, rgba(22, 114, 253, 0.04) 100%);
-  background-size: 200% 100%;
-  animation: toolPulse 2s linear infinite;
-  border: 1px solid rgba(22, 114, 253, 0.15);
-  color: #0b57d0;
-}
-
-.aya-tool-running .aya-tool-icon svg {
-  color: #1672fd;
-  animation: spin 1.2s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+  color: #8A7E6B;
 }
 
 .aya-tool-ok {
-  background: rgba(16, 163, 127, 0.05);
-  border: 1px solid rgba(16, 163, 127, 0.15);
-  color: #0d8362;
-}
-
-.aya-tool-ok .aya-tool-icon svg {
-  color: #10a37f;
+  color: #8A7E6B;
 }
 
 .aya-tool-failed {
-  background: rgba(220, 38, 38, 0.05);
-  border: 1px solid rgba(220, 38, 38, 0.15);
-  color: #b91c1c;
+  color: #9F3F2D;
 }
 
-.aya-tool-failed .aya-tool-icon svg {
-  color: #dc2626;
+.aya-tool-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #B8AC95;
+  flex-shrink: 0;
 }
 
-.aya-tool-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.aya-tool-dot-running {
+  background: #B8AC95;
 }
 
-.aya-tool-icon svg {
-  width: 15px;
-  height: 15px;
+.aya-tool-dot-ok {
+  background: #B8AC95;
 }
 
-.aya-tool-label {
-  letter-spacing: -0.01em;
+.aya-tool-dot-failed {
+  background: #AB4A34;
 }
 
 .aya-tool-latency {
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  color: inherit;
-  opacity: 0.6;
-  margin-left: 4px;
-}
-
-@keyframes spin {
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes toolPulse {
-  0% { background-position: 100% 50%; }
-  100% { background-position: -100% 50%; }
-}
-
-@keyframes chipEnter {
-  0% {
-    opacity: 0;
-    transform: translateY(6px) scale(0.96);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+  display: none;
 }
 
 /* ── Agent Tab ── */
@@ -7019,4 +7504,2383 @@ body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* ======================================================================
+   AyaOps Mock V2 (scoped)
+   ====================================================================== */
+.ws-shell.ws-ayaops-v2 {
+  --v2-bg: #faf6ee;
+  --v2-bg-shell: #f5f0e3;
+  --v2-bg-card: #ffffff;
+  --v2-bg-user: #1f1a14;
+  --v2-ink: #1f1a14;
+  --v2-ink-2: #4a3f2d;
+  --v2-ink-3: #6b6253;
+  --v2-ink-4: #8a7e6b;
+  --v2-ink-soft: #c0b49c;
+  --v2-rule: #e5dcc7;
+  --v2-rule-soft: #f0e8d5;
+  --v2-amber: #b8904a;
+  --v2-sage: #7a8566;
+  --left-width: 316px;
+  background: var(--v2-bg);
+  color: var(--v2-ink);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+.ws-shell.ws-ayaops-v2 .ws-center {
+  background: var(--v2-bg);
+}
+
+.ws-shell.ws-ayaops-v2 .ws-resize-handle:hover,
+.ws-shell.ws-ayaops-v2 .ws-resize-handle.ws-resizing {
+  background: rgba(31, 26, 20, 0.08);
+}
+
+.ws-shell.ws-ayaops-v2 .ws-resize-handle::after {
+  background: var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-rail-toggle-desktop {
+  top: 12px;
+  left: 14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--v2-rule);
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-4);
+  box-shadow: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-rail-toggle-desktop:hover {
+  background: rgba(31, 26, 20, 0.04);
+  color: var(--v2-ink-2);
+  transform: translateY(-1px);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-shell {
+  background: var(--v2-bg-shell);
+  border-right: 1px solid var(--v2-rule);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-mode-area {
+  padding: 22px 18px 12px 14px;
+  border-bottom: 1px solid var(--v2-rule);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-title-row {
+  min-height: 34px;
+}
+
+.ws-shell.ws-ayaops-v2 .lp-mode-selector-btn {
+  padding: 4px 8px;
+  margin-left: 0;
+  border-radius: 8px;
+}
+
+.ws-shell.ws-ayaops-v2 .lp-mode-selector-btn:hover {
+  background: rgba(31, 26, 20, 0.05);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-active-label {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 21px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--v2-ink);
+  line-height: 1.1;
+}
+
+.ws-shell.ws-ayaops-v2 .lp-mode-chevron {
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-dots-menu {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-rule);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(74, 63, 45, 0.12);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-dots-item {
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-dots-item:hover {
+  background: rgba(31, 26, 20, 0.04);
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-search-toggle {
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-search-toggle:hover {
+  background: rgba(31, 26, 20, 0.05);
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-search-inline {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-rule);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-search-inline-icon {
+  color: var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-search-inline-input {
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-search-inline-input::placeholder {
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-ops-links-rail {
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid var(--v2-rule);
+  background: var(--v2-bg-shell);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-ops-group-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+  margin-bottom: 8px;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-ops-group-items {
+  gap: 6px;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-ops-link-chip {
+  border: 1px solid var(--v2-rule);
+  border-radius: 14px;
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 11px;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-ops-link-chip:hover {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink);
+  background: var(--v2-bg-card);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-stat-filters,
+.ws-shell.ws-ayaops-v2 .aya-spec-pills {
+  display: none;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-prestart-strip {
+  padding: 4px 10px 10px;
+  border-bottom: 0;
+  margin-top: -2px;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-prestart-chip {
+  border: 1px solid var(--v2-rule);
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-2);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-prestart-chip:hover {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-prestart-chip.active {
+  border-color: var(--v2-ink);
+  background: var(--v2-ink);
+  color: #efe9d9;
+}
+
+.ws-shell.ws-ayaops-v2 .lp-items {
+  padding: 8px 10px 22px;
+  background: var(--v2-bg-shell);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-candidate-kicker-row {
+  padding: 10px 10px 2px;
+}
+
+.ws-shell.ws-ayaops-v2 .lp-candidate-kicker {
+  padding: 0;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-candidate-kicker-count {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-candidate-kicker-note {
+  padding: 0 10px 8px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-candidate-card {
+  position: relative;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  margin: 2px 2px 6px;
+  background: transparent;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-candidate-card:hover {
+  border-color: rgba(31, 26, 20, 0.05);
+  background: rgba(31, 26, 20, 0.025);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-candidate-card.lp-item-active {
+  border-left: 1px solid rgba(0, 0, 0, 0.03);
+  padding-left: 10px;
+  background: rgba(31, 26, 20, 0.045);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-candidate-card.lp-item-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  border-radius: 1px;
+  background: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-collapsed {
+  gap: 11px;
+  padding: 11px 10px 11px 10px;
+  align-items: flex-start;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: var(--v2-rule-soft);
+  color: var(--v2-ink-2);
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ws-shell.ws-ayaops-v2 .lp-candidate-name-link {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .lp-candidate-name-link:hover {
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-meta {
+  margin-top: 3px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-state {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-state-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--v2-ink-soft);
+  flex-shrink: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-state-working,
+.ws-shell.ws-ayaops-v2 .aya-card-state-prestart {
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-state-working .aya-card-state-dot,
+.ws-shell.ws-ayaops-v2 .aya-card-state-prestart .aya-card-state-dot {
+  background: var(--v2-amber);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-state-submitted .aya-card-state-dot,
+.ws-shell.ws-ayaops-v2 .aya-card-state-offer .aya-card-state-dot,
+.ws-shell.ws-ayaops-v2 .aya-card-state-completed .aya-card-state-dot {
+  background: var(--v2-sage);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-card-badges {
+  display: none;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-ghost-actions {
+  display: none;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-rc-badge,
+.ws-shell.ws-ayaops-v2 .aya-outlook-badge,
+.ws-shell.ws-ayaops-v2 .aya-hub-badge,
+.ws-shell.ws-ayaops-v2 .aya-nova-btn {
+  padding: 3px;
+  border-radius: 4px;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-status-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--v2-amber);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-status-dot[class*="aya-dot-"] {
+  background: var(--v2-amber);
+  box-shadow: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 32px;
+  border-bottom: 1px solid var(--v2-rule);
+  background: var(--v2-bg);
+  backdrop-filter: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-header-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.ws-shell.ws-ayaops-v2 .c-main-crumb {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--v2-ink-4);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-main-crumb .label {
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ws-shell.ws-ayaops-v2 .c-main-crumb .sep {
+  color: var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-main-crumb .current {
+  color: var(--v2-ink);
+  font-weight: 500;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 380px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-header-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-sources-btn,
+.ws-shell.ws-ayaops-v2 .c-new-btn {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--v2-ink-3);
+  border: 1px solid var(--v2-rule);
+  border-radius: 14px;
+  padding: 7px 13px;
+  background: transparent;
+  line-height: 1;
+}
+
+.ws-shell.ws-ayaops-v2 .c-sources-btn:hover,
+.ws-shell.ws-ayaops-v2 .c-new-btn:hover {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink-3);
+  background: rgba(31, 26, 20, 0.02);
+}
+
+.ws-shell.ws-ayaops-v2 .c-sources-btn.is-active {
+  background: var(--v2-ink);
+  border-color: var(--v2-ink);
+  color: #f7f2e6;
+}
+
+.ws-shell.ws-ayaops-v2 .c-voice-link {
+  width: 30px;
+  height: 30px;
+  border-radius: 14px;
+  border: 1px solid var(--v2-rule);
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .c-voice-link:hover {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-admin-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border: 0;
+  background: transparent;
+  color: var(--v2-ink-4);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s var(--ease-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-admin-toggle:hover {
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-admin-toggle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--v2-ink-soft);
+  transition: background 0.2s var(--ease-soft), box-shadow 0.2s var(--ease-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-admin-toggle.is-on {
+  color: var(--v2-amber);
+}
+
+.ws-shell.ws-ayaops-v2 .c-admin-toggle.is-on .c-admin-toggle-dot {
+  background: var(--v2-amber);
+  box-shadow: 0 0 0 3px rgba(184, 144, 74, 0.15);
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-bar {
+  padding: 14px 32px;
+  background: var(--v2-bg-shell);
+  border-bottom: 1px solid var(--v2-rule);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 5px;
+  background: var(--v2-rule-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--v2-ink-2);
+  letter-spacing: -0.01em;
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-row1 {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-name {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-state {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--v2-ink-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-state::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--v2-amber);
+  box-shadow: 0 0 0 2px rgba(184, 144, 74, 0.18);
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-row2 {
+  margin-top: 4px;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .c-context-row2 strong {
+  color: var(--v2-ink-2);
+  font-weight: 500;
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--v2-rule);
+  border-radius: 5px;
+  background: var(--v2-bg-card);
+  flex-shrink: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--v2-ink-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s var(--ease-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-btn:hover {
+  background: var(--v2-rule-soft);
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-btn.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--v2-rule);
+  margin: 0 2px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-btn-admin {
+  color: var(--v2-amber);
+  position: relative;
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-btn-admin::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 2px;
+  border: 1px dashed rgba(212, 185, 137, 0.72);
+  pointer-events: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-link-btn-admin:hover {
+  background: rgba(184, 144, 74, 0.1);
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-strip {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 32px;
+  border-bottom: 1px solid var(--v2-rule);
+  background: rgba(184, 144, 74, 0.06);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-strip.is-on {
+  display: flex;
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-strip-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-amber);
+  flex-shrink: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-url {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--v2-rule);
+  border-radius: 3px;
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-2);
+  font-size: 12px;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--v2-rule);
+  border-radius: 3px;
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-2);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 11px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.15s var(--ease-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-action-btn:hover {
+  border-color: var(--v2-amber);
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-action-btn:disabled,
+.ws-shell.ws-ayaops-v2 .c-hub-action-btn.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-action-btn-primary {
+  background: var(--v2-amber);
+  color: #faf6ee;
+  border-color: var(--v2-amber);
+}
+
+.ws-shell.ws-ayaops-v2 .c-hub-action-btn-primary:hover {
+  background: #a07a35;
+  border-color: #a07a35;
+  color: #fff;
+}
+
+.ws-shell.ws-ayaops-v2 .c-scroll {
+  padding: 32px 32px 140px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background: transparent;
+}
+
+.ws-shell.ws-ayaops-v2 .c-scroll:hover::-webkit-scrollbar-thumb {
+  background: var(--v2-rule);
+  background-clip: padding-box;
+}
+
+.ws-shell.ws-ayaops-v2 .c-messages {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0;
+  gap: 28px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-row-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ws-shell.ws-ayaops-v2 .c-row-assistant {
+  display: block;
+}
+
+.ws-shell.ws-ayaops-v2 .c-empty {
+  min-height: 58vh;
+  padding-top: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-empty-heading {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 42px;
+  font-weight: 500;
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  color: var(--v2-ink);
+  margin-bottom: 18px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-starters {
+  max-width: 540px;
+  gap: 10px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-starter {
+  border: 1px solid var(--v2-rule);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-2);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.ws-shell.ws-ayaops-v2 .c-starter:hover {
+  border-color: var(--v2-ink-soft);
+  box-shadow: 0 2px 8px rgba(74, 63, 45, 0.08);
+}
+
+.ws-shell.ws-ayaops-v2 .c-user {
+  border-radius: 3px;
+  max-width: 520px;
+  padding: 15px 20px;
+  background: var(--v2-bg-user);
+  color: #efe9d9;
+  border: none;
+  box-shadow: 0 1px 2px rgba(31, 26, 20, 0.18), 0 4px 10px rgba(31, 26, 20, 0.08);
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  letter-spacing: 0.002em;
+}
+
+.ws-shell.ws-ayaops-v2 .c-user-text {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 15.5px;
+  line-height: 1.55;
+}
+
+.ws-shell.ws-ayaops-v2 .c-user .c-msg-time {
+  display: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-reply {
+  max-width: 640px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-reply-failed {
+  opacity: 0.98;
+}
+
+.ws-shell.ws-ayaops-v2 .c-retry-history {
+  margin-bottom: 12px;
+  padding: 8px 11px;
+  border-radius: 3px;
+  border: 1px dashed rgba(138, 126, 107, 0.45);
+  background: rgba(245, 240, 227, 0.65);
+}
+
+.ws-shell.ws-ayaops-v2 .c-retry-history-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .c-retry-history-text {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-retry-history-muted .c-retry-history-text {
+  opacity: 0.72;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-retry-history-error {
+  border-color: rgba(184, 144, 74, 0.52);
+  background: rgba(184, 144, 74, 0.1);
+}
+
+.ws-shell.ws-ayaops-v2 .c-retry-history-error .c-retry-history-label {
+  color: #8d6b34;
+}
+
+.ws-shell.ws-ayaops-v2 .c-retry-history-error .c-retry-history-text {
+  color: #6b5130;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--v2-ink);
+  letter-spacing: -0.005em;
+  background: transparent;
+  padding: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body p {
+  margin-bottom: 14px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body strong {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--v2-ink);
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+  font-weight: 500;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-value-chip {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  background: var(--v2-rule-soft);
+  border: 1px solid rgba(184, 144, 74, 0.2);
+  border-radius: 3px;
+  color: var(--v2-ink);
+  padding: 2px 7px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-value-chip-action {
+  border-color: rgba(91, 121, 75, 0.34);
+  background: #e9f0e2;
+  color: #20321f;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-value-chip-status {
+  border-color: rgba(184, 144, 74, 0.34);
+  background: #f4ead7;
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-value-text {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: inherit;
+  line-height: inherit;
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-link-value {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--v2-ink-3);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-link-value:hover {
+  color: var(--v2-ink);
+  border-bottom-color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-body h3,
+.ws-shell.ws-ayaops-v2 .c-body h4 {
+  border-bottom: none;
+  margin-top: 20px;
+  margin-bottom: 8px;
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  color: var(--v2-ink);
+  padding: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-section {
+  margin-top: 24px;
+  margin-bottom: 8px;
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .c-body .c-md-rule {
+  border: 0;
+  border-top: 1px solid var(--v2-rule);
+  margin: 16px 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-body li::marker {
+  color: #b7572e;
+}
+
+.ws-shell.ws-ayaops-v2 .c-actions {
+  margin-top: 12px;
+  gap: 14px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-loaded {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .c-loaded-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--v2-sage);
+  position: relative;
+}
+
+.ws-shell.ws-ayaops-v2 .c-loaded-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid var(--v2-sage);
+  opacity: 0;
+  animation: v2LoadedPulse 2.4s ease-out infinite;
+}
+
+@keyframes v2LoadedPulse {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.8);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--v2-ink-soft);
+  flex-shrink: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit-success {
+  color: var(--v2-sage);
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit-success .c-write-audit-dot {
+  background: var(--v2-sage);
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit-warning {
+  color: var(--v2-amber);
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit-warning .c-write-audit-dot {
+  background: var(--v2-amber);
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit-error {
+  color: #9f4a26;
+}
+
+.ws-shell.ws-ayaops-v2 .c-write-audit-error .c-write-audit-dot {
+  background: #9f4a26;
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--v2-ink-4);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn:hover {
+  color: var(--v2-ink-2);
+  background: transparent;
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn-primary {
+  border: 1px solid var(--v2-rule);
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: var(--v2-ink-2);
+  background: var(--v2-bg-card);
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn-primary:hover {
+  border-color: var(--v2-ink-soft);
+  background: var(--v2-bg-card);
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn-retry {
+  border: 1px solid rgba(184, 144, 74, 0.55);
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: #7a5f2f;
+  background: rgba(212, 185, 137, 0.2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn-retry:hover {
+  border-color: #b8904a;
+  color: #664b22;
+  background: rgba(212, 185, 137, 0.3);
+}
+
+.ws-shell.ws-ayaops-v2 .c-msg-time {
+  color: var(--v2-ink-4);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-card {
+  margin-top: 16px;
+  border: 1px solid var(--v2-rule);
+  border-radius: 4px;
+  background: var(--v2-bg-card);
+  box-shadow: 0 1px 2px rgba(74, 63, 45, 0.04), 0 4px 12px rgba(74, 63, 45, 0.06), 0 16px 32px rgba(74, 63, 45, 0.04);
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-header {
+  background: linear-gradient(180deg, var(--v2-bg-shell) 0%, #f2edde 100%);
+  border-bottom: 1px solid var(--v2-rule-soft);
+  padding: 16px 22px 14px;
+  gap: 12px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-header-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #1f1a14;
+  color: #efe9d9;
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-subject {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1.32;
+  letter-spacing: -0.015em;
+  color: var(--v2-ink);
+  white-space: normal;
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-to {
+  margin-top: 6px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-text {
+  padding: 24px 28px;
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-fields {
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--v2-rule-soft);
+  background: var(--v2-bg-card);
+  gap: 10px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-field-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-input,
+.ws-shell.ws-ayaops-v2 .c-draft-textarea {
+  border: 1px solid var(--v2-rule);
+  border-radius: 3px;
+  background: var(--v2-bg-card);
+  color: var(--v2-ink);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-input:focus,
+.ws-shell.ws-ayaops-v2 .c-draft-textarea:focus {
+  border-color: var(--v2-ink-soft);
+  box-shadow: 0 0 0 3px rgba(184, 144, 74, 0.12);
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-textarea {
+  min-height: 220px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-actions {
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--v2-rule-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-copy-btn {
+  border: 1px solid var(--v2-rule);
+  border-radius: 3px;
+  padding: 9px 14px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--v2-ink-2);
+  background: var(--v2-bg-card);
+}
+
+.ws-shell.ws-ayaops-v2 .c-draft-copy-btn:hover {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink);
+  transform: translateY(-1px);
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn-outlook {
+  background: var(--v2-ink) !important;
+  color: #efe9d9 !important;
+  border-color: var(--v2-ink) !important;
+}
+
+.ws-shell.ws-ayaops-v2 .c-action-btn-outlook:hover {
+  background: #000 !important;
+  border-color: #000 !important;
+  color: #fff !important;
+}
+
+.ws-shell.ws-ayaops-v2 .c-dock {
+  max-width: 760px;
+  padding: 16px 32px 22px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-input-form {
+  border: 1px solid var(--v2-rule);
+  border-radius: 4px;
+  padding: 4px 6px 4px 14px;
+  background: var(--v2-bg-card);
+  box-shadow: 0 1px 2px rgba(74, 63, 45, 0.04);
+}
+
+.ws-shell.ws-ayaops-v2 .c-input-form:focus-within {
+  border-color: var(--v2-ink-soft);
+  box-shadow: 0 1px 2px rgba(74, 63, 45, 0.04), 0 0 0 3px rgba(184, 144, 74, 0.1);
+  transform: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-attach-btn {
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .c-attach-btn:hover {
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .c-add-candidate-btn {
+  height: 30px;
+  border-radius: 3px;
+  border: 1px solid var(--v2-rule);
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-2);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ws-shell.ws-ayaops-v2 .c-add-candidate-btn:hover:not(:disabled) {
+  border-color: var(--v2-ink-soft);
+  background: #fbf8f2;
+}
+
+.ws-shell.ws-ayaops-v2 .c-add-candidate-btn span {
+  display: inline;
+}
+
+.ws-shell.ws-ayaops-v2 .c-textarea {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 15.5px;
+  letter-spacing: 0.002em;
+  line-height: 1.5;
+  color: var(--v2-ink);
+  padding: 10px 4px;
+  margin-bottom: 0;
+}
+
+.ws-shell.ws-ayaops-v2 .c-textarea::placeholder {
+  color: var(--v2-ink-4);
+  font-style: italic;
+}
+
+.ws-shell.ws-ayaops-v2 .c-capability-wrap {
+  padding-left: 12px;
+  border-left: 1px solid var(--v2-rule);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-capability-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+  font-weight: 500;
+}
+
+.ws-shell.ws-ayaops-v2 .cap-btn {
+  border: 1px solid var(--v2-rule);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--v2-ink-2);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ws-shell.ws-ayaops-v2 .cap-menu {
+  border: 1px solid var(--v2-rule);
+  border-radius: 8px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-compose-hint {
+  gap: 4px;
+  margin-right: 2px;
+}
+
+.ws-shell.ws-ayaops-v2 .c-compose-hint kbd {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  background: var(--v2-rule-soft);
+  border: 1px solid var(--v2-rule);
+  border-radius: 3px;
+  padding: 2px 5px;
+  font-size: 9.5px;
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .c-send-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 3px;
+  background: var(--v2-ink);
+  color: #efe9d9;
+  opacity: 1;
+}
+
+.ws-shell.ws-ayaops-v2 .c-send-btn:hover:not(:disabled) {
+  background: #000;
+  transform: translateY(-1px);
+}
+
+.ws-shell.ws-ayaops-v2 .c-send-btn.c-send-ready {
+  background: var(--v2-ink);
+  box-shadow: none;
+}
+
+.ws-shell.ws-ayaops-v2 .c-send-btn.c-send-ready:hover {
+  background: #000;
+}
+
+@media (max-width: 1024px) {
+  .ws-shell.ws-ayaops-v2 {
+    --left-width: 0px;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-header {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-context-bar,
+  .ws-shell.ws-ayaops-v2 .c-hub-strip,
+  .ws-shell.ws-ayaops-v2 .c-dock {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-header-left {
+    display: none;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 900px) {
+  .ws-shell.ws-ayaops-v2 .c-scroll {
+    padding: 24px 20px 120px;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-dock {
+    padding: 14px 20px 22px;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-context-row2 {
+    display: none;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-hub-strip {
+    display: none !important;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-empty-heading {
+    font-size: 34px;
+  }
+
+  .ws-shell.ws-ayaops-v2 .c-starter {
+    font-size: 14px;
+  }
+}
+
+/* Third pass: unify right rail + sandbox + runtime chips in editorial system */
+.ws-shell.ws-ayaops-v2 .rp-shell {
+  background: #f8f3e8;
+  border-left: 1px solid var(--v2-rule);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-header {
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--v2-rule);
+  background: linear-gradient(180deg, #f7f1e4 0%, #f4eee1 100%);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-title {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 23px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-section {
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid rgba(229, 220, 199, 0.7);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-section-title {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+  margin-bottom: 10px;
+}
+
+.ws-shell.ws-ayaops-v2 .rp-query {
+  border: 1px solid var(--v2-rule);
+  background: var(--v2-bg-card);
+  color: var(--v2-ink-3);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 11px;
+}
+
+.ws-shell.ws-ayaops-v2 .rp-source-card {
+  border: 1px solid var(--v2-rule);
+  background: var(--v2-bg-card);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-height: unset;
+  box-shadow: 0 1px 2px rgba(74, 63, 45, 0.04);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-source-card:hover {
+  border-color: var(--v2-ink-soft);
+  background: #fffcf5;
+}
+
+.ws-shell.ws-ayaops-v2 .rp-source-title {
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-source-domain {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-source-arrow {
+  color: var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-image-card {
+  border: 1px solid var(--v2-rule);
+  background: #fffdf7;
+  border-radius: 10px;
+}
+
+.ws-shell.ws-ayaops-v2 .rp-image-card:hover {
+  border-color: var(--v2-ink-soft);
+  box-shadow: 0 2px 10px rgba(74, 63, 45, 0.08);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-image-time {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-image-pin {
+  border: 1px solid rgba(184, 144, 74, 0.35);
+  background: rgba(184, 144, 74, 0.12);
+  color: #87683a;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px;
+}
+
+.ws-shell.ws-ayaops-v2 .rp-image-sub {
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .rp-image-action {
+  border: 1px solid var(--v2-rule);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--v2-ink-3);
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+}
+
+.ws-shell.ws-ayaops-v2 .rp-image-action:hover {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink-2);
+  background: #fffcf5;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-shell {
+  background: #f8f3e8;
+  border-left: 1px solid var(--v2-rule);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-header {
+  border-bottom: 1px solid var(--v2-rule);
+  background: linear-gradient(180deg, #f7f1e4 0%, #f4eee1 100%);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-nav {
+  border-bottom: 1px solid var(--v2-rule);
+  background: rgba(245, 240, 227, 0.7);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-nav-btn {
+  border: 1px solid var(--v2-rule);
+  background: #fff;
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-nav-btn:hover:not(:disabled) {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink-2);
+  background: #fffcf6;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-nav-label {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-status {
+  border-color: var(--v2-rule);
+  background: #fff;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-meta {
+  border-bottom: 1px solid var(--v2-rule);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-title {
+  font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--v2-ink);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-submeta {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-content {
+  background: #f8f3e8;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-document,
+.ws-shell.ws-ayaops-v2 .sb-email-meta,
+.ws-shell.ws-ayaops-v2 .sb-email-subject,
+.ws-shell.ws-ayaops-v2 .sb-email-body,
+.ws-shell.ws-ayaops-v2 .sb-email-note,
+.ws-shell.ws-ayaops-v2 .sb-api-block,
+.ws-shell.ws-ayaops-v2 .sb-diff-pane {
+  border-color: var(--v2-rule);
+  background: #fffdf8;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-email-input,
+.ws-shell.ws-ayaops-v2 .sb-email-textarea,
+.ws-shell.ws-ayaops-v2 .sb-feedback {
+  border-color: var(--v2-rule);
+  background: #fff;
+  color: var(--v2-ink-2);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-email-input:focus,
+.ws-shell.ws-ayaops-v2 .sb-email-textarea:focus,
+.ws-shell.ws-ayaops-v2 .sb-feedback:focus {
+  border-color: var(--v2-ink-soft);
+  box-shadow: 0 0 0 3px rgba(184, 144, 74, 0.12);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-actions {
+  border-top: 1px solid var(--v2-rule);
+  background: #f7f1e4;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-btn {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 8px 12px;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-btn-secondary {
+  border-color: var(--v2-rule);
+  background: #fff;
+  color: var(--v2-ink-3);
+}
+
+.ws-shell.ws-ayaops-v2 .sb-btn-secondary:hover:not(:disabled) {
+  border-color: var(--v2-ink-soft);
+  color: var(--v2-ink-2);
+  background: #fffcf5;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-btn-primary {
+  background: var(--v2-ink);
+  border-color: var(--v2-ink);
+  color: #f5efe1;
+}
+
+.ws-shell.ws-ayaops-v2 .sb-btn-primary:hover:not(:disabled) {
+  background: #000;
+  border-color: #000;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-message-tools {
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-chip {
+  border-radius: 0;
+  padding: 0;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--v2-ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-running {
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-ok {
+  color: var(--v2-ink-4);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-failed {
+  color: #9f3f2d;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-dot-running,
+.ws-shell.ws-ayaops-v2 .aya-tool-dot-ok {
+  background: var(--v2-ink-soft);
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-dot-failed {
+  background: #ab4a34;
+}
+
+.ws-shell.ws-ayaops-v2 .aya-tool-latency {
+  display: none;
+}
+
+/* === Sports Picks Shell (Editorial) === */
+.picks-shell {
+  --tag-yes-bg: #E8F4E6;
+  --tag-yes-ink: #1F5F2C;
+  --tag-no-bg: #FAEAEA;
+  --tag-no-ink: #7B2A2A;
+  --tag-neutral-bg: #F4F0E8;
+  --tag-neutral-ink: #5F4F2C;
+  max-width: 980px;
+  margin: 18px auto 8px;
+  padding: 0 10px;
+}
+
+.picks-shell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 10px;
+}
+
+.picks-shell-head-title {
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.picks-shell-head-link {
+  border: 0;
+  border-bottom: 1px solid #8C8576;
+  background: transparent;
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0;
+}
+
+.picks-shell-head-link:hover {
+  color: #1A1A1A;
+  border-bottom-color: #1A1A1A;
+}
+
+.picks-shell-tabs {
+  display: inline-flex;
+  border: 1px solid #E5DCC7;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #FDFBF7;
+  margin-bottom: 12px;
+}
+
+.picks-shell-tab {
+  border: 0;
+  background: transparent;
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.picks-shell-tab.is-active {
+  background: #1A1A1A;
+  color: #FAF6EE;
+}
+
+.pick-track-strip {
+  border: 1px solid #E5DCC7;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: #FDFBF7;
+}
+
+.pick-track-strip.is-winning {
+  background: #F2F8F2;
+  border-color: #D1E5D1;
+}
+
+.pick-track-kicker {
+  display: block;
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.pick-track-record {
+  margin-top: 4px;
+  color: #1A1A1A;
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.pick-track-audit {
+  margin-top: 6px;
+  border: 0;
+  border-bottom: 1px solid #8C8576;
+  background: transparent;
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  padding: 0;
+  cursor: pointer;
+}
+
+.pick-track-note {
+  margin: 8px 0 0;
+  color: #A69E8D;
+  font-size: 10px;
+  font-style: italic;
+}
+
+.picks-shell-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.pick-card {
+  background: #FFFFFF;
+  border: 1px solid #E5DCC7;
+  padding: 14px;
+}
+
+.pick-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pick-card-kicker {
+  color: #A69E8D;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.pick-card-kicker-empty {
+  display: inline-block;
+  min-height: 14px;
+}
+
+.pick-card-priority {
+  border: 1px solid #E5DCC7;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  font-style: italic;
+}
+
+.pick-card-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pick-card-title {
+  margin: 0;
+  color: #1A1A1A;
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.pick-card-result {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+}
+
+.pick-card-result.is-win {
+  background: var(--tag-yes-bg);
+  color: var(--tag-yes-ink);
+}
+
+.pick-card-result.is-loss {
+  background: var(--tag-no-bg);
+  color: var(--tag-no-ink);
+}
+
+.pick-card-result.is-push {
+  background: var(--tag-neutral-bg);
+  color: var(--tag-neutral-ink);
+}
+
+.pick-card-result.is-void {
+  background: var(--tag-neutral-bg);
+  color: var(--tag-neutral-ink);
+}
+
+.pick-card-live {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pick-card-live.is-fresh {
+  background: #FDFBF7;
+  color: #3E7A54;
+  border-left: 2px solid #3E7A54;
+}
+
+.pick-card-live.is-stale {
+  background: #F7F7F7;
+  color: #9A9A9A;
+  border-left: 2px solid #CFCFCF;
+}
+
+.pick-card-live-dot {
+  animation: pick-live-pulse 1.25s infinite;
+}
+
+@keyframes pick-live-pulse {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+.pick-card-rationale {
+  margin: 0 0 12px;
+  color: #4A453C;
+  font-family: var(--serif);
+  font-size: 13.5px;
+  font-style: italic;
+  line-height: 1.42;
+}
+
+.pick-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pick-card-btn-primary,
+.pick-card-btn-secondary {
+  border: 1px solid #E5DCC7;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  padding: 10px 10px;
+  cursor: pointer;
+}
+
+.pick-card-btn-primary {
+  flex: 2;
+  background: #1A1A1A;
+  border-color: #1A1A1A;
+  color: #FAF6EE;
+}
+
+.pick-card-btn-primary:hover {
+  background: #000000;
+}
+
+.pick-card-btn-secondary {
+  flex: 1;
+  background: #FFFFFF;
+  color: #1A1A1A;
+}
+
+.pick-card-btn-secondary:hover {
+  background: #FAF6EE;
+}
+
+.picks-shell-empty {
+  border: 1px dashed #E5DCC7;
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 20px;
+  text-align: center;
+  background: #FFFFFF;
+}
+
+.picks-shell-games {
+  display: grid;
+  gap: 6px;
+}
+
+.picks-shell-game-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #FFFFFF;
+  border: 1px solid #E5DCC7;
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.picks-shell-game-title {
+  color: #1A1A1A;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.picks-shell-game-meta {
+  color: #8C8576;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+@media (max-width: 900px) {
+  .picks-shell {
+    margin-top: 10px;
+    padding: 0 6px;
+  }
+
+  .picks-shell-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* === Ops Drafting Queue (Operator Surface) === */
+.ops-draft-page {
+  min-height: 100vh;
+  background: #090C11;
+  color: #E7EDF7;
+  padding: 24px 14px 40px;
+}
+
+.ops-draft-shell {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.ops-draft-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.ops-draft-kicker {
+  margin: 0 0 4px;
+  color: #8B97AA;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.ops-draft-title {
+  margin: 0;
+  color: #F3F7FF;
+  font-family: var(--mono);
+  font-size: 26px;
+  letter-spacing: -0.01em;
+}
+
+.ops-draft-head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ops-draft-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ops-draft-count-card {
+  background: #10151E;
+  border: 1px solid #1B2432;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.ops-draft-count-card span {
+  color: #8B97AA;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.ops-draft-count-card strong {
+  color: #F3F7FF;
+  font-family: var(--mono);
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.ops-draft-count-card.is-pending {
+  border-color: #7A6335;
+}
+
+.ops-draft-count-card.is-committed {
+  border-color: #2B5A40;
+}
+
+.ops-draft-count-card.is-rejected {
+  border-color: #6E3436;
+}
+
+.ops-draft-filters {
+  display: inline-flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.ops-draft-filter {
+  border: 1px solid #293345;
+  border-radius: 999px;
+  background: #10151E;
+  color: #A3AFC2;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.ops-draft-filter.is-active {
+  border-color: #4E5E79;
+  background: #172133;
+  color: #F3F7FF;
+}
+
+.ops-draft-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ops-draft-card {
+  background: #10151E;
+  border: 1px solid #1F2A3B;
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.ops-draft-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ops-draft-chip {
+  border: 1px solid #2B374D;
+  border-radius: 999px;
+  color: #A3AFC2;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+}
+
+.ops-draft-chip-status.status-pending {
+  border-color: #7A6335;
+  color: #E2C889;
+}
+
+.ops-draft-chip-status.status-committed {
+  border-color: #2B5A40;
+  color: #8FD0A9;
+}
+
+.ops-draft-chip-status.status-rejected {
+  border-color: #6E3436;
+  color: #E0A1A5;
+}
+
+.ops-draft-card-title {
+  margin: 0 0 6px;
+  color: #F3F7FF;
+  font-family: var(--mono);
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.ops-draft-card-meta {
+  margin: 0 0 8px;
+  color: #8B97AA;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.ops-draft-card-rationale {
+  margin: 0 0 12px;
+  color: #D6DEEB;
+  font-family: var(--serif);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ops-draft-card-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.ops-draft-audit {
+  display: grid;
+  gap: 3px;
+  color: #8B97AA;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.ops-draft-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ops-draft-btn {
+  border: 1px solid #293345;
+  border-radius: 4px;
+  background: #0E131C;
+  color: #DBE4F2;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  padding: 9px 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.ops-draft-btn:hover {
+  border-color: #4E5E79;
+}
+
+.ops-draft-btn-primary {
+  border-color: #2B5A40;
+  background: #153022;
+  color: #CBEED7;
+}
+
+.ops-draft-btn-danger {
+  border-color: #6E3436;
+  background: #31171A;
+  color: #F3C8CC;
+}
+
+.ops-draft-btn-secondary {
+  border-color: #293345;
+  background: #0E131C;
+  color: #DBE4F2;
+}
+
+.ops-draft-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ops-draft-empty,
+.ops-draft-error {
+  border: 1px dashed #2A364B;
+  border-radius: 6px;
+  color: #9BA8BC;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 18px;
+  text-align: center;
+  background: #0E131C;
+}
+
+.ops-draft-error {
+  border-color: #6E3436;
+  color: #E3B2B5;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 900px) {
+  .ops-draft-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ops-draft-head {
+    flex-direction: column;
+  }
+
+  .ops-draft-head-actions {
+    width: 100%;
+  }
+
+  .ops-draft-card-foot {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }

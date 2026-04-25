@@ -3,10 +3,10 @@ import { mapCandidateRow } from "@/lib/mappers/candidate";
 import type { CandidateRecord } from "@/lib/types/candidate";
 import { queryMarginLedger, queryJobBoard } from "@/lib/ayaops/margin-ledger";
 import { getDb } from "@/lib/spanner-pool";
-import type { Spanner } from "@google-cloud/spanner";
 import { listVerdicts } from "@/lib/verdicts/verdict-ledger";
-
-let priorityColumnPresence: { score: boolean; level: boolean } | null = null;
+import { LIVE_ARCHITECTURE_LEDGER_ACCEPTED } from "@/lib/verdicts/live-architecture-ledger";
+import { buildSportsGameUrls } from "@/lib/sports/game-canonical";
+import { computeTrackRecord, listResolvedPicks, todayDateKey } from "@/lib/sports/picks-ledger";
 
 const SPORTS_SOCCER_LEAGUES = [
   { key: "epl", label: "EPL", leagueIds: ["eng.1"] },
@@ -72,8 +72,6 @@ export async function GET(request: NextRequest) {
       return await jobsSummary();
     } else if (mode === "ayaops") {
       return await ayaopsSummary();
-    } else if (mode === "clicks") {
-      return await clicksSummary();
     } else {
       return codeSummary();
     }
@@ -152,175 +150,6 @@ async function healthcareSummary() {
   });
 }
 
-async function clicksSummary() {
-  const db = getDb("recruitingdb");
-  const empty = () =>
-    Response.json({
-      pulse: {
-        recent_clicks: 0,
-        matched: 0,
-        tracked: 0,
-      },
-      items: [],
-    });
-  const toIsoTimestamp = (value: unknown): string | null => {
-    if (value == null) return null;
-    const parsed = new Date(String(value));
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-  };
-
-  const buildResponse = (counts: { total_clicks: number; matched_clicks: number }, items: any[]) =>
-    Response.json({
-      pulse: {
-        recent_clicks: Number(counts.total_clicks),
-        matched: Number(counts.matched_clicks),
-        tracked: items.length,
-      },
-      items,
-    });
-
-  const mapInterestedClickRows = (listRows: any[]) =>
-    listRows.map((r: any) => {
-      const row = r.toJSON();
-      return {
-        id: row.click_id as string,
-        label: (row.candidate_name || row.email || "Unknown Candidate") as string,
-        candidateName: row.candidate_name as string | null,
-        candidateEmail: row.email as string | null,
-        jobId: row.job_id as string | null,
-        specialty: row.specialty as string | null,
-        state: row.state as string | null,
-        date: typeof row.clicked_at === "string" ? row.clicked_at.slice(0, 10) : null,
-        startTime: toIsoTimestamp(row.clicked_at),
-        status: (row.match_status || "unmatched") as string,
-        description: row.job_id
-          ? `Job ${row.job_id} (${row.specialty || "Unknown"} in ${row.state || "Unknown"})`
-          : "",
-      };
-    });
-
-  const loadLegacyCandidateFallback = async () => {
-    const [candidateTableRows] = await db.run({
-      sql: `SELECT TABLE_NAME
-            FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = ''
-              AND TABLE_NAME = 'hc_candidates'`,
-    });
-    if (candidateTableRows.length === 0) return null;
-
-    const [countRows] = await db.run({
-      sql: `SELECT COUNT(*) as total_clicks,
-                   SUM(CASE WHEN EXISTS (
-                     SELECT 1
-                     FROM hc_assignments a
-                     WHERE a.candidate_id = c.id
-                       AND a.status IN ('active', 'pending_start', 'in_pipeline')
-                   ) THEN 1 ELSE 0 END) as matched_clicks
-            FROM hc_candidates c`,
-    });
-    const countsRaw = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
-    const counts = {
-      total_clicks: Number(countsRaw.total_clicks || 0),
-      matched_clicks: Number(countsRaw.matched_clicks || 0),
-    };
-
-    const [listRows] = await db.run({
-      sql: `SELECT c.id, c.first_name, c.last_name, c.email, c.specialty, c.home_state, c.created_at,
-                   CASE WHEN EXISTS (
-                     SELECT 1
-                     FROM hc_assignments a
-                     WHERE a.candidate_id = c.id
-                       AND a.status IN ('active', 'pending_start', 'in_pipeline')
-                   ) THEN 'matched' ELSE 'unmatched' END as match_status
-            FROM hc_candidates c
-            ORDER BY c.created_at DESC
-            LIMIT 250`,
-    });
-
-    const items = listRows.map((r: any) => {
-      const row = r.toJSON();
-      const fullName = `${row.first_name || ""} ${row.last_name || ""}`.trim();
-      const startTime = toIsoTimestamp(row.created_at);
-      return {
-        id: row.id as string,
-        label: (fullName || row.email || "Unknown Candidate") as string,
-        candidateName: fullName || null,
-        candidateEmail: (row.email as string) || null,
-        jobId: null,
-        specialty: (row.specialty as string) || null,
-        state: (row.home_state as string) || null,
-        date: startTime ? startTime.slice(0, 10) : null,
-        startTime,
-        status: (row.match_status || "unmatched") as string,
-        description: row.specialty
-          ? `Legacy SSRS ingest (${row.specialty} in ${row.home_state || "Unknown"})`
-          : "Legacy SSRS ingest",
-      };
-    });
-
-    return { counts, items };
-  };
-
-  const [tableRows] = await db.run({
-    sql: `SELECT TABLE_NAME
-          FROM INFORMATION_SCHEMA.TABLES
-          WHERE TABLE_SCHEMA = ''
-            AND TABLE_NAME = 'interested_clicks'`,
-  });
-
-  try {
-    if (tableRows.length > 0) {
-      const [countRows] = await db.run({
-        sql: `SELECT COUNT(*) as total_clicks,
-                     SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) as matched_clicks
-              FROM interested_clicks
-              WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`,
-      });
-      const countsRaw = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
-      const counts = {
-        total_clicks: Number(countsRaw.total_clicks || 0),
-        matched_clicks: Number(countsRaw.matched_clicks || 0),
-      };
-
-      const [listRows] = await db.run({
-        sql: `SELECT click_id, candidate_name, email, job_id, specialty, state, clicked_at, match_status
-              FROM interested_clicks
-              ORDER BY clicked_at DESC
-              LIMIT 250`,
-      });
-      const items = mapInterestedClickRows(listRows);
-
-      if (items.length > 0 || counts.total_clicks > 0 || counts.matched_clicks > 0) {
-        return buildResponse(counts, items);
-      }
-
-      const legacy = await loadLegacyCandidateFallback();
-      if (legacy) return buildResponse(legacy.counts, legacy.items);
-      return empty();
-    }
-
-    const legacy = await loadLegacyCandidateFallback();
-    if (legacy) {
-      console.warn("[summary/clicks] interested_clicks table missing; serving legacy candidate fallback");
-      return buildResponse(legacy.counts, legacy.items);
-    }
-    console.warn("[summary/clicks] interested_clicks and legacy fallback unavailable; returning empty summary");
-    return empty();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/interested_clicks|column|not found|does not exist/i.test(message)) {
-      const legacy = await loadLegacyCandidateFallback();
-      if (legacy) {
-        console.warn(`[summary/clicks] schema not ready (${message}); serving legacy candidate fallback`);
-        return buildResponse(legacy.counts, legacy.items);
-      }
-      console.warn(`[summary/clicks] schema not ready (${message}); returning empty summary`);
-      return empty();
-    }
-    throw error;
-  }
-}
-
 async function sportsSummary() {
   const db = getDb("sportsdb");
 
@@ -370,6 +199,23 @@ async function sportsSummary() {
     return parsed.toISOString();
   };
 
+  const toDateOnly = (value: unknown): string | null => {
+    if (value == null) return null;
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    const raw = String(value).trim();
+    if (!raw) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString().slice(0, 10);
+  };
+
+  const toNumberOrNull = (value: unknown): number | null => {
+    if (value == null || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
   const mlbItems = gameListRows.map((r: any) => {
     const row = r.toJSON();
     const awayName = (row.away_team as string) || "TBD";
@@ -385,7 +231,7 @@ async function sportsSummary() {
       away: awayName,
       homeLogo: (row.home_logo as string) || null,
       awayLogo: (row.away_logo as string) || null,
-      date: (row.GameDate as string) || null,
+      date: toDateOnly(row.GameDate),
       startTime: toIsoOrNull(row.ScheduledStartAt),
       status: (row.Status as string) || null,
       venue: (row.Venue as string) || null,
@@ -396,6 +242,8 @@ async function sportsSummary() {
       awayRecord: null as string | null,
       spread: null as number | null,
       total: null as number | null,
+      homeScore: null as number | null,
+      awayScore: null as number | null,
     };
   });
 
@@ -404,11 +252,15 @@ async function sportsSummary() {
     const mlbGrSql = `SELECT
           gr.MatchID,
           MIN(gr.GameDate) AS GameDate,
+          MIN(gr.StartTime) AS StartTime,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
+          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
+          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
+          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo
         FROM GameResult gr
@@ -419,28 +271,46 @@ async function sportsSummary() {
         LIMIT 300`;
     const [mlbGrRows] = await db.run({ sql: mlbGrSql });
     // Build lookup: homeTeam+gameDate → records/odds
-    const mlbEnrich = new Map<string, { homeRecord: string | null; awayRecord: string | null; spread: number | null; total: number | null; homeLogo: string | null; awayLogo: string | null }>();
+    const mlbEnrich = new Map<
+      string,
+      {
+        homeRecord: string | null;
+        awayRecord: string | null;
+        spread: number | null;
+        total: number | null;
+        homeScore: number | null;
+        awayScore: number | null;
+        homeLogo: string | null;
+        awayLogo: string | null;
+      }
+    >();
     for (const r of mlbGrRows) {
       const row = r.toJSON();
-      const key = `${((row.HomeTeam as string) || "").toLowerCase()}_${(row.GameDate as string) || ""}`;
+      const normalizedDate = toDateOnly(row.GameDate) || (toIsoOrNull(row.StartTime)?.slice(0, 10) ?? "");
+      const key = `${String(row.HomeTeam || "").toLowerCase()}_${String(row.AwayTeam || "").toLowerCase()}_${normalizedDate}`;
       mlbEnrich.set(key, {
         homeRecord: (row.HomeRecord as string) || null,
         awayRecord: (row.AwayRecord as string) || null,
-        spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
-        total: row.Total != null ? parseFloat(String(row.Total)) : null,
+        spread: toNumberOrNull(row.Spread),
+        total: toNumberOrNull(row.Total),
+        homeScore: toNumberOrNull(row.HomeScore),
+        awayScore: toNumberOrNull(row.AwayScore),
         homeLogo: (row.HomeLogo as string) || null,
         awayLogo: (row.AwayLogo as string) || null,
       });
     }
     // Merge into mlbItems
     for (const item of mlbItems) {
-      const key = `${(item.home || "").toLowerCase()}_${item.date || ""}`;
+      const normalizedDate = toDateOnly(item.date) || (item.startTime ? item.startTime.slice(0, 10) : "");
+      const key = `${String(item.home || "").toLowerCase()}_${String(item.away || "").toLowerCase()}_${normalizedDate}`;
       const enrichment = mlbEnrich.get(key);
       if (enrichment) {
         item.homeRecord = enrichment.homeRecord;
         item.awayRecord = enrichment.awayRecord;
         item.spread = enrichment.spread;
         item.total = enrichment.total;
+        item.homeScore = enrichment.homeScore;
+        item.awayScore = enrichment.awayScore;
         // Use ESPN logos if Game table logos are missing
         if (!item.homeLogo && enrichment.homeLogo) item.homeLogo = enrichment.homeLogo;
         if (!item.awayLogo && enrichment.awayLogo) item.awayLogo = enrichment.awayLogo;
@@ -473,6 +343,8 @@ async function sportsSummary() {
           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
+          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
+          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
           p.WriteupUrl,
           p.PublishedAt
         FROM GameResult gr
@@ -498,6 +370,8 @@ async function sportsSummary() {
           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
+          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
+          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
           CAST(NULL AS STRING) AS WriteupUrl,
           CAST(NULL AS TIMESTAMP) AS PublishedAt
         FROM GameResult gr
@@ -526,6 +400,8 @@ async function sportsSummary() {
             MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
             p.WriteupUrl,
             p.PublishedAt
           FROM GameResult gr
@@ -551,6 +427,8 @@ async function sportsSummary() {
             MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
+            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
+            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
             CAST(NULL AS STRING) AS WriteupUrl,
             CAST(NULL AS TIMESTAMP) AS PublishedAt
           FROM GameResult gr
@@ -596,7 +474,7 @@ async function sportsSummary() {
       away: awayName,
       homeLogo: (row.HomeLogo as string) || null,
       awayLogo: (row.AwayLogo as string) || null,
-      date: (row.GameDate as string) || (startTime ? startTime.slice(0, 10) : null),
+      date: toDateOnly(row.GameDate) || (startTime ? startTime.slice(0, 10) : null),
       startTime,
       status:
         startTime && new Date(startTime).getTime() > nowTs
@@ -608,8 +486,10 @@ async function sportsSummary() {
       publishedAt: toIsoOrNull(row.PublishedAt),
       homeRecord: (row.HomeRecord as string) || null,
       awayRecord: (row.AwayRecord as string) || null,
-      spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
-      total: row.Total != null ? parseFloat(String(row.Total)) : null,
+      spread: toNumberOrNull(row.Spread),
+      total: toNumberOrNull(row.Total),
+      homeScore: toNumberOrNull(row.HomeScore),
+      awayScore: toNumberOrNull(row.AwayScore),
     };
   });
 
@@ -629,7 +509,7 @@ async function sportsSummary() {
         away: awayName,
         homeLogo: (row.HomeLogo as string) || null,
         awayLogo: (row.AwayLogo as string) || null,
-        date: (row.GameDate as string) || (startTime ? startTime.slice(0, 10) : null),
+        date: toDateOnly(row.GameDate) || (startTime ? startTime.slice(0, 10) : null),
         startTime,
         status:
           startTime && new Date(startTime).getTime() > nowTs
@@ -641,8 +521,10 @@ async function sportsSummary() {
         publishedAt: toIsoOrNull(row.PublishedAt),
         homeRecord: (row.HomeRecord as string) || null,
         awayRecord: (row.AwayRecord as string) || null,
-        spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
-        total: row.Total != null ? parseFloat(String(row.Total)) : null,
+        spread: toNumberOrNull(row.Spread),
+        total: toNumberOrNull(row.Total),
+        homeScore: toNumberOrNull(row.HomeScore),
+        awayScore: toNumberOrNull(row.AwayScore),
       };
     });
 
@@ -651,12 +533,21 @@ async function sportsSummary() {
   const nhlItems = mapLeagueRows(nhlRows, "NHL");
   const nflItems = mapLeagueRows(nflRows, "NFL");
 
-  const items = [...mlbItems, ...soccerItems, ...nbaItems, ...wnbaItems, ...nhlItems, ...nflItems].sort((a: any, b: any) => {
+  const rawItems = [...mlbItems, ...soccerItems, ...nbaItems, ...wnbaItems, ...nhlItems, ...nflItems].sort((a: any, b: any) => {
     const aTime = a.startTime || `${a.date || "1970-01-01"}T00:00:00.000Z`;
     const bTime = b.startTime || `${b.date || "1970-01-01"}T00:00:00.000Z`;
     if (aTime < bTime) return -1;
     if (aTime > bTime) return 1;
     return String(a.label || "").localeCompare(String(b.label || ""));
+  });
+
+  const items = rawItems.map((item: any) => {
+    const gameId = String(item.id || "").trim();
+    if (!gameId) return item;
+    return {
+      ...item,
+      ...buildSportsGameUrls(gameId),
+    };
   });
 
   const slateSet = new Set<string>();
@@ -665,32 +556,73 @@ async function sportsSummary() {
     if (dateKey) slateSet.add(dateKey);
   }
 
+  let sportsPicks: Record<string, unknown>[] = [];
+  try {
+    sportsPicks = await listResolvedPicks({
+      date: todayDateKey(),
+      limit: 60,
+      tier: "PUBLIC",
+    }) as Record<string, unknown>[];
+    if (sportsPicks.length === 0) {
+      sportsPicks = await listResolvedPicks({
+        limit: 60,
+        tier: "PUBLIC",
+      }) as Record<string, unknown>[];
+    }
+  } catch (error) {
+    console.warn("[summary] sports picks fetch failed:", error);
+  }
+
+  let sportsTrackRecord = {
+    sample_size: 0,
+    wins: 0,
+    losses: 0,
+    pushes: 0,
+    voids: 0,
+    units: 0,
+    record: "0 to 0 to 0",
+    matured: false,
+  };
+  try {
+    sportsTrackRecord = await computeTrackRecord(30);
+  } catch (error) {
+    console.warn("[summary] sports track record fetch failed:", error);
+  }
+
   return Response.json({
     pulse: {
       games: items.length,
       slates: slateSet.size,
       previews: items.filter((item: any) => Boolean(item.writeupUrl)).length,
+      picks: sportsPicks.length,
+      settled_picks: sportsTrackRecord.sample_size,
     },
     supportedLeagues: SPORTS_SUPPORTED_LEAGUES_UI,
+    sportsPicks,
+    sportsTrackRecord,
     items,
   });
 }
 
 async function codeSummary() {
+  const seededItems = LIVE_ARCHITECTURE_LEDGER_ACCEPTED.map((entry, index) => ({
+    id: `seed_${index + 1}`,
+    label: entry.verdict,
+    agent: "human",
+    category: "architecture",
+    status: entry.status,
+    riskZones: [],
+    filesTouched: [],
+    refs: [],
+    supersededBy: null,
+    createdAt: null,
+    updatedAt: null,
+    preview: entry.details.length > 200 ? `${entry.details.slice(0, 200)}...` : entry.details,
+  }));
+
   try {
     const verdicts = await listVerdicts({ limit: 100 });
-
-    const statusCounts = { proposed: 0, accepted: 0, rejected: 0, superseded: 0 };
-    const agentCounts: Record<string, number> = {};
-
-    for (const v of verdicts) {
-      if (v.status in statusCounts) {
-        statusCounts[v.status as keyof typeof statusCounts]++;
-      }
-      agentCounts[v.agent_source] = (agentCounts[v.agent_source] || 0) + 1;
-    }
-
-    const items = verdicts.map((v) => ({
+    const verdictItems = verdicts.map((v) => ({
       id: v.verdict_id,
       label: v.title,
       agent: v.agent_source,
@@ -706,9 +638,30 @@ async function codeSummary() {
       preview: v.body.length > 200 ? v.body.slice(0, 200) + "..." : v.body,
     }));
 
+    const mergedByLabel = new Map<string, any>();
+    for (const item of seededItems) {
+      mergedByLabel.set(String(item.label || "").toLowerCase(), item);
+    }
+    for (const item of verdictItems) {
+      mergedByLabel.set(String(item.label || "").toLowerCase(), item);
+    }
+    const items = Array.from(mergedByLabel.values());
+
+    const statusCounts = { proposed: 0, accepted: 0, rejected: 0, superseded: 0 };
+    const agentCounts: Record<string, number> = {};
+
+    for (const item of items) {
+      const status = String(item.status || "").toLowerCase();
+      if (status in statusCounts) {
+        statusCounts[status as keyof typeof statusCounts] += 1;
+      }
+      const agent = String(item.agent || "human");
+      agentCounts[agent] = (agentCounts[agent] || 0) + 1;
+    }
+
     return Response.json({
       pulse: {
-        verdicts: verdicts.length,
+        verdicts: items.length,
         proposed: statusCounts.proposed,
         accepted: statusCounts.accepted,
         agents: agentCounts,
@@ -716,17 +669,17 @@ async function codeSummary() {
       items,
     });
   } catch (err) {
-    // Graceful fallback if verdicts table doesn't exist yet
+    // Graceful fallback if verdicts table doesn't exist yet.
     console.warn("[summary] Verdicts query failed (table may not exist):", err);
     return Response.json({
       pulse: {
-        verdicts: 0,
+        verdicts: seededItems.length,
         proposed: 0,
-        accepted: 0,
-        agents: {},
-        note: "Verdicts table not yet created. Run: scripts/ddl/verdicts.sql",
+        accepted: seededItems.length,
+        agents: { human: seededItems.length },
+        note: "Verdicts table unavailable. Showing seeded accepted architecture ledger entries.",
       },
-      items: [],
+      items: seededItems,
     });
   }
 }
@@ -1033,10 +986,29 @@ async function marginsSummary() {
 
 async function ayaopsSummary() {
   const db = getDb("recruitingdb");
+  const toIsoTimestamp = (value: unknown): string | null => {
+    if (value == null) return null;
+    const parsed = new Date(String(value));
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString();
+  };
 
-  // Pulse: Candidates, Facilities, Active Assignments, Submittals
-  const [candRows] = await db.run({ sql: `SELECT COUNT(*) as count FROM hc_candidates` });
-  const candCount = Number(candRows[0]?.toJSON()?.count || 0);
+  // Pulse: Candidates (ID-ready + total/missing), Facilities, Active Assignments, Submittals
+  const [candRows] = await db.run({
+    sql: `SELECT
+            COUNT(*) AS total_count,
+            COUNTIF(nova_id IS NOT NULL) AS with_id_count,
+            COUNTIF(nova_id IS NULL) AS missing_id_count
+          FROM hc_candidates`,
+  });
+  const candMeta = candRows[0]?.toJSON() as {
+    total_count?: number | string;
+    with_id_count?: number | string;
+    missing_id_count?: number | string;
+  };
+  const candTotalCount = Number(candMeta?.total_count || 0);
+  const candWithIdCount = Number(candMeta?.with_id_count || 0);
+  const candMissingIdCount = Number(candMeta?.missing_id_count || 0);
 
   const [facRows] = await db.run({ sql: `SELECT COUNT(*) as count FROM hc_facilities` });
   const facCount = Number(facRows[0]?.toJSON()?.count || 0);
@@ -1049,36 +1021,78 @@ async function ayaopsSummary() {
   const [subRows] = await db.run({ sql: `SELECT COUNT(*) as count FROM hc_submittals` });
   const subCount = Number(subRows[0]?.toJSON()?.count || 0);
 
-  const columns = await getPriorityColumnPresence(db);
-  const priorityScoreExpr = columns.score ? "c.priority_score" : "CAST(NULL AS FLOAT64)";
-  const priorityLevelExpr = columns.level ? "c.priority_level" : "CAST(NULL AS STRING)";
+  const [threadObjectRows] = await db.run({
+    sql: `SELECT TABLE_NAME
+          FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = ''
+            AND TABLE_NAME = 'rc_thread_objects'`,
+  });
+  const hasThreadObjects = threadObjectRows.length > 0;
 
-  // Candidates with their current assignment + facility
+  const threadSelect = hasThreadObjects
+    ? `, rt.latest_message_at AS thread_last_touch_at, rt.last_seen_at AS thread_last_seen_at`
+    : `, CAST(NULL AS TIMESTAMP) AS thread_last_touch_at, CAST(NULL AS TIMESTAMP) AS thread_last_seen_at`;
+  const threadJoin = hasThreadObjects
+    ? `LEFT JOIN rc_thread_objects rt ON rt.thread_id = (
+         SELECT rt1.thread_id
+         FROM rc_thread_objects rt1
+         WHERE rt1.candidate_id = c.id
+           AND rt1.unresolved_flag = FALSE
+         ORDER BY COALESCE(rt1.latest_message_at, rt1.last_seen_at) DESC, rt1.thread_id DESC
+         LIMIT 1
+       )`
+    : ``;
+
+  // Candidates with their prioritized assignment + facility.
+  // Product rule: if a traveler is both working and prestart, prestart wins.
   const [listRows] = await db.run({
     sql: `SELECT c.id, c.nova_id, c.first_name, c.last_name, c.specialty, c.profession,
             c.home_state, c.compliance_risk_level, c.source, c.rc_thread_url, c.outlook_thread_url, c.phone,
             a.status as assignment_status, a.start_date, a.end_date,
             a.weekly_gross, a.hourly_rate,
-            ${priorityScoreExpr} as priority_score,
-            ${priorityLevelExpr} as priority_level,
             f.name as facility_name, f.city as facility_city, f.state as facility_state,
             f.vms_platform, f.beds as facility_beds
+            ${threadSelect}
           FROM hc_candidates c
-          LEFT JOIN hc_assignments a ON a.candidate_id = c.id
-            AND a.status IN ('active', 'pending_start', 'in_pipeline')
+          LEFT JOIN hc_assignments a ON a.id = (
+            SELECT a1.id
+            FROM hc_assignments a1
+            WHERE a1.candidate_id = c.id
+              AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline')
+            ORDER BY
+              CASE
+                WHEN LOWER(a1.status) = 'pending_start'
+                  AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
+                  AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE() THEN 0
+                WHEN LOWER(a1.status) = 'active' THEN 1
+                WHEN LOWER(a1.status) = 'in_pipeline' THEN 2
+                WHEN LOWER(a1.status) = 'pending_start' THEN 3
+                ELSE 4
+              END,
+              CASE
+                WHEN LOWER(a1.status) = 'pending_start'
+                  AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
+                  AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE()
+                  THEN SAFE_CAST(a1.start_date AS DATE)
+                WHEN LOWER(a1.status) = 'active'
+                  THEN COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31')
+                WHEN LOWER(a1.status) = 'in_pipeline'
+                  THEN COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '9999-12-31')
+                ELSE COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
+              END ASC,
+              COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') DESC,
+              a1.id DESC
+            LIMIT 1
+          )
           LEFT JOIN hc_facilities f ON a.facility_id = f.id
+          ${threadJoin}
           ORDER BY c.specialty, c.last_name
-          LIMIT 200`,
+          LIMIT 500`,
   });
 
   const items = listRows.map((r: any) => {
     const row = r.toJSON();
     const candidate = mapCandidateRow(row);
-    const touchPlan = buildAyaFollowupSignal(
-      candidate,
-      row.priority_score != null ? Number(row.priority_score) : null,
-      row.priority_level ? String(row.priority_level) : null
-    );
     return {
       id: candidate.id,
       label: candidate.name,
@@ -1103,34 +1117,22 @@ async function ayaopsSummary() {
       phone: candidate.phone || null,
       rcThreadUrl: candidate.rcThreadUrl || null,
       outlookThreadUrl: candidate.outlookThreadUrl || null,
-      touchPriorityScore: touchPlan.score,
-      touchPriorityLevel: row.priority_level ? String(row.priority_level) : null,
-      touchPriorityBand: touchPlan.band,
-      touchPriorityReason: touchPlan.reason,
-      touchDaysToEnd: touchPlan.daysToEnd,
-      touchNoteSeed: touchPlan.noteSeed,
+      touchDaysToEnd: getDaysToAssignmentEnd(candidate),
+      lastTouchAt: toIsoTimestamp(row.thread_last_touch_at),
+      lastSeenAt: toIsoTimestamp(row.thread_last_seen_at),
+      unansweredCount: null,
     };
   });
 
   items.sort((a: any, b: any) => {
-    const levelRank = (value: string | null | undefined) => {
-      const key = String(value || "").toLowerCase();
-      if (key === "critical") return 5;
-      if (key === "high") return 4;
-      if (key === "medium") return 3;
-      if (key === "standard") return 2;
-      if (key === "low") return 1;
-      return 0;
-    };
-
-    const levelDiff = levelRank(b.touchPriorityLevel) - levelRank(a.touchPriorityLevel);
-    if (levelDiff !== 0) return levelDiff;
-
-    const scoreDiff = (b.touchPriorityScore || 0) - (a.touchPriorityScore || 0);
-    if (scoreDiff !== 0) return scoreDiff;
-
-    const aDays = a.touchDaysToEnd ?? 9999;
-    const bDays = b.touchDaysToEnd ?? 9999;
+    const aDays =
+      typeof a.touchDaysToEnd === "number" && Number.isFinite(a.touchDaysToEnd)
+        ? a.touchDaysToEnd
+        : Number.POSITIVE_INFINITY;
+    const bDays =
+      typeof b.touchDaysToEnd === "number" && Number.isFinite(b.touchDaysToEnd)
+        ? b.touchDaysToEnd
+        : Number.POSITIVE_INFINITY;
     if (aDays !== bDays) return aDays - bDays;
 
     return String(a.label || "").localeCompare(String(b.label || ""));
@@ -1147,7 +1149,10 @@ async function ayaopsSummary() {
 
   return Response.json({
     pulse: {
-      candidates: candCount,
+      candidates: candWithIdCount,
+      candidates_total: candTotalCount,
+      candidates_with_id: candWithIdCount,
+      candidates_missing_id: candMissingIdCount,
       facilities: facCount,
       active: activeCount,
       submittals: subCount,
@@ -1170,84 +1175,12 @@ function dateDiffDays(from: Date, to: Date): number {
   return Math.round(ms / 86_400_000);
 }
 
-async function getPriorityColumnPresence(
-  db: ReturnType<ReturnType<Spanner["instance"]>["database"]>
-): Promise<{ score: boolean; level: boolean }> {
-  if (priorityColumnPresence) return priorityColumnPresence;
-
-  try {
-    const [rows] = await db.run({
-      sql: `SELECT COLUMN_NAME
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_NAME = 'hc_candidates'
-              AND COLUMN_NAME IN ('priority_score', 'priority_level')`,
-    });
-    const names = new Set(rows.map((r: any) => String(r.toJSON().COLUMN_NAME || "").toLowerCase()));
-    priorityColumnPresence = {
-      score: names.has("priority_score"),
-      level: names.has("priority_level"),
-    };
-  } catch (error) {
-    console.warn("Could not inspect candidate priority columns:", error);
-    priorityColumnPresence = { score: false, level: false };
-  }
-
-  return priorityColumnPresence;
-}
-
-function buildAyaFollowupSignal(
-  candidate: CandidateRecord,
-  existingPriorityScore: number | null,
-  existingPriorityLevel: string | null
-): {
-  score: number;
-  band: "today" | "this_week" | "monitor";
-  reason: string;
-  daysToEnd: number | null;
-  noteSeed: string;
-} {
+function getDaysToAssignmentEnd(candidate: CandidateRecord): number | null {
   const endDate = parseIsoDate(candidate.assignmentEnd);
+  if (!endDate) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const daysToEnd = endDate ? dateDiffDays(today, endDate) : null;
-
-  const hasExistingScore =
-    typeof existingPriorityScore === "number" && Number.isFinite(existingPriorityScore);
-  const fallbackScore =
-    daysToEnd == null
-      ? 40
-      : daysToEnd < 0
-        ? 100
-        : Math.max(1, 100 - Math.min(daysToEnd, 90));
-  const boundedScore = Math.max(
-    1,
-    Math.min(100, Math.round(hasExistingScore ? Number(existingPriorityScore) : fallbackScore))
-  );
-  const band: "today" | "this_week" | "monitor" =
-    boundedScore >= 80 ? "today" : boundedScore >= 60 ? "this_week" : "monitor";
-  const reason = hasExistingScore
-    ? `existing priority signal${existingPriorityLevel ? `: ${existingPriorityLevel}` : ""}`
-    : daysToEnd == null
-      ? "fallback timing signal (no explicit priority score)"
-      : daysToEnd < 0
-        ? `${Math.abs(daysToEnd)}d past assignment end`
-        : `${daysToEnd}d to assignment end`;
-
-  const noteSeedParts = [
-    `Candidate: ${candidate.name}`,
-    `Priority: ${boundedScore}/100 (${band.replace("_", " ")})`,
-    `Why now: ${reason}`,
-    `Status: ${candidate.derivedCurrentStatus || candidate.assignmentStatus || "unknown"}`,
-    `Ask: confirm next placement timing and current readiness`,
-  ];
-
-  return {
-    score: boundedScore,
-    band,
-    reason,
-    daysToEnd,
-    noteSeed: noteSeedParts.join(" | "),
-  };
+  return dateDiffDays(today, endDate);
 }
 
 // ─── Jobs Summary (Operational — no margin concepts) ────────────────

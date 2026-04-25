@@ -37,8 +37,37 @@ const CANDIDATE_SELECT = `
          f.name as facility_name, f.city as facility_city, f.state as facility_state,
          f.vms_platform, f.beds as facility_beds
   FROM hc_candidates c
-  LEFT JOIN hc_assignments a ON a.candidate_id = c.id
-    AND a.status IN ('active', 'pending_start')
+  LEFT JOIN hc_assignments a ON a.id = (
+    SELECT a1.id
+    FROM hc_assignments a1
+    WHERE a1.candidate_id = c.id
+      AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline')
+    ORDER BY
+      CASE
+        WHEN LOWER(a1.status) = 'pending_start'
+          AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
+          AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE() THEN 0
+        WHEN LOWER(a1.status) = 'active' THEN 1
+        WHEN LOWER(a1.status) = 'in_pipeline' THEN 2
+        WHEN LOWER(a1.status) = 'pending_start' THEN 3
+        WHEN LOWER(a1.status) IN ('completed', 'cancelled') THEN 4
+        ELSE 5
+      END,
+      CASE
+        WHEN LOWER(a1.status) = 'pending_start'
+          AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
+          AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE()
+          THEN SAFE_CAST(a1.start_date AS DATE)
+        WHEN LOWER(a1.status) = 'active'
+          THEN COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31')
+        WHEN LOWER(a1.status) = 'in_pipeline'
+          THEN COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '9999-12-31')
+        ELSE COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
+      END ASC,
+      COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') DESC,
+      a1.id DESC
+    LIMIT 1
+  )
   LEFT JOIN hc_facilities f ON a.facility_id = f.id`;
 
 const MAX_RESULTS = 25;
@@ -193,6 +222,26 @@ export const DB_TOOL_DECLARATIONS = [
     },
   },
   {
+    name: "update_candidate_name",
+    description:
+      "Update a candidate's primary display and legal name (first_name and last_name) on hc_candidates. Accepts internal UUID or Nova numeric ID.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        candidate_id: { type: "string" as const, description: "Candidate internal UUID or Nova numeric ID" },
+        first_name: {
+          type: "string" as const,
+          description: "Optional new first name. Omit to leave unchanged.",
+        },
+        last_name: {
+          type: "string" as const,
+          description: "Optional new last name. Omit to leave unchanged.",
+        },
+      },
+      required: ["candidate_id"],
+    },
+  },
+  {
     name: "add_candidate_note",
     description:
       "Create a candidate note in hc_notes. Performs a real DB write and returns a DB-grounded confirmation payload including candidate_id, note id, rows_updated, and write timestamp.",
@@ -232,64 +281,6 @@ export const DB_TOOL_DECLARATIONS = [
         },
       },
       required: ["candidate_id", "subject", "body"],
-    },
-  },
-  {
-    name: "fetch_interested_clicks",
-    description:
-      "Fetch recent MyAya 'Interested' clicks from the interested_clicks table. Shows candidates who clicked 'I'm Interested' on jobs. Filters by recency, specialty, state, or match status. Returns candidate name, email, job_id, and clicked_at. Use for recruiter follow-up workflows.",
-    parameters: {
-      type: "object" as const,
-      properties: {
-        hours: {
-          type: "number" as const,
-          description: "How many hours back to look. Defaults to 48.",
-        },
-        specialty: {
-          type: "string" as const,
-          description: "Optional specialty filter (e.g., 'icu', 'er', 'med-surg').",
-        },
-        state: {
-          type: "string" as const,
-          description: "Optional 2-letter state filter (e.g., 'CA', 'TX').",
-        },
-        match_status: {
-          type: "string" as const,
-          description: "Filter by match status: 'unmatched', 'matched', 'in_pipeline'. Defaults to all.",
-        },
-        limit: {
-          type: "number" as const,
-          description: "Max results. Defaults to 25, max 50.",
-        },
-      },
-      required: [],
-    },
-  },
-  {
-    name: "get_demand_trends",
-    description:
-      "Get demand trend data from market_demand_daily rollups. Shows click volume by specialty and state over time. Use for market analysis, identifying hot specialties, and geographic demand patterns.",
-    parameters: {
-      type: "object" as const,
-      properties: {
-        specialty: {
-          type: "string" as const,
-          description: "Optional specialty to filter by.",
-        },
-        state: {
-          type: "string" as const,
-          description: "Optional 2-letter state to filter by.",
-        },
-        days: {
-          type: "number" as const,
-          description: "Number of days of history to retrieve. Defaults to 7, max 90.",
-        },
-        limit: {
-          type: "number" as const,
-          description: "Max rows. Defaults to 25.",
-        },
-      },
-      required: [],
     },
   },
 ];
@@ -365,6 +356,17 @@ export async function executeDbTool(
             : undefined,
         });
         break;
+      case "update_candidate_name":
+        result = await updateCandidateName({
+          candidateInput: String(args.candidate_id),
+          firstNameInput: Object.prototype.hasOwnProperty.call(args, "first_name")
+            ? (args.first_name as unknown)
+            : undefined,
+          lastNameInput: Object.prototype.hasOwnProperty.call(args, "last_name")
+            ? (args.last_name as unknown)
+            : undefined,
+        });
+        break;
       case "add_candidate_note":
         result = await addCandidateNote(
           String(args.candidate_id),
@@ -381,23 +383,6 @@ export async function executeDbTool(
           ccInput: Array.isArray(args.cc) ? args.cc.map((value) => String(value)) : [],
           saveNoteTraceInput:
             typeof args.save_note_trace === "boolean" ? Boolean(args.save_note_trace) : true,
-        });
-        break;
-      case "fetch_interested_clicks":
-        result = await fetchInterestedClicks({
-          hours: Number(args.hours) || 48,
-          specialty: args.specialty ? String(args.specialty) : undefined,
-          state: args.state ? String(args.state) : undefined,
-          matchStatus: args.match_status ? String(args.match_status) : undefined,
-          limit: Math.min(Number(args.limit) || MAX_RESULTS, 50),
-        });
-        break;
-      case "get_demand_trends":
-        result = await getDemandTrends({
-          specialty: args.specialty ? String(args.specialty) : undefined,
-          state: args.state ? String(args.state) : undefined,
-          days: Math.min(Number(args.days) || 7, 90),
-          limit: Math.min(Number(args.limit) || MAX_RESULTS, MAX_RESULTS),
         });
         break;
       default:
@@ -807,12 +792,27 @@ async function getInternalGroundingContext(candidateInput: string): Promise<{
           WHERE candidate_id = @candidateId
           ORDER BY
             CASE
-              WHEN LOWER(status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
-              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 1
-              ELSE 2
+              WHEN LOWER(status) = 'pending_start'
+                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE() THEN 0
+              WHEN LOWER(status) = 'active' THEN 1
+              WHEN LOWER(status) = 'in_pipeline' THEN 2
+              WHEN LOWER(status) = 'pending_start' THEN 3
+              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 4
+              ELSE 5
             END,
-            COALESCE(end_date, '9999-12-31') DESC,
-            COALESCE(start_date, '0001-01-01') DESC
+            CASE
+              WHEN LOWER(status) = 'pending_start'
+                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE()
+                THEN SAFE_CAST(start_date AS DATE)
+              WHEN LOWER(status) = 'active'
+                THEN COALESCE(SAFE_CAST(end_date AS DATE), DATE '9999-12-31')
+              WHEN LOWER(status) = 'in_pipeline'
+                THEN COALESCE(SAFE_CAST(start_date AS DATE), DATE '9999-12-31')
+              ELSE COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01')
+            END ASC,
+            COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01') DESC
           LIMIT 1`,
     params: { candidateId },
     types: { candidateId: { type: "string" } },
@@ -1624,6 +1624,7 @@ async function updateCandidateStatus(
   object_type: "assignment_status";
   candidate_id: string;
   nova_id: string | null;
+  candidate_name: string | null;
   action: "update_candidate_status";
   write_timestamp: string;
   rows_updated: number;
@@ -1641,12 +1642,27 @@ async function updateCandidateStatus(
           WHERE candidate_id = @candidateId
           ORDER BY
             CASE
-              WHEN LOWER(status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
-              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 1
-              ELSE 2
+              WHEN LOWER(status) = 'pending_start'
+                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE() THEN 0
+              WHEN LOWER(status) = 'active' THEN 1
+              WHEN LOWER(status) = 'in_pipeline' THEN 2
+              WHEN LOWER(status) = 'pending_start' THEN 3
+              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 4
+              ELSE 5
             END,
-            COALESCE(end_date, '9999-12-31') DESC,
-            COALESCE(start_date, '0001-01-01') DESC
+            CASE
+              WHEN LOWER(status) = 'pending_start'
+                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
+                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE()
+                THEN SAFE_CAST(start_date AS DATE)
+              WHEN LOWER(status) = 'active'
+                THEN COALESCE(SAFE_CAST(end_date AS DATE), DATE '9999-12-31')
+              WHEN LOWER(status) = 'in_pipeline'
+                THEN COALESCE(SAFE_CAST(start_date AS DATE), DATE '9999-12-31')
+              ELSE COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01')
+            END ASC,
+            COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01') DESC
           LIMIT 1`,
     params: { candidateId },
     types: { candidateId: { type: "string" } },
@@ -1667,6 +1683,7 @@ async function updateCandidateStatus(
       object_type: "assignment_status",
       candidate_id: candidateId,
       nova_id: identity.nova_id,
+      candidate_name: identity.display_name || null,
       action: "update_candidate_status",
       write_timestamp: writeTimestamp,
       rows_updated: 1,
@@ -1688,6 +1705,7 @@ async function updateCandidateStatus(
       object_type: "assignment_status",
       candidate_id: candidateId,
       nova_id: identity.nova_id,
+      candidate_name: identity.display_name || null,
       action: "update_candidate_status",
       write_timestamp: writeTimestamp,
       rows_updated: 0,
@@ -1743,6 +1761,7 @@ async function updateCandidateStatus(
     object_type: "assignment_status",
     candidate_id: candidateId,
     nova_id: identity.nova_id,
+    candidate_name: identity.display_name || null,
     action: "update_candidate_status",
     write_timestamp: writeTimestamp,
     rows_updated: Number(updatedCount),
@@ -1904,167 +1923,114 @@ async function updateCandidateProfession(input: {
   };
 }
 
-// ── Interested Clicks Tool ────────────────────────────────────────
-
-async function fetchInterestedClicks(input: {
-  hours: number;
-  specialty?: string;
-  state?: string;
-  matchStatus?: string;
-  limit: number;
+async function updateCandidateName(input: {
+  candidateInput: string;
+  firstNameInput: unknown;
+  lastNameInput: unknown;
 }): Promise<{
-  object_type: "interested_clicks";
-  action: "fetch_interested_clicks";
-  query_params: Record<string, unknown>;
-  total: number;
-  clicks: Array<{
-    click_id: string;
-    candidate_name: string | null;
-    email: string | null;
-    phone: string | null;
-    job_id: string | null;
-    specialty: string | null;
-    state: string | null;
-    clicked_at: string | null;
-    match_status: string;
-    ingested_at: string;
-  }>;
-}> {
-  const cutoff = new Date();
-  cutoff.setHours(cutoff.getHours() - input.hours);
-
-  const conditions = ["ingested_at >= @cutoff"];
-  const params: Record<string, unknown> = { cutoff };
-  const types: Record<string, { type: string }> = { cutoff: { type: "timestamp" } };
-
-  if (input.specialty) {
-    conditions.push("LOWER(specialty) = @specialty");
-    params.specialty = input.specialty.toLowerCase();
-    types.specialty = { type: "string" };
-  }
-  if (input.state) {
-    conditions.push("UPPER(state) = @state");
-    params.state = input.state.toUpperCase();
-    types.state = { type: "string" };
-  }
-  if (input.matchStatus) {
-    conditions.push("match_status = @matchStatus");
-    params.matchStatus = input.matchStatus;
-    types.matchStatus = { type: "string" };
-  }
-
-  const [rows] = await db.run({
-    sql: `SELECT click_id, candidate_name, email, phone, job_id,
-                 specialty, state, clicked_at, match_status, ingested_at
-          FROM interested_clicks
-          WHERE ${conditions.join(" AND ")}
-          ORDER BY ingested_at DESC
-          LIMIT @limit`,
-    params: { ...params, limit: input.limit },
-    types: { ...types, limit: { type: "int64" } },
-  });
-
-  const clicks = rows.map((row: any) => {
-    const r = row.toJSON();
-    return {
-      click_id: String(r.click_id),
-      candidate_name: r.candidate_name ? String(r.candidate_name) : null,
-      email: r.email ? String(r.email) : null,
-      phone: r.phone ? String(r.phone) : null,
-      job_id: r.job_id ? String(r.job_id) : null,
-      specialty: r.specialty ? String(r.specialty) : null,
-      state: r.state ? String(r.state) : null,
-      clicked_at: r.clicked_at ? String(r.clicked_at) : null,
-      match_status: String(r.match_status || "unmatched"),
-      ingested_at: String(r.ingested_at),
-    };
-  });
-
-  return {
-    object_type: "interested_clicks",
-    action: "fetch_interested_clicks",
-    query_params: {
-      hours: input.hours,
-      specialty: input.specialty || null,
-      state: input.state || null,
-      match_status: input.matchStatus || null,
-      limit: input.limit,
-    },
-    total: clicks.length,
-    clicks,
+  object_type: "candidate_name";
+  candidate_id: string;
+  nova_id: string | null;
+  action: "update_candidate_name";
+  write_timestamp: string;
+  rows_updated: number;
+  changed_fields: {
+    first_name?: { from: string | null; to: string | null };
+    last_name?: { from: string | null; to: string | null };
   };
-}
-
-// ── Demand Trends Tool ────────────────────────────────────────────
-
-async function getDemandTrends(input: {
-  specialty?: string;
-  state?: string;
-  days: number;
-  limit: number;
-}): Promise<{
-  object_type: "demand_trends";
-  action: "get_demand_trends";
-  query_params: Record<string, unknown>;
-  total: number;
-  trends: Array<{
-    roll_date: string;
-    specialty: string;
-    state: string;
-    click_count: number;
-    unique_candidates: number;
-  }>;
+  outcome: "updated" | "no_change";
 }> {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - input.days);
-  const cutoff = cutoffDate.toISOString().split("T")[0];
-
-  const conditions = ["roll_date >= @cutoff"];
-  const params: Record<string, unknown> = { cutoff };
-  const types: Record<string, { type: string }> = { cutoff: { type: "date" } };
-
-  if (input.specialty) {
-    conditions.push("LOWER(specialty) = @specialty");
-    params.specialty = input.specialty.toLowerCase();
-    types.specialty = { type: "string" };
+  const firstName = normalizeOptionalUpdateField(input.firstNameInput, "profession");
+  const lastName = normalizeOptionalUpdateField(input.lastNameInput, "specialty"); // using same check
+  if (!firstName.provided && !lastName.provided) {
+    throw new Error("INVALID_UPDATE_PAYLOAD: Provide at least one updatable field: first_name or last_name");
   }
-  if (input.state) {
-    conditions.push("UPPER(state) = @state");
-    params.state = input.state.toUpperCase();
-    types.state = { type: "string" };
-  }
+
+  const identity = await requireCandidateIdentity(input.candidateInput);
+  const candidateId = identity.id;
 
   const [rows] = await db.run({
-    sql: `SELECT roll_date, specialty, state, click_count, unique_candidates
-          FROM market_demand_daily
-          WHERE ${conditions.join(" AND ")}
-          ORDER BY roll_date DESC, click_count DESC
-          LIMIT @limit`,
-    params: { ...params, limit: input.limit },
-    types: { ...types, limit: { type: "int64" } },
+    sql: `SELECT first_name, last_name FROM hc_candidates WHERE id = @candidateId LIMIT 1`,
+    params: { candidateId },
+    types: { candidateId: { type: "string" } },
   });
 
-  const trends = rows.map((row: any) => {
-    const r = row.toJSON();
+  if (rows.length === 0) {
+    throw new Error(`${CANDIDATE_NOT_FOUND_CODE}: No candidate found for candidate_id ${candidateId}`);
+  }
+
+  const row = rows[0].toJSON();
+  const currentFirstName = row.first_name != null ? String(row.first_name) : null;
+  const currentLastName = row.last_name != null ? String(row.last_name) : null;
+
+  const nextFirstName = firstName.provided ? firstName.value : currentFirstName;
+  const nextLastName = lastName.provided ? lastName.value : currentLastName;
+
+  const changedFields: {
+    first_name?: { from: string | null; to: string | null };
+    last_name?: { from: string | null; to: string | null };
+  } = {};
+
+  if (firstName.provided) {
+    changedFields.first_name = { from: currentFirstName, to: nextFirstName };
+  }
+  if (lastName.provided) {
+    changedFields.last_name = { from: currentLastName, to: nextLastName };
+  }
+
+  const noChange =
+    (!firstName.provided || currentFirstName === nextFirstName) &&
+    (!lastName.provided || currentLastName === nextLastName);
+  const writeTimestamp = new Date().toISOString();
+
+  if (noChange) {
     return {
-      roll_date: String(r.roll_date),
-      specialty: String(r.specialty),
-      state: String(r.state),
-      click_count: Number(r.click_count),
-      unique_candidates: Number(r.unique_candidates),
+      object_type: "candidate_name",
+      candidate_id: candidateId,
+      nova_id: identity.nova_id,
+      action: "update_candidate_name",
+      write_timestamp: writeTimestamp,
+      rows_updated: 0,
+      changed_fields: changedFields,
+      outcome: "no_change",
     };
+  }
+
+  const setClauses: string[] = [];
+  const params: Record<string, unknown> = { candidateId, updatedAt: new Date(writeTimestamp) };
+  const types: Record<string, { type: string }> = { candidateId: { type: "string" }, updatedAt: { type: "timestamp" } };
+
+  if (firstName.provided) {
+    setClauses.push("first_name = @firstName");
+    params.firstName = nextFirstName;
+    types.firstName = { type: "string" };
+  }
+  if (lastName.provided) {
+    setClauses.push("last_name = @lastName");
+    params.lastName = nextLastName;
+    types.lastName = { type: "string" };
+  }
+  setClauses.push("updated_at = @updatedAt");
+
+  let rowsUpdated = 0;
+  await db.runTransactionAsync(async (tx: any) => {
+    const [count] = await tx.runUpdate({
+      sql: `UPDATE hc_candidates SET ${setClauses.join(", ")} WHERE id = @candidateId`,
+      params,
+      types,
+    });
+    rowsUpdated = Number(count);
+    await tx.commit();
   });
 
   return {
-    object_type: "demand_trends",
-    action: "get_demand_trends",
-    query_params: {
-      specialty: input.specialty || null,
-      state: input.state || null,
-      days: input.days,
-      limit: input.limit,
-    },
-    total: trends.length,
-    trends,
+    object_type: "candidate_name",
+    candidate_id: candidateId,
+    nova_id: identity.nova_id,
+    action: "update_candidate_name",
+    write_timestamp: writeTimestamp,
+    rows_updated: rowsUpdated,
+    changed_fields: changedFields,
+    outcome: "updated",
   };
 }

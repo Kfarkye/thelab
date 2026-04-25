@@ -8,6 +8,8 @@
 
 import { getAuth } from "firebase-admin/auth";
 import { getApps, initializeApp, cert } from "firebase-admin/app";
+import { OAuth2Client } from "google-auth-library";
+import { requireEnv } from "@/lib/env";
 
 // ── Firebase Admin init — idempotent across hot reloads ──────────
 
@@ -40,7 +42,7 @@ export type AuthResult =
 
 /**
  * Verify Firebase ID token from request headers or cookies.
- * Returns the decoded user on success, or a 401/403 Response on failure.
+ * Returns the decoded user on success, or a 401 Response on failure.
  *
  * Usage in any route:
  * ```ts
@@ -92,6 +94,32 @@ export async function requireAuth(request: Request): Promise<AuthResult> {
       response: null,
     };
   } catch (err) {
+    // Attempt fallback for Google Service Account OIDC tokens
+    try {
+      const oAuth2Client = new OAuth2Client();
+      const expectedAudience = requireEnv("CRON_OIDC_AUDIENCE");
+      
+      const loginTicket = await oAuth2Client.verifyIdToken({
+        idToken: token,
+        audience: expectedAudience,
+      });
+      const payload = loginTicket.getPayload();
+      
+      // HARD GATE: Only accept legitimate GCP service account identities.
+      if (
+        payload && 
+        payload.email && 
+        payload.email.endsWith(".gserviceaccount.com")
+      ) {
+        return {
+          user: { uid: payload.sub, email: payload.email },
+          response: null,
+        };
+      }
+    } catch (oidcErr) {
+      // Ignore OIDC error and fall back to original logging
+    }
+
     console.warn(
       JSON.stringify({
         severity: "WARNING",
@@ -104,8 +132,8 @@ export async function requireAuth(request: Request): Promise<AuthResult> {
 
     return {
       user: null,
-      response: new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
+      response: new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
         headers: { "Content-Type": "application/json" },
       }),
     };

@@ -658,6 +658,93 @@ Thank you!`,
       };
     },
   },
+  {
+    id: 'housing_options_breakdown',
+    name: '🏠 OPS: Housing Options Breakdown Request',
+    category: 'ops',
+    messageType: 'email',
+    internalOnly: true,
+    requiredFields: ['name', 'facility', 'specialty', 'city', 'state', 'startDate'],
+    generateContent: (d) => {
+      let lengthWeeks = "[LENGTH]";
+      if (d.startDate && d.endDate) {
+        const start = new Date(d.startDate);
+        const end = new Date(d.endDate);
+        if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+          const diffTime = Math.abs(end.getTime() - start.getTime());
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          lengthWeeks = String(Math.round(diffDays / 7));
+        }
+      }
+
+      return {
+        to: 'housing@ayahealthcare.com',
+        subject: `Housing Options Breakdown - ${d.name || '[CANDIDATE NAME]'} | ${d.specialty || '[SPECIALTY]'} at ${getFacilityName(d.facility || '[FACILITY NAME]')}`,
+        body: `Hi team!
+
+Can you please send a breakdown of Aya housing options for ${d.name || '[CANDIDATE NAME]'}?
+
+Apt/Ext Stay: [PREFERENCE]
+Hospital: ${getFacilityName(d.facility || '[FACILITY NAME]')}
+Profession/Specialty: ${d.specialty || '[SPECIALTY]'}
+Crisis? (Y/N): [Y/N]
+Rapid Response? (Y/N): [Y/N]
+Float Pool? (Y/N): [Y/N]
+City/State: ${d.city || '[CITY]'}, ${d.state || '[STATE]'}
+Start Date: ${shortDate(d.startDate, '[START DATE]')}
+Length of Contract: ${lengthWeeks} weeks
+Pets? (Breed and Weight): [PET DETAILS OR N/A]
+Additional Occupants? (names/ages): [OCCUPANT DETAILS OR N/A]
+Will the traveler have a car?: [Y/N]`,
+      };
+    },
+  },
+  {
+    id: 'ops_extension_request',
+    name: '🛠 OPS: Extension Request Template',
+    category: 'ops',
+    messageType: 'email',
+    internalOnly: true,
+    requiredFields: ['name', 'facility'],
+    generateContent: (d) => {
+      const clinicianName = d.name || '[CLINICIAN NAME]';
+      const hospitalName = getFacilityName(d.facility || '[HOSPITAL NAME]');
+      const shiftHours =
+        d.shiftType || d.weeklyHours
+          ? `${d.shiftType || '[SHIFT]'} (${d.weeklyHours || '[HOURS]'} hours/week)`
+          : '[SHIFT/HOURS]';
+
+      return {
+        to: 'account.manager@ayahealthcare.com',
+        cc: 'account.coordinator@ayahealthcare.com',
+        subject: `EXTENSION REQUEST - ${clinicianName} - ${hospitalName}`,
+        body: `Candidate: ${clinicianName}
+
+Local (Y/N): [Y/N]
+
+Facility: ${hospitalName}
+
+Unit: [UNIT]
+
+Current Bill Rate: [CURRENT BILL RATE]
+
+Current Shift/Hours: ${shiftHours}
+
+Current End Date: ${shortDate(d.endDate, '[CURRENT END DATE]')}
+
+Proposed Extension Dates: [PROPOSED EXTENSION START] to [PROPOSED EXTENSION END]
+
+Requested Time Off Between Assignments: [DETAILS]
+
+Requested Time Off During Assignment: [DETAILS]
+
+Was this Extension Discussed with Manager (name)?: [YES/NO - MANAGER NAME]
+
+Any other details we need to confirm?
+[DETAILS]`,
+      };
+    },
+  },
 ];
 
 // ----------------------

@@ -1,0 +1,1800 @@
+diff --git a/src/app/api/summary/route.ts b/src/app/api/summary/route.ts
+index 1ab13c0..f38b3b5 100644
+--- a/src/app/api/summary/route.ts
++++ b/src/app/api/summary/route.ts
+@@ -3,10 +3,10 @@ import { mapCandidateRow } from "@/lib/mappers/candidate";
+ import type { CandidateRecord } from "@/lib/types/candidate";
+ import { queryMarginLedger, queryJobBoard } from "@/lib/ayaops/margin-ledger";
+ import { getDb } from "@/lib/spanner-pool";
+-import type { Spanner } from "@google-cloud/spanner";
+ import { listVerdicts } from "@/lib/verdicts/verdict-ledger";
+-
+-let priorityColumnPresence: { score: boolean; level: boolean } | null = null;
++import { LIVE_ARCHITECTURE_LEDGER_ACCEPTED } from "@/lib/verdicts/live-architecture-ledger";
++import { buildSportsGameUrls } from "@/lib/sports/game-canonical";
++import { computeTrackRecord, listResolvedPicks, todayDateKey } from "@/lib/sports/picks-ledger";
+ 
+ const SPORTS_SOCCER_LEAGUES = [
+   { key: "epl", label: "EPL", leagueIds: ["eng.1"] },
+@@ -72,8 +72,6 @@ export async function GET(request: NextRequest) {
+       return await jobsSummary();
+     } else if (mode === "ayaops") {
+       return await ayaopsSummary();
+-    } else if (mode === "clicks") {
+-      return await clicksSummary();
+     } else {
+       return codeSummary();
+     }
+@@ -152,175 +150,6 @@ async function healthcareSummary() {
+   });
+ }
+ 
+-async function clicksSummary() {
+-  const db = getDb("recruitingdb");
+-  const empty = () =>
+-    Response.json({
+-      pulse: {
+-        recent_clicks: 0,
+-        matched: 0,
+-        tracked: 0,
+-      },
+-      items: [],
+-    });
+-  const toIsoTimestamp = (value: unknown): string | null => {
+-    if (value == null) return null;
+-    const parsed = new Date(String(value));
+-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+-  };
+-
+-  const buildResponse = (counts: { total_clicks: number; matched_clicks: number }, items: any[]) =>
+-    Response.json({
+-      pulse: {
+-        recent_clicks: Number(counts.total_clicks),
+-        matched: Number(counts.matched_clicks),
+-        tracked: items.length,
+-      },
+-      items,
+-    });
+-
+-  const mapInterestedClickRows = (listRows: any[]) =>
+-    listRows.map((r: any) => {
+-      const row = r.toJSON();
+-      return {
+-        id: row.click_id as string,
+-        label: (row.candidate_name || row.email || "Unknown Candidate") as string,
+-        candidateName: row.candidate_name as string | null,
+-        candidateEmail: row.email as string | null,
+-        jobId: row.job_id as string | null,
+-        specialty: row.specialty as string | null,
+-        state: row.state as string | null,
+-        date: typeof row.clicked_at === "string" ? row.clicked_at.slice(0, 10) : null,
+-        startTime: toIsoTimestamp(row.clicked_at),
+-        status: (row.match_status || "unmatched") as string,
+-        description: row.job_id
+-          ? `Job ${row.job_id} (${row.specialty || "Unknown"} in ${row.state || "Unknown"})`
+-          : "",
+-      };
+-    });
+-
+-  const loadLegacyCandidateFallback = async () => {
+-    const [candidateTableRows] = await db.run({
+-      sql: `SELECT TABLE_NAME
+-            FROM INFORMATION_SCHEMA.TABLES
+-            WHERE TABLE_SCHEMA = ''
+-              AND TABLE_NAME = 'hc_candidates'`,
+-    });
+-    if (candidateTableRows.length === 0) return null;
+-
+-    const [countRows] = await db.run({
+-      sql: `SELECT COUNT(*) as total_clicks,
+-                   SUM(CASE WHEN EXISTS (
+-                     SELECT 1
+-                     FROM hc_assignments a
+-                     WHERE a.candidate_id = c.id
+-                       AND a.status IN ('active', 'pending_start', 'in_pipeline')
+-                   ) THEN 1 ELSE 0 END) as matched_clicks
+-            FROM hc_candidates c`,
+-    });
+-    const countsRaw = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
+-    const counts = {
+-      total_clicks: Number(countsRaw.total_clicks || 0),
+-      matched_clicks: Number(countsRaw.matched_clicks || 0),
+-    };
+-
+-    const [listRows] = await db.run({
+-      sql: `SELECT c.id, c.first_name, c.last_name, c.email, c.specialty, c.home_state, c.created_at,
+-                   CASE WHEN EXISTS (
+-                     SELECT 1
+-                     FROM hc_assignments a
+-                     WHERE a.candidate_id = c.id
+-                       AND a.status IN ('active', 'pending_start', 'in_pipeline')
+-                   ) THEN 'matched' ELSE 'unmatched' END as match_status
+-            FROM hc_candidates c
+-            ORDER BY c.created_at DESC
+-            LIMIT 250`,
+-    });
+-
+-    const items = listRows.map((r: any) => {
+-      const row = r.toJSON();
+-      const fullName = `${row.first_name || ""} ${row.last_name || ""}`.trim();
+-      const startTime = toIsoTimestamp(row.created_at);
+-      return {
+-        id: row.id as string,
+-        label: (fullName || row.email || "Unknown Candidate") as string,
+-        candidateName: fullName || null,
+-        candidateEmail: (row.email as string) || null,
+-        jobId: null,
+-        specialty: (row.specialty as string) || null,
+-        state: (row.home_state as string) || null,
+-        date: startTime ? startTime.slice(0, 10) : null,
+-        startTime,
+-        status: (row.match_status || "unmatched") as string,
+-        description: row.specialty
+-          ? `Legacy SSRS ingest (${row.specialty} in ${row.home_state || "Unknown"})`
+-          : "Legacy SSRS ingest",
+-      };
+-    });
+-
+-    return { counts, items };
+-  };
+-
+-  const [tableRows] = await db.run({
+-    sql: `SELECT TABLE_NAME
+-          FROM INFORMATION_SCHEMA.TABLES
+-          WHERE TABLE_SCHEMA = ''
+-            AND TABLE_NAME = 'interested_clicks'`,
+-  });
+-
+-  try {
+-    if (tableRows.length > 0) {
+-      const [countRows] = await db.run({
+-        sql: `SELECT COUNT(*) as total_clicks,
+-                     SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) as matched_clicks
+-              FROM interested_clicks
+-              WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`,
+-      });
+-      const countsRaw = countRows[0]?.toJSON() || { total_clicks: 0, matched_clicks: 0 };
+-      const counts = {
+-        total_clicks: Number(countsRaw.total_clicks || 0),
+-        matched_clicks: Number(countsRaw.matched_clicks || 0),
+-      };
+-
+-      const [listRows] = await db.run({
+-        sql: `SELECT click_id, candidate_name, email, job_id, specialty, state, clicked_at, match_status
+-              FROM interested_clicks
+-              ORDER BY clicked_at DESC
+-              LIMIT 250`,
+-      });
+-      const items = mapInterestedClickRows(listRows);
+-
+-      if (items.length > 0 || counts.total_clicks > 0 || counts.matched_clicks > 0) {
+-        return buildResponse(counts, items);
+-      }
+-
+-      const legacy = await loadLegacyCandidateFallback();
+-      if (legacy) return buildResponse(legacy.counts, legacy.items);
+-      return empty();
+-    }
+-
+-    const legacy = await loadLegacyCandidateFallback();
+-    if (legacy) {
+-      console.warn("[summary/clicks] interested_clicks table missing; serving legacy candidate fallback");
+-      return buildResponse(legacy.counts, legacy.items);
+-    }
+-    console.warn("[summary/clicks] interested_clicks and legacy fallback unavailable; returning empty summary");
+-    return empty();
+-  } catch (error) {
+-    const message = error instanceof Error ? error.message : String(error);
+-    if (/interested_clicks|column|not found|does not exist/i.test(message)) {
+-      const legacy = await loadLegacyCandidateFallback();
+-      if (legacy) {
+-        console.warn(`[summary/clicks] schema not ready (${message}); serving legacy candidate fallback`);
+-        return buildResponse(legacy.counts, legacy.items);
+-      }
+-      console.warn(`[summary/clicks] schema not ready (${message}); returning empty summary`);
+-      return empty();
+-    }
+-    throw error;
+-  }
+-}
+-
+ async function sportsSummary() {
+   const db = getDb("sportsdb");
+ 
+@@ -370,6 +199,23 @@ async function sportsSummary() {
+     return parsed.toISOString();
+   };
+ 
++  const toDateOnly = (value: unknown): string | null => {
++    if (value == null) return null;
++    if (value instanceof Date) return value.toISOString().slice(0, 10);
++    const raw = String(value).trim();
++    if (!raw) return null;
++    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
++    const parsed = new Date(raw);
++    if (Number.isNaN(parsed.getTime())) return null;
++    return parsed.toISOString().slice(0, 10);
++  };
++
++  const toNumberOrNull = (value: unknown): number | null => {
++    if (value == null || value === "") return null;
++    const parsed = Number(value);
++    return Number.isFinite(parsed) ? parsed : null;
++  };
++
+   const mlbItems = gameListRows.map((r: any) => {
+     const row = r.toJSON();
+     const awayName = (row.away_team as string) || "TBD";
+@@ -385,7 +231,7 @@ async function sportsSummary() {
+       away: awayName,
+       homeLogo: (row.home_logo as string) || null,
+       awayLogo: (row.away_logo as string) || null,
+-      date: (row.GameDate as string) || null,
++      date: toDateOnly(row.GameDate),
+       startTime: toIsoOrNull(row.ScheduledStartAt),
+       status: (row.Status as string) || null,
+       venue: (row.Venue as string) || null,
+@@ -396,6 +242,8 @@ async function sportsSummary() {
+       awayRecord: null as string | null,
+       spread: null as number | null,
+       total: null as number | null,
++      homeScore: null as number | null,
++      awayScore: null as number | null,
+     };
+   });
+ 
+@@ -404,11 +252,15 @@ async function sportsSummary() {
+     const mlbGrSql = `SELECT
+           gr.MatchID,
+           MIN(gr.GameDate) AS GameDate,
++          MIN(gr.StartTime) AS StartTime,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamName END) AS HomeTeam,
++          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamName END) AS AwayTeam,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamRecord END) AS HomeRecord,
+           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
++          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
++          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
+           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo
+         FROM GameResult gr
+@@ -419,28 +271,46 @@ async function sportsSummary() {
+         LIMIT 300`;
+     const [mlbGrRows] = await db.run({ sql: mlbGrSql });
+     // Build lookup: homeTeam+gameDate → records/odds
+-    const mlbEnrich = new Map<string, { homeRecord: string | null; awayRecord: string | null; spread: number | null; total: number | null; homeLogo: string | null; awayLogo: string | null }>();
++    const mlbEnrich = new Map<
++      string,
++      {
++        homeRecord: string | null;
++        awayRecord: string | null;
++        spread: number | null;
++        total: number | null;
++        homeScore: number | null;
++        awayScore: number | null;
++        homeLogo: string | null;
++        awayLogo: string | null;
++      }
++    >();
+     for (const r of mlbGrRows) {
+       const row = r.toJSON();
+-      const key = `${((row.HomeTeam as string) || "").toLowerCase()}_${(row.GameDate as string) || ""}`;
++      const normalizedDate = toDateOnly(row.GameDate) || (toIsoOrNull(row.StartTime)?.slice(0, 10) ?? "");
++      const key = `${String(row.HomeTeam || "").toLowerCase()}_${String(row.AwayTeam || "").toLowerCase()}_${normalizedDate}`;
+       mlbEnrich.set(key, {
+         homeRecord: (row.HomeRecord as string) || null,
+         awayRecord: (row.AwayRecord as string) || null,
+-        spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
+-        total: row.Total != null ? parseFloat(String(row.Total)) : null,
++        spread: toNumberOrNull(row.Spread),
++        total: toNumberOrNull(row.Total),
++        homeScore: toNumberOrNull(row.HomeScore),
++        awayScore: toNumberOrNull(row.AwayScore),
+         homeLogo: (row.HomeLogo as string) || null,
+         awayLogo: (row.AwayLogo as string) || null,
+       });
+     }
+     // Merge into mlbItems
+     for (const item of mlbItems) {
+-      const key = `${(item.home || "").toLowerCase()}_${item.date || ""}`;
++      const normalizedDate = toDateOnly(item.date) || (item.startTime ? item.startTime.slice(0, 10) : "");
++      const key = `${String(item.home || "").toLowerCase()}_${String(item.away || "").toLowerCase()}_${normalizedDate}`;
+       const enrichment = mlbEnrich.get(key);
+       if (enrichment) {
+         item.homeRecord = enrichment.homeRecord;
+         item.awayRecord = enrichment.awayRecord;
+         item.spread = enrichment.spread;
+         item.total = enrichment.total;
++        item.homeScore = enrichment.homeScore;
++        item.awayScore = enrichment.awayScore;
+         // Use ESPN logos if Game table logos are missing
+         if (!item.homeLogo && enrichment.homeLogo) item.homeLogo = enrichment.homeLogo;
+         if (!item.awayLogo && enrichment.awayLogo) item.awayLogo = enrichment.awayLogo;
+@@ -473,6 +343,8 @@ async function sportsSummary() {
+           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
++          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
++          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
+           p.WriteupUrl,
+           p.PublishedAt
+         FROM GameResult gr
+@@ -498,6 +370,8 @@ async function sportsSummary() {
+           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
+           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
++          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
++          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
+           CAST(NULL AS STRING) AS WriteupUrl,
+           CAST(NULL AS TIMESTAMP) AS PublishedAt
+         FROM GameResult gr
+@@ -526,6 +400,8 @@ async function sportsSummary() {
+             MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
+             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
+             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
++            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
++            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
+             p.WriteupUrl,
+             p.PublishedAt
+           FROM GameResult gr
+@@ -551,6 +427,8 @@ async function sportsSummary() {
+             MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamRecord END) AS AwayRecord,
+             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingSpread END) AS Spread,
+             MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.ClosingTotal END) AS Total,
++            MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
++            MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
+             CAST(NULL AS STRING) AS WriteupUrl,
+             CAST(NULL AS TIMESTAMP) AS PublishedAt
+           FROM GameResult gr
+@@ -596,7 +474,7 @@ async function sportsSummary() {
+       away: awayName,
+       homeLogo: (row.HomeLogo as string) || null,
+       awayLogo: (row.AwayLogo as string) || null,
+-      date: (row.GameDate as string) || (startTime ? startTime.slice(0, 10) : null),
++      date: toDateOnly(row.GameDate) || (startTime ? startTime.slice(0, 10) : null),
+       startTime,
+       status:
+         startTime && new Date(startTime).getTime() > nowTs
+@@ -608,8 +486,10 @@ async function sportsSummary() {
+       publishedAt: toIsoOrNull(row.PublishedAt),
+       homeRecord: (row.HomeRecord as string) || null,
+       awayRecord: (row.AwayRecord as string) || null,
+-      spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
+-      total: row.Total != null ? parseFloat(String(row.Total)) : null,
++      spread: toNumberOrNull(row.Spread),
++      total: toNumberOrNull(row.Total),
++      homeScore: toNumberOrNull(row.HomeScore),
++      awayScore: toNumberOrNull(row.AwayScore),
+     };
+   });
+ 
+@@ -629,7 +509,7 @@ async function sportsSummary() {
+         away: awayName,
+         homeLogo: (row.HomeLogo as string) || null,
+         awayLogo: (row.AwayLogo as string) || null,
+-        date: (row.GameDate as string) || (startTime ? startTime.slice(0, 10) : null),
++        date: toDateOnly(row.GameDate) || (startTime ? startTime.slice(0, 10) : null),
+         startTime,
+         status:
+           startTime && new Date(startTime).getTime() > nowTs
+@@ -641,8 +521,10 @@ async function sportsSummary() {
+         publishedAt: toIsoOrNull(row.PublishedAt),
+         homeRecord: (row.HomeRecord as string) || null,
+         awayRecord: (row.AwayRecord as string) || null,
+-        spread: row.Spread != null ? parseFloat(String(row.Spread)) : null,
+-        total: row.Total != null ? parseFloat(String(row.Total)) : null,
++        spread: toNumberOrNull(row.Spread),
++        total: toNumberOrNull(row.Total),
++        homeScore: toNumberOrNull(row.HomeScore),
++        awayScore: toNumberOrNull(row.AwayScore),
+       };
+     });
+ 
+@@ -651,7 +533,7 @@ async function sportsSummary() {
+   const nhlItems = mapLeagueRows(nhlRows, "NHL");
+   const nflItems = mapLeagueRows(nflRows, "NFL");
+ 
+-  const items = [...mlbItems, ...soccerItems, ...nbaItems, ...wnbaItems, ...nhlItems, ...nflItems].sort((a: any, b: any) => {
++  const rawItems = [...mlbItems, ...soccerItems, ...nbaItems, ...wnbaItems, ...nhlItems, ...nflItems].sort((a: any, b: any) => {
+     const aTime = a.startTime || `${a.date || "1970-01-01"}T00:00:00.000Z`;
+     const bTime = b.startTime || `${b.date || "1970-01-01"}T00:00:00.000Z`;
+     if (aTime < bTime) return -1;
+@@ -659,38 +541,88 @@ async function sportsSummary() {
+     return String(a.label || "").localeCompare(String(b.label || ""));
+   });
+ 
++  const items = rawItems.map((item: any) => {
++    const gameId = String(item.id || "").trim();
++    if (!gameId) return item;
++    return {
++      ...item,
++      ...buildSportsGameUrls(gameId),
++    };
++  });
++
+   const slateSet = new Set<string>();
+   for (const item of items) {
+     const dateKey = item.startTime ? item.startTime.slice(0, 10) : (item.date || "").slice(0, 10);
+     if (dateKey) slateSet.add(dateKey);
+   }
+ 
++  let sportsPicks: Record<string, unknown>[] = [];
++  try {
++    sportsPicks = await listResolvedPicks({
++      date: todayDateKey(),
++      limit: 60,
++      tier: "PUBLIC",
++    }) as Record<string, unknown>[];
++    if (sportsPicks.length === 0) {
++      sportsPicks = await listResolvedPicks({
++        limit: 60,
++        tier: "PUBLIC",
++      }) as Record<string, unknown>[];
++    }
++  } catch (error) {
++    console.warn("[summary] sports picks fetch failed:", error);
++  }
++
++  let sportsTrackRecord = {
++    sample_size: 0,
++    wins: 0,
++    losses: 0,
++    pushes: 0,
++    voids: 0,
++    units: 0,
++    record: "0 to 0 to 0",
++    matured: false,
++  };
++  try {
++    sportsTrackRecord = await computeTrackRecord(30);
++  } catch (error) {
++    console.warn("[summary] sports track record fetch failed:", error);
++  }
++
+   return Response.json({
+     pulse: {
+       games: items.length,
+       slates: slateSet.size,
+       previews: items.filter((item: any) => Boolean(item.writeupUrl)).length,
++      picks: sportsPicks.length,
++      settled_picks: sportsTrackRecord.sample_size,
+     },
+     supportedLeagues: SPORTS_SUPPORTED_LEAGUES_UI,
++    sportsPicks,
++    sportsTrackRecord,
+     items,
+   });
+ }
+ 
+ async function codeSummary() {
++  const seededItems = LIVE_ARCHITECTURE_LEDGER_ACCEPTED.map((entry, index) => ({
++    id: `seed_${index + 1}`,
++    label: entry.verdict,
++    agent: "human",
++    category: "architecture",
++    status: entry.status,
++    riskZones: [],
++    filesTouched: [],
++    refs: [],
++    supersededBy: null,
++    createdAt: null,
++    updatedAt: null,
++    preview: entry.details.length > 200 ? `${entry.details.slice(0, 200)}...` : entry.details,
++  }));
++
+   try {
+     const verdicts = await listVerdicts({ limit: 100 });
+-
+-    const statusCounts = { proposed: 0, accepted: 0, rejected: 0, superseded: 0 };
+-    const agentCounts: Record<string, number> = {};
+-
+-    for (const v of verdicts) {
+-      if (v.status in statusCounts) {
+-        statusCounts[v.status as keyof typeof statusCounts]++;
+-      }
+-      agentCounts[v.agent_source] = (agentCounts[v.agent_source] || 0) + 1;
+-    }
+-
+-    const items = verdicts.map((v) => ({
++    const verdictItems = verdicts.map((v) => ({
+       id: v.verdict_id,
+       label: v.title,
+       agent: v.agent_source,
+@@ -706,9 +638,30 @@ async function codeSummary() {
+       preview: v.body.length > 200 ? v.body.slice(0, 200) + "..." : v.body,
+     }));
+ 
++    const mergedByLabel = new Map<string, any>();
++    for (const item of seededItems) {
++      mergedByLabel.set(String(item.label || "").toLowerCase(), item);
++    }
++    for (const item of verdictItems) {
++      mergedByLabel.set(String(item.label || "").toLowerCase(), item);
++    }
++    const items = Array.from(mergedByLabel.values());
++
++    const statusCounts = { proposed: 0, accepted: 0, rejected: 0, superseded: 0 };
++    const agentCounts: Record<string, number> = {};
++
++    for (const item of items) {
++      const status = String(item.status || "").toLowerCase();
++      if (status in statusCounts) {
++        statusCounts[status as keyof typeof statusCounts] += 1;
++      }
++      const agent = String(item.agent || "human");
++      agentCounts[agent] = (agentCounts[agent] || 0) + 1;
++    }
++
+     return Response.json({
+       pulse: {
+-        verdicts: verdicts.length,
++        verdicts: items.length,
+         proposed: statusCounts.proposed,
+         accepted: statusCounts.accepted,
+         agents: agentCounts,
+@@ -716,17 +669,17 @@ async function codeSummary() {
+       items,
+     });
+   } catch (err) {
+-    // Graceful fallback if verdicts table doesn't exist yet
++    // Graceful fallback if verdicts table doesn't exist yet.
+     console.warn("[summary] Verdicts query failed (table may not exist):", err);
+     return Response.json({
+       pulse: {
+-        verdicts: 0,
++        verdicts: seededItems.length,
+         proposed: 0,
+-        accepted: 0,
+-        agents: {},
+-        note: "Verdicts table not yet created. Run: scripts/ddl/verdicts.sql",
++        accepted: seededItems.length,
++        agents: { human: seededItems.length },
++        note: "Verdicts table unavailable. Showing seeded accepted architecture ledger entries.",
+       },
+-      items: [],
++      items: seededItems,
+     });
+   }
+ }
+@@ -1033,10 +986,29 @@ async function marginsSummary() {
+ 
+ async function ayaopsSummary() {
+   const db = getDb("recruitingdb");
++  const toIsoTimestamp = (value: unknown): string | null => {
++    if (value == null) return null;
++    const parsed = new Date(String(value));
++    if (Number.isNaN(parsed.getTime())) return null;
++    return parsed.toISOString();
++  };
+ 
+-  // Pulse: Candidates, Facilities, Active Assignments, Submittals
+-  const [candRows] = await db.run({ sql: `SELECT COUNT(*) as count FROM hc_candidates` });
+-  const candCount = Number(candRows[0]?.toJSON()?.count || 0);
++  // Pulse: Candidates (ID-ready + total/missing), Facilities, Active Assignments, Submittals
++  const [candRows] = await db.run({
++    sql: `SELECT
++            COUNT(*) AS total_count,
++            COUNTIF(nova_id IS NOT NULL) AS with_id_count,
++            COUNTIF(nova_id IS NULL) AS missing_id_count
++          FROM hc_candidates`,
++  });
++  const candMeta = candRows[0]?.toJSON() as {
++    total_count?: number | string;
++    with_id_count?: number | string;
++    missing_id_count?: number | string;
++  };
++  const candTotalCount = Number(candMeta?.total_count || 0);
++  const candWithIdCount = Number(candMeta?.with_id_count || 0);
++  const candMissingIdCount = Number(candMeta?.missing_id_count || 0);
+ 
+   const [facRows] = await db.run({ sql: `SELECT COUNT(*) as count FROM hc_facilities` });
+   const facCount = Number(facRows[0]?.toJSON()?.count || 0);
+@@ -1049,36 +1021,78 @@ async function ayaopsSummary() {
+   const [subRows] = await db.run({ sql: `SELECT COUNT(*) as count FROM hc_submittals` });
+   const subCount = Number(subRows[0]?.toJSON()?.count || 0);
+ 
+-  const columns = await getPriorityColumnPresence(db);
+-  const priorityScoreExpr = columns.score ? "c.priority_score" : "CAST(NULL AS FLOAT64)";
+-  const priorityLevelExpr = columns.level ? "c.priority_level" : "CAST(NULL AS STRING)";
+-
+-  // Candidates with their current assignment + facility
++  const [threadObjectRows] = await db.run({
++    sql: `SELECT TABLE_NAME
++          FROM INFORMATION_SCHEMA.TABLES
++          WHERE TABLE_SCHEMA = ''
++            AND TABLE_NAME = 'rc_thread_objects'`,
++  });
++  const hasThreadObjects = threadObjectRows.length > 0;
++
++  const threadSelect = hasThreadObjects
++    ? `, rt.latest_message_at AS thread_last_touch_at, rt.last_seen_at AS thread_last_seen_at`
++    : `, CAST(NULL AS TIMESTAMP) AS thread_last_touch_at, CAST(NULL AS TIMESTAMP) AS thread_last_seen_at`;
++  const threadJoin = hasThreadObjects
++    ? `LEFT JOIN rc_thread_objects rt ON rt.thread_id = (
++         SELECT rt1.thread_id
++         FROM rc_thread_objects rt1
++         WHERE rt1.candidate_id = c.id
++           AND rt1.unresolved_flag = FALSE
++         ORDER BY COALESCE(rt1.latest_message_at, rt1.last_seen_at) DESC, rt1.thread_id DESC
++         LIMIT 1
++       )`
++    : ``;
++
++  // Candidates with their prioritized assignment + facility.
++  // Product rule: if a traveler is both working and prestart, prestart wins.
+   const [listRows] = await db.run({
+     sql: `SELECT c.id, c.nova_id, c.first_name, c.last_name, c.specialty, c.profession,
+             c.home_state, c.compliance_risk_level, c.source, c.rc_thread_url, c.outlook_thread_url, c.phone,
+             a.status as assignment_status, a.start_date, a.end_date,
+             a.weekly_gross, a.hourly_rate,
+-            ${priorityScoreExpr} as priority_score,
+-            ${priorityLevelExpr} as priority_level,
+             f.name as facility_name, f.city as facility_city, f.state as facility_state,
+             f.vms_platform, f.beds as facility_beds
++            ${threadSelect}
+           FROM hc_candidates c
+-          LEFT JOIN hc_assignments a ON a.candidate_id = c.id
+-            AND a.status IN ('active', 'pending_start', 'in_pipeline')
++          LEFT JOIN hc_assignments a ON a.id = (
++            SELECT a1.id
++            FROM hc_assignments a1
++            WHERE a1.candidate_id = c.id
++              AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline')
++            ORDER BY
++              CASE
++                WHEN LOWER(a1.status) = 'pending_start'
++                  AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
++                  AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE() THEN 0
++                WHEN LOWER(a1.status) = 'active' THEN 1
++                WHEN LOWER(a1.status) = 'in_pipeline' THEN 2
++                WHEN LOWER(a1.status) = 'pending_start' THEN 3
++                ELSE 4
++              END,
++              CASE
++                WHEN LOWER(a1.status) = 'pending_start'
++                  AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
++                  AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE()
++                  THEN SAFE_CAST(a1.start_date AS DATE)
++                WHEN LOWER(a1.status) = 'active'
++                  THEN COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31')
++                WHEN LOWER(a1.status) = 'in_pipeline'
++                  THEN COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '9999-12-31')
++                ELSE COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
++              END ASC,
++              COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') DESC,
++              a1.id DESC
++            LIMIT 1
++          )
+           LEFT JOIN hc_facilities f ON a.facility_id = f.id
++          ${threadJoin}
+           ORDER BY c.specialty, c.last_name
+-          LIMIT 200`,
++          LIMIT 500`,
+   });
+ 
+   const items = listRows.map((r: any) => {
+     const row = r.toJSON();
+     const candidate = mapCandidateRow(row);
+-    const touchPlan = buildAyaFollowupSignal(
+-      candidate,
+-      row.priority_score != null ? Number(row.priority_score) : null,
+-      row.priority_level ? String(row.priority_level) : null
+-    );
+     return {
+       id: candidate.id,
+       label: candidate.name,
+@@ -1103,34 +1117,22 @@ async function ayaopsSummary() {
+       phone: candidate.phone || null,
+       rcThreadUrl: candidate.rcThreadUrl || null,
+       outlookThreadUrl: candidate.outlookThreadUrl || null,
+-      touchPriorityScore: touchPlan.score,
+-      touchPriorityLevel: row.priority_level ? String(row.priority_level) : null,
+-      touchPriorityBand: touchPlan.band,
+-      touchPriorityReason: touchPlan.reason,
+-      touchDaysToEnd: touchPlan.daysToEnd,
+-      touchNoteSeed: touchPlan.noteSeed,
++      touchDaysToEnd: getDaysToAssignmentEnd(candidate),
++      lastTouchAt: toIsoTimestamp(row.thread_last_touch_at),
++      lastSeenAt: toIsoTimestamp(row.thread_last_seen_at),
++      unansweredCount: null,
+     };
+   });
+ 
+   items.sort((a: any, b: any) => {
+-    const levelRank = (value: string | null | undefined) => {
+-      const key = String(value || "").toLowerCase();
+-      if (key === "critical") return 5;
+-      if (key === "high") return 4;
+-      if (key === "medium") return 3;
+-      if (key === "standard") return 2;
+-      if (key === "low") return 1;
+-      return 0;
+-    };
+-
+-    const levelDiff = levelRank(b.touchPriorityLevel) - levelRank(a.touchPriorityLevel);
+-    if (levelDiff !== 0) return levelDiff;
+-
+-    const scoreDiff = (b.touchPriorityScore || 0) - (a.touchPriorityScore || 0);
+-    if (scoreDiff !== 0) return scoreDiff;
+-
+-    const aDays = a.touchDaysToEnd ?? 9999;
+-    const bDays = b.touchDaysToEnd ?? 9999;
++    const aDays =
++      typeof a.touchDaysToEnd === "number" && Number.isFinite(a.touchDaysToEnd)
++        ? a.touchDaysToEnd
++        : Number.POSITIVE_INFINITY;
++    const bDays =
++      typeof b.touchDaysToEnd === "number" && Number.isFinite(b.touchDaysToEnd)
++        ? b.touchDaysToEnd
++        : Number.POSITIVE_INFINITY;
+     if (aDays !== bDays) return aDays - bDays;
+ 
+     return String(a.label || "").localeCompare(String(b.label || ""));
+@@ -1147,7 +1149,10 @@ async function ayaopsSummary() {
+ 
+   return Response.json({
+     pulse: {
+-      candidates: candCount,
++      candidates: candWithIdCount,
++      candidates_total: candTotalCount,
++      candidates_with_id: candWithIdCount,
++      candidates_missing_id: candMissingIdCount,
+       facilities: facCount,
+       active: activeCount,
+       submittals: subCount,
+@@ -1170,84 +1175,12 @@ function dateDiffDays(from: Date, to: Date): number {
+   return Math.round(ms / 86_400_000);
+ }
+ 
+-async function getPriorityColumnPresence(
+-  db: ReturnType<ReturnType<Spanner["instance"]>["database"]>
+-): Promise<{ score: boolean; level: boolean }> {
+-  if (priorityColumnPresence) return priorityColumnPresence;
+-
+-  try {
+-    const [rows] = await db.run({
+-      sql: `SELECT COLUMN_NAME
+-            FROM INFORMATION_SCHEMA.COLUMNS
+-            WHERE TABLE_NAME = 'hc_candidates'
+-              AND COLUMN_NAME IN ('priority_score', 'priority_level')`,
+-    });
+-    const names = new Set(rows.map((r: any) => String(r.toJSON().COLUMN_NAME || "").toLowerCase()));
+-    priorityColumnPresence = {
+-      score: names.has("priority_score"),
+-      level: names.has("priority_level"),
+-    };
+-  } catch (error) {
+-    console.warn("Could not inspect candidate priority columns:", error);
+-    priorityColumnPresence = { score: false, level: false };
+-  }
+-
+-  return priorityColumnPresence;
+-}
+-
+-function buildAyaFollowupSignal(
+-  candidate: CandidateRecord,
+-  existingPriorityScore: number | null,
+-  existingPriorityLevel: string | null
+-): {
+-  score: number;
+-  band: "today" | "this_week" | "monitor";
+-  reason: string;
+-  daysToEnd: number | null;
+-  noteSeed: string;
+-} {
++function getDaysToAssignmentEnd(candidate: CandidateRecord): number | null {
+   const endDate = parseIsoDate(candidate.assignmentEnd);
++  if (!endDate) return null;
+   const today = new Date();
+   today.setHours(0, 0, 0, 0);
+-  const daysToEnd = endDate ? dateDiffDays(today, endDate) : null;
+-
+-  const hasExistingScore =
+-    typeof existingPriorityScore === "number" && Number.isFinite(existingPriorityScore);
+-  const fallbackScore =
+-    daysToEnd == null
+-      ? 40
+-      : daysToEnd < 0
+-        ? 100
+-        : Math.max(1, 100 - Math.min(daysToEnd, 90));
+-  const boundedScore = Math.max(
+-    1,
+-    Math.min(100, Math.round(hasExistingScore ? Number(existingPriorityScore) : fallbackScore))
+-  );
+-  const band: "today" | "this_week" | "monitor" =
+-    boundedScore >= 80 ? "today" : boundedScore >= 60 ? "this_week" : "monitor";
+-  const reason = hasExistingScore
+-    ? `existing priority signal${existingPriorityLevel ? `: ${existingPriorityLevel}` : ""}`
+-    : daysToEnd == null
+-      ? "fallback timing signal (no explicit priority score)"
+-      : daysToEnd < 0
+-        ? `${Math.abs(daysToEnd)}d past assignment end`
+-        : `${daysToEnd}d to assignment end`;
+-
+-  const noteSeedParts = [
+-    `Candidate: ${candidate.name}`,
+-    `Priority: ${boundedScore}/100 (${band.replace("_", " ")})`,
+-    `Why now: ${reason}`,
+-    `Status: ${candidate.derivedCurrentStatus || candidate.assignmentStatus || "unknown"}`,
+-    `Ask: confirm next placement timing and current readiness`,
+-  ];
+-
+-  return {
+-    score: boundedScore,
+-    band,
+-    reason,
+-    daysToEnd,
+-    noteSeed: noteSeedParts.join(" | "),
+-  };
++  return dateDiffDays(today, endDate);
+ }
+ 
+ // ─── Jobs Summary (Operational — no margin concepts) ────────────────
+diff --git a/src/lib/resolver/candidate-resolver.ts b/src/lib/resolver/candidate-resolver.ts
+index 17d5c9a..0e654a9 100644
+--- a/src/lib/resolver/candidate-resolver.ts
++++ b/src/lib/resolver/candidate-resolver.ts
+@@ -5,9 +5,10 @@
+ import {
+   resolveCandidateIdentifier,
+   loadCandidateSnapshotForIdentifier,
+-  type CandidateResolveResult,
+   type CandidateSnapshot,
+ } from "@/lib/ayaops/candidate-grounding-hub";
++import { getDb } from "@/lib/spanner-pool";
++import { mapCandidateRow } from "@/lib/mappers/candidate";
+ import { buildCandidateLinks } from "./links";
+ 
+ export type HubResponse = {
+@@ -28,6 +29,417 @@ export type HubResponse = {
+   }>;
+ };
+ 
++type CandidateCollectionResolveInput = {
++  identifier: string;
++  query: URLSearchParams;
++  entityHint?: string;
++};
++
++const DEFAULT_LIMIT = 25;
++const MAX_LIMIT = 100;
++const STATUS_FILTER_MAP: Record<string, string[]> = {
++  working: ["active"],
++  active: ["active"],
++  prestart: ["pending_start"],
++  pending_start: ["pending_start"],
++  pending: ["pending_start"],
++  pipeline: ["in_pipeline"],
++  submitted: ["in_pipeline"],
++  in_pipeline: ["in_pipeline"],
++  completed: ["completed"],
++  wrapped: ["completed"],
++  cancelled: ["cancelled"],
++  canceled: ["cancelled"],
++};
++const STATUS_FILTER_KEYS = new Set(Object.keys(STATUS_FILTER_MAP));
++
++function readString(value: unknown): string {
++  if (value == null) return "";
++  return String(value).trim();
++}
++
++function toIsoTimestamp(value: unknown): string | null {
++  if (value == null) return null;
++  if (value instanceof Date) return value.toISOString();
++  const parsed = new Date(String(value));
++  if (Number.isNaN(parsed.getTime())) return null;
++  return parsed.toISOString();
++}
++
++function normalizeStatusFilter(input: string): string[] {
++  const normalized = input.trim().toLowerCase();
++  return STATUS_FILTER_MAP[normalized] || [normalized];
++}
++
++function normalizeLimit(rawLimit: string): number {
++  const parsed = Number(rawLimit || DEFAULT_LIMIT);
++  if (!Number.isFinite(parsed)) return DEFAULT_LIMIT;
++  return Math.min(MAX_LIMIT, Math.max(1, Math.floor(parsed)));
++}
++
++function buildCollectionSummary(input: {
++  count: number;
++  specialty: string;
++  profession: string;
++  status: string;
++  search: string;
++}): string {
++  const scopeParts: string[] = [];
++  if (input.specialty) scopeParts.push(`specialty "${input.specialty}"`);
++  if (input.profession) scopeParts.push(`profession "${input.profession}"`);
++  if (input.status) scopeParts.push(`status "${input.status}"`);
++  if (input.search) scopeParts.push(`search "${input.search}"`);
++
++  const scope = scopeParts.length > 0 ? scopeParts.join(", ") : "current filters";
++  const noun = input.count === 1 ? "candidate" : "candidates";
++  return `${input.count} ${noun} match ${scope}.`;
++}
++
++type InferredCollectionFilters = {
++  specialty: string;
++  profession: string;
++  status: string;
++  state: string;
++  search: string;
++};
++
++function inferCollectionFiltersFromIdentifier(
++  identifier: string,
++  entityHint: string,
++): InferredCollectionFilters {
++  const raw = readString(identifier);
++  const lowered = raw.toLowerCase();
++  if (!lowered) {
++    return { specialty: "", profession: "", status: "", state: "", search: "" };
++  }
++
++  let status = "";
++  if (STATUS_FILTER_KEYS.has(lowered)) {
++    status = lowered;
++  } else if (lowered.includes("pending start")) {
++    status = "pending_start";
++  } else if (lowered.includes("in pipeline")) {
++    status = "in_pipeline";
++  } else if (/\bprestart\b/.test(lowered)) {
++    status = "prestart";
++  } else if (/\bworking\b/.test(lowered)) {
++    status = "working";
++  } else if (/\bactive\b/.test(lowered)) {
++    status = "active";
++  } else if (/\bsubmitted\b/.test(lowered)) {
++    status = "submitted";
++  } else if (/\bcompleted\b/.test(lowered)) {
++    status = "completed";
++  } else if (/\bcancelled\b|\bcanceled\b/.test(lowered)) {
++    status = "cancelled";
++  }
++
++  const professionAliases: Array<{ pattern: RegExp; value: string }> = [
++    { pattern: /\bdietitian(s)?\b|\brdn\b|\brd\b/, value: "dietitian" },
++    { pattern: /\bnurse(s)?\b|\brn\b/, value: "nurse" },
++    { pattern: /\brespiratory\b|\brrt\b/, value: "respiratory therapy" },
++    { pattern: /\bpharmac(y|ist|ists)\b/, value: "pharmacy" },
++    { pattern: /\bct\s*tech(s)?\b/, value: "ct tech" },
++    { pattern: /\bradiolog(y|ist|ists)\b/, value: "radiology" },
++  ];
++
++  let profession = "";
++  for (const alias of professionAliases) {
++    if (alias.pattern.test(lowered)) {
++      profession = alias.value;
++      break;
++    }
++  }
++  if (!profession && (entityHint === "dietitian" || entityHint === "dietitians")) {
++    profession = "dietitian";
++  }
++
++  const stopWords = new Set([
++    "a",
++    "an",
++    "me",
++    "my",
++    "mine",
++    "us",
++    "our",
++    "ours",
++    "you",
++    "your",
++    "yours",
++    "please",
++    "can",
++    "could",
++    "would",
++    "should",
++    "want",
++    "need",
++    "to",
++    "of",
++    "the",
++    "all",
++    "list",
++    "roster",
++    "show",
++    "find",
++    "get",
++    "pull",
++    "bring",
++    "up",
++    "candidates",
++    "candidate",
++    "dietitian",
++    "dietitians",
++    "nurse",
++    "nurses",
++    "working",
++    "active",
++    "prestart",
++    "pending",
++    "start",
++    "submitted",
++    "pipeline",
++    "completed",
++    "cancelled",
++    "canceled",
++    "status",
++    "with",
++    "who",
++    "that",
++    "are",
++  ]);
++
++  const cleanedTokens = lowered
++    .split(/[^a-z0-9]+/)
++    .map((token) => token.trim())
++    .filter(Boolean)
++    .filter((token) => !stopWords.has(token) && !STATUS_FILTER_KEYS.has(token));
++
++  const specialty =
++    profession && cleanedTokens.length > 0 && !status ? cleanedTokens.join(" ") : "";
++  const search =
++    !specialty && !status && cleanedTokens.length > 0 ? cleanedTokens.join(" ") : "";
++
++  return {
++    specialty,
++    profession,
++    status,
++    state: "",
++    search,
++  };
++}
++
++export async function resolveCandidateCollection(
++  input: CandidateCollectionResolveInput,
++): Promise<HubResponse> {
++  const db = getDb("recruitingdb");
++
++  const hint = (input.entityHint || "").toLowerCase();
++  const q = input.query;
++  const identifierText = readString(input.identifier);
++
++  const defaultProfession =
++    hint === "dietitian" || hint === "dietitians" ? "dietitian" : "";
++  const inferred = inferCollectionFiltersFromIdentifier(identifierText, hint);
++
++  const specialty = readString(
++    q.get("specialty") ||
++      inferred.specialty ||
++      (defaultProfession && identifierText && !inferred.status && !inferred.search
++        ? identifierText
++        : ""),
++  );
++  const profession = readString(q.get("profession") || inferred.profession || defaultProfession);
++  const status = readString(q.get("status") || inferred.status);
++  const state = readString(q.get("state") || inferred.state);
++  const search = readString(q.get("q") || q.get("search") || inferred.search);
++  const rankBy = readString(q.get("rank_by") || q.get("sort"));
++  const limit = normalizeLimit(readString(q.get("limit")));
++
++  const statusFilters = status ? normalizeStatusFilter(status) : [];
++  const capabilityGaps: string[] = [];
++
++  const [threadObjectRows] = await db.run({
++    sql: `SELECT 1
++          FROM INFORMATION_SCHEMA.TABLES
++          WHERE TABLE_SCHEMA = ''
++            AND TABLE_NAME = 'rc_thread_objects'
++          LIMIT 1`,
++  });
++  const hasThreadObjects = threadObjectRows.length > 0;
++  const threadSelect = hasThreadObjects
++    ? `, rt.latest_message_at AS thread_last_touch_at, rt.last_seen_at AS thread_last_seen_at`
++    : `, CAST(NULL AS TIMESTAMP) AS thread_last_touch_at, CAST(NULL AS TIMESTAMP) AS thread_last_seen_at`;
++  const threadJoin = hasThreadObjects
++    ? `LEFT JOIN rc_thread_objects rt ON rt.thread_id = (
++         SELECT rt1.thread_id
++         FROM rc_thread_objects rt1
++         WHERE rt1.candidate_id = c.id
++           AND rt1.unresolved_flag = FALSE
++         ORDER BY COALESCE(rt1.latest_message_at, rt1.last_seen_at) DESC, rt1.thread_id DESC
++         LIMIT 1
++       )`
++    : ``;
++
++  let sql = `SELECT c.id, c.nova_id, c.first_name, c.last_name, c.specialty, c.profession,
++               c.home_state, c.compliance_risk_level, c.source, c.phone,
++               c.rc_thread_url, c.outlook_thread_url,
++               a.status as assignment_status, a.start_date, a.end_date,
++               a.weekly_gross, a.hourly_rate,
++               f.name as facility_name, f.city as facility_city, f.state as facility_state,
++               f.vms_platform, f.beds as facility_beds
++               ${threadSelect}
++             FROM hc_candidates c
++             LEFT JOIN hc_assignments a ON a.id = (
++               SELECT a1.id
++               FROM hc_assignments a1
++               WHERE a1.candidate_id = c.id
++                 AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline', 'completed', 'cancelled')
++               ORDER BY
++                 CASE
++                   WHEN LOWER(a1.status) = 'pending_start'
++                     AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
++                     AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE() THEN 0
++                   WHEN LOWER(a1.status) = 'active' THEN 1
++                   WHEN LOWER(a1.status) = 'in_pipeline' THEN 2
++                   WHEN LOWER(a1.status) = 'completed' THEN 3
++                   WHEN LOWER(a1.status) = 'cancelled' THEN 4
++                   ELSE 5
++                 END,
++                 COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') DESC,
++                 a1.id DESC
++               LIMIT 1
++             )
++             LEFT JOIN hc_facilities f ON a.facility_id = f.id
++             ${threadJoin}
++             WHERE 1=1`;
++
++  const params: Record<string, unknown> = { lim: limit };
++  const types: Record<string, unknown> = {
++    lim: { type: "int64" },
++  };
++
++  if (specialty) {
++    sql += ` AND (LOWER(COALESCE(c.specialty, '')) LIKE LOWER(@specialtyPattern)
++              OR LOWER(COALESCE(c.profession, '')) LIKE LOWER(@specialtyPattern))`;
++    params.specialtyPattern = `%${specialty}%`;
++    types.specialtyPattern = { type: "string" };
++  }
++
++  if (profession) {
++    sql += ` AND (LOWER(COALESCE(c.profession, '')) LIKE LOWER(@professionPattern)
++              OR LOWER(COALESCE(c.specialty, '')) LIKE LOWER(@professionPattern))`;
++    params.professionPattern = `%${profession}%`;
++    types.professionPattern = { type: "string" };
++  }
++
++  if (state) {
++    sql += ` AND LOWER(COALESCE(c.home_state, '')) = LOWER(@stateFilter)`;
++    params.stateFilter = state;
++    types.stateFilter = { type: "string" };
++  }
++
++  if (search) {
++    sql += ` AND (
++              LOWER(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) LIKE LOWER(@namePattern)
++              OR LOWER(COALESCE(c.first_name, '')) LIKE LOWER(@namePattern)
++              OR LOWER(COALESCE(c.last_name, '')) LIKE LOWER(@namePattern)
++            )`;
++    params.namePattern = `%${search}%`;
++    types.namePattern = { type: "string" };
++  }
++
++  if (statusFilters.length > 0) {
++    sql += ` AND LOWER(COALESCE(a.status, '')) IN UNNEST(@statusFilters)`;
++    params.statusFilters = statusFilters;
++    types.statusFilters = { type: "array", child: { type: "string" } };
++  }
++
++  const defaultRecentActivityOrder = hasThreadObjects
++    ? `ORDER BY COALESCE(rt.latest_message_at, rt.last_seen_at, a.start_date) DESC, c.last_name ASC`
++    : `ORDER BY COALESCE(a.start_date, a.end_date) DESC, c.last_name ASC`;
++  let orderClause = defaultRecentActivityOrder;
++  if (rankBy === "name") {
++    orderClause = `ORDER BY c.last_name ASC, c.first_name ASC`;
++  } else if (rankBy === "start_date") {
++    orderClause = `ORDER BY COALESCE(SAFE_CAST(a.start_date AS DATE), DATE '9999-12-31') ASC, c.last_name ASC`;
++  } else if (rankBy && rankBy !== "recent_activity") {
++    capabilityGaps.push(
++      `rank_by "${rankBy}" is not supported yet. Returned default sort "recent_activity".`,
++    );
++  }
++
++  sql += ` ${orderClause} LIMIT @lim`;
++
++  const [rows] = await db.run({ sql, params, types });
++  const items = rows.map((row: any) => {
++    const dbRow = row.toJSON() as Record<string, unknown>;
++    const candidate = mapCandidateRow(dbRow);
++    const lastTouchAt = toIsoTimestamp(dbRow.thread_last_touch_at || dbRow.thread_last_seen_at);
++    return {
++      id: candidate.id,
++      name: candidate.name,
++      nova_id: candidate.novaId || null,
++      specialty: candidate.specialty || null,
++      profession: candidate.profession || null,
++      status: candidate.derivedCurrentStatus || candidate.assignmentStatus || null,
++      assignment_status: candidate.assignmentStatus || null,
++      facility_name: candidate.facilityName || null,
++      facility_city: candidate.facilityCity || null,
++      facility_state: candidate.facilityState || null,
++      home_state: candidate.homeState || null,
++      assignment_start: candidate.assignmentStart || null,
++      assignment_end: candidate.assignmentEnd || null,
++      last_contact_at: lastTouchAt,
++      nova_url: candidate.novaUrl || null,
++    };
++  });
++
++  const selfQuery = new URLSearchParams();
++  if (specialty) selfQuery.set("specialty", specialty);
++  if (profession) selfQuery.set("profession", profession);
++  if (status) selfQuery.set("status", status);
++  if (state) selfQuery.set("state", state);
++  if (search) selfQuery.set("q", search);
++  if (rankBy) selfQuery.set("rank_by", rankBy);
++  selfQuery.set("limit", String(limit));
++
++  const selfPath = `/api/hub/candidates?${selfQuery.toString()}`;
++
++  return {
++    type: "candidate_collection",
++    status: "resolved",
++    summary: buildCollectionSummary({
++      count: items.length,
++      specialty,
++      profession,
++      status,
++      search,
++    }),
++    data: {
++      count: items.length,
++      items,
++      filters_applied: {
++        specialty: specialty || null,
++        profession: profession || null,
++        status: status || null,
++        state: state || null,
++        search: search || null,
++        rank_by: rankBy || "recent_activity",
++        limit,
++      },
++      capability_gaps: capabilityGaps,
++    },
++    links: {
++      self: selfPath,
++      canonical: selfPath,
++      actions: {
++        refine: "Adjust specialty, status, state, or search filters and re-run access_hub.",
++        outreach: "Use create_com_draft_email with a selected candidate_id to draft outreach.",
++      },
++    },
++  };
++}
++
+ function buildNovaUrl(novaId: string | null): string | null {
+   if (!novaId) return null;
+   return `https://nova.ayahealthcare.com/#/recruiting/candidates/${novaId}/new-profile/about`;
+diff --git a/src/lib/spanner/tools.ts b/src/lib/spanner/tools.ts
+index 83b8908..b9e487c 100644
+--- a/src/lib/spanner/tools.ts
++++ b/src/lib/spanner/tools.ts
+@@ -37,8 +37,37 @@ const CANDIDATE_SELECT = `
+          f.name as facility_name, f.city as facility_city, f.state as facility_state,
+          f.vms_platform, f.beds as facility_beds
+   FROM hc_candidates c
+-  LEFT JOIN hc_assignments a ON a.candidate_id = c.id
+-    AND a.status IN ('active', 'pending_start')
++  LEFT JOIN hc_assignments a ON a.id = (
++    SELECT a1.id
++    FROM hc_assignments a1
++    WHERE a1.candidate_id = c.id
++      AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline')
++    ORDER BY
++      CASE
++        WHEN LOWER(a1.status) = 'pending_start'
++          AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
++          AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE() THEN 0
++        WHEN LOWER(a1.status) = 'active' THEN 1
++        WHEN LOWER(a1.status) = 'in_pipeline' THEN 2
++        WHEN LOWER(a1.status) = 'pending_start' THEN 3
++        WHEN LOWER(a1.status) IN ('completed', 'cancelled') THEN 4
++        ELSE 5
++      END,
++      CASE
++        WHEN LOWER(a1.status) = 'pending_start'
++          AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
++          AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE()
++          THEN SAFE_CAST(a1.start_date AS DATE)
++        WHEN LOWER(a1.status) = 'active'
++          THEN COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31')
++        WHEN LOWER(a1.status) = 'in_pipeline'
++          THEN COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '9999-12-31')
++        ELSE COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
++      END ASC,
++      COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') DESC,
++      a1.id DESC
++    LIMIT 1
++  )
+   LEFT JOIN hc_facilities f ON a.facility_id = f.id`;
+ 
+ const MAX_RESULTS = 25;
+@@ -192,6 +221,26 @@ export const DB_TOOL_DECLARATIONS = [
+       required: ["candidate_id"],
+     },
+   },
++  {
++    name: "update_candidate_name",
++    description:
++      "Update a candidate's primary display and legal name (first_name and last_name) on hc_candidates. Accepts internal UUID or Nova numeric ID.",
++    parameters: {
++      type: "object" as const,
++      properties: {
++        candidate_id: { type: "string" as const, description: "Candidate internal UUID or Nova numeric ID" },
++        first_name: {
++          type: "string" as const,
++          description: "Optional new first name. Omit to leave unchanged.",
++        },
++        last_name: {
++          type: "string" as const,
++          description: "Optional new last name. Omit to leave unchanged.",
++        },
++      },
++      required: ["candidate_id"],
++    },
++  },
+   {
+     name: "add_candidate_note",
+     description:
+@@ -234,64 +283,6 @@ export const DB_TOOL_DECLARATIONS = [
+       required: ["candidate_id", "subject", "body"],
+     },
+   },
+-  {
+-    name: "fetch_interested_clicks",
+-    description:
+-      "Fetch recent MyAya 'Interested' clicks from the interested_clicks table. Shows candidates who clicked 'I'm Interested' on jobs. Filters by recency, specialty, state, or match status. Returns candidate name, email, job_id, and clicked_at. Use for recruiter follow-up workflows.",
+-    parameters: {
+-      type: "object" as const,
+-      properties: {
+-        hours: {
+-          type: "number" as const,
+-          description: "How many hours back to look. Defaults to 48.",
+-        },
+-        specialty: {
+-          type: "string" as const,
+-          description: "Optional specialty filter (e.g., 'icu', 'er', 'med-surg').",
+-        },
+-        state: {
+-          type: "string" as const,
+-          description: "Optional 2-letter state filter (e.g., 'CA', 'TX').",
+-        },
+-        match_status: {
+-          type: "string" as const,
+-          description: "Filter by match status: 'unmatched', 'matched', 'in_pipeline'. Defaults to all.",
+-        },
+-        limit: {
+-          type: "number" as const,
+-          description: "Max results. Defaults to 25, max 50.",
+-        },
+-      },
+-      required: [],
+-    },
+-  },
+-  {
+-    name: "get_demand_trends",
+-    description:
+-      "Get demand trend data from market_demand_daily rollups. Shows click volume by specialty and state over time. Use for market analysis, identifying hot specialties, and geographic demand patterns.",
+-    parameters: {
+-      type: "object" as const,
+-      properties: {
+-        specialty: {
+-          type: "string" as const,
+-          description: "Optional specialty to filter by.",
+-        },
+-        state: {
+-          type: "string" as const,
+-          description: "Optional 2-letter state to filter by.",
+-        },
+-        days: {
+-          type: "number" as const,
+-          description: "Number of days of history to retrieve. Defaults to 7, max 90.",
+-        },
+-        limit: {
+-          type: "number" as const,
+-          description: "Max rows. Defaults to 25.",
+-        },
+-      },
+-      required: [],
+-    },
+-  },
+ ];
+ 
+ // ══════════════════════════════════════════════════════════════════
+@@ -365,6 +356,17 @@ export async function executeDbTool(
+             : undefined,
+         });
+         break;
++      case "update_candidate_name":
++        result = await updateCandidateName({
++          candidateInput: String(args.candidate_id),
++          firstNameInput: Object.prototype.hasOwnProperty.call(args, "first_name")
++            ? (args.first_name as unknown)
++            : undefined,
++          lastNameInput: Object.prototype.hasOwnProperty.call(args, "last_name")
++            ? (args.last_name as unknown)
++            : undefined,
++        });
++        break;
+       case "add_candidate_note":
+         result = await addCandidateNote(
+           String(args.candidate_id),
+@@ -383,23 +385,6 @@ export async function executeDbTool(
+             typeof args.save_note_trace === "boolean" ? Boolean(args.save_note_trace) : true,
+         });
+         break;
+-      case "fetch_interested_clicks":
+-        result = await fetchInterestedClicks({
+-          hours: Number(args.hours) || 48,
+-          specialty: args.specialty ? String(args.specialty) : undefined,
+-          state: args.state ? String(args.state) : undefined,
+-          matchStatus: args.match_status ? String(args.match_status) : undefined,
+-          limit: Math.min(Number(args.limit) || MAX_RESULTS, 50),
+-        });
+-        break;
+-      case "get_demand_trends":
+-        result = await getDemandTrends({
+-          specialty: args.specialty ? String(args.specialty) : undefined,
+-          state: args.state ? String(args.state) : undefined,
+-          days: Math.min(Number(args.days) || 7, 90),
+-          limit: Math.min(Number(args.limit) || MAX_RESULTS, MAX_RESULTS),
+-        });
+-        break;
+       default:
+         return { result: null, error: `Unknown tool: ${toolName}` };
+     }
+@@ -807,12 +792,27 @@ async function getInternalGroundingContext(candidateInput: string): Promise<{
+           WHERE candidate_id = @candidateId
+           ORDER BY
+             CASE
+-              WHEN LOWER(status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
+-              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 1
+-              ELSE 2
++              WHEN LOWER(status) = 'pending_start'
++                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
++                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE() THEN 0
++              WHEN LOWER(status) = 'active' THEN 1
++              WHEN LOWER(status) = 'in_pipeline' THEN 2
++              WHEN LOWER(status) = 'pending_start' THEN 3
++              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 4
++              ELSE 5
+             END,
+-            COALESCE(end_date, '9999-12-31') DESC,
+-            COALESCE(start_date, '0001-01-01') DESC
++            CASE
++              WHEN LOWER(status) = 'pending_start'
++                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
++                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE()
++                THEN SAFE_CAST(start_date AS DATE)
++              WHEN LOWER(status) = 'active'
++                THEN COALESCE(SAFE_CAST(end_date AS DATE), DATE '9999-12-31')
++              WHEN LOWER(status) = 'in_pipeline'
++                THEN COALESCE(SAFE_CAST(start_date AS DATE), DATE '9999-12-31')
++              ELSE COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01')
++            END ASC,
++            COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01') DESC
+           LIMIT 1`,
+     params: { candidateId },
+     types: { candidateId: { type: "string" } },
+@@ -1624,6 +1624,7 @@ async function updateCandidateStatus(
+   object_type: "assignment_status";
+   candidate_id: string;
+   nova_id: string | null;
++  candidate_name: string | null;
+   action: "update_candidate_status";
+   write_timestamp: string;
+   rows_updated: number;
+@@ -1641,12 +1642,27 @@ async function updateCandidateStatus(
+           WHERE candidate_id = @candidateId
+           ORDER BY
+             CASE
+-              WHEN LOWER(status) IN ('active', 'pending_start', 'in_pipeline') THEN 0
+-              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 1
+-              ELSE 2
++              WHEN LOWER(status) = 'pending_start'
++                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
++                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE() THEN 0
++              WHEN LOWER(status) = 'active' THEN 1
++              WHEN LOWER(status) = 'in_pipeline' THEN 2
++              WHEN LOWER(status) = 'pending_start' THEN 3
++              WHEN LOWER(status) IN ('completed', 'cancelled') THEN 4
++              ELSE 5
+             END,
+-            COALESCE(end_date, '9999-12-31') DESC,
+-            COALESCE(start_date, '0001-01-01') DESC
++            CASE
++              WHEN LOWER(status) = 'pending_start'
++                AND SAFE_CAST(start_date AS DATE) IS NOT NULL
++                AND SAFE_CAST(start_date AS DATE) >= CURRENT_DATE()
++                THEN SAFE_CAST(start_date AS DATE)
++              WHEN LOWER(status) = 'active'
++                THEN COALESCE(SAFE_CAST(end_date AS DATE), DATE '9999-12-31')
++              WHEN LOWER(status) = 'in_pipeline'
++                THEN COALESCE(SAFE_CAST(start_date AS DATE), DATE '9999-12-31')
++              ELSE COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01')
++            END ASC,
++            COALESCE(SAFE_CAST(start_date AS DATE), DATE '0001-01-01') DESC
+           LIMIT 1`,
+     params: { candidateId },
+     types: { candidateId: { type: "string" } },
+@@ -1667,6 +1683,7 @@ async function updateCandidateStatus(
+       object_type: "assignment_status",
+       candidate_id: candidateId,
+       nova_id: identity.nova_id,
++      candidate_name: identity.display_name || null,
+       action: "update_candidate_status",
+       write_timestamp: writeTimestamp,
+       rows_updated: 1,
+@@ -1688,6 +1705,7 @@ async function updateCandidateStatus(
+       object_type: "assignment_status",
+       candidate_id: candidateId,
+       nova_id: identity.nova_id,
++      candidate_name: identity.display_name || null,
+       action: "update_candidate_status",
+       write_timestamp: writeTimestamp,
+       rows_updated: 0,
+@@ -1743,6 +1761,7 @@ async function updateCandidateStatus(
+     object_type: "assignment_status",
+     candidate_id: candidateId,
+     nova_id: identity.nova_id,
++    candidate_name: identity.display_name || null,
+     action: "update_candidate_status",
+     write_timestamp: writeTimestamp,
+     rows_updated: Number(updatedCount),
+@@ -1904,167 +1923,114 @@ async function updateCandidateProfession(input: {
+   };
+ }
+ 
+-// ── Interested Clicks Tool ────────────────────────────────────────
+-
+-async function fetchInterestedClicks(input: {
+-  hours: number;
+-  specialty?: string;
+-  state?: string;
+-  matchStatus?: string;
+-  limit: number;
++async function updateCandidateName(input: {
++  candidateInput: string;
++  firstNameInput: unknown;
++  lastNameInput: unknown;
+ }): Promise<{
+-  object_type: "interested_clicks";
+-  action: "fetch_interested_clicks";
+-  query_params: Record<string, unknown>;
+-  total: number;
+-  clicks: Array<{
+-    click_id: string;
+-    candidate_name: string | null;
+-    email: string | null;
+-    phone: string | null;
+-    job_id: string | null;
+-    specialty: string | null;
+-    state: string | null;
+-    clicked_at: string | null;
+-    match_status: string;
+-    ingested_at: string;
+-  }>;
++  object_type: "candidate_name";
++  candidate_id: string;
++  nova_id: string | null;
++  action: "update_candidate_name";
++  write_timestamp: string;
++  rows_updated: number;
++  changed_fields: {
++    first_name?: { from: string | null; to: string | null };
++    last_name?: { from: string | null; to: string | null };
++  };
++  outcome: "updated" | "no_change";
+ }> {
+-  const cutoff = new Date();
+-  cutoff.setHours(cutoff.getHours() - input.hours);
+-
+-  const conditions = ["ingested_at >= @cutoff"];
+-  const params: Record<string, unknown> = { cutoff };
+-  const types: Record<string, { type: string }> = { cutoff: { type: "timestamp" } };
+-
+-  if (input.specialty) {
+-    conditions.push("LOWER(specialty) = @specialty");
+-    params.specialty = input.specialty.toLowerCase();
+-    types.specialty = { type: "string" };
+-  }
+-  if (input.state) {
+-    conditions.push("UPPER(state) = @state");
+-    params.state = input.state.toUpperCase();
+-    types.state = { type: "string" };
+-  }
+-  if (input.matchStatus) {
+-    conditions.push("match_status = @matchStatus");
+-    params.matchStatus = input.matchStatus;
+-    types.matchStatus = { type: "string" };
++  const firstName = normalizeOptionalUpdateField(input.firstNameInput, "profession");
++  const lastName = normalizeOptionalUpdateField(input.lastNameInput, "specialty"); // using same check
++  if (!firstName.provided && !lastName.provided) {
++    throw new Error("INVALID_UPDATE_PAYLOAD: Provide at least one updatable field: first_name or last_name");
+   }
+ 
+-  const [rows] = await db.run({
+-    sql: `SELECT click_id, candidate_name, email, phone, job_id,
+-                 specialty, state, clicked_at, match_status, ingested_at
+-          FROM interested_clicks
+-          WHERE ${conditions.join(" AND ")}
+-          ORDER BY ingested_at DESC
+-          LIMIT @limit`,
+-    params: { ...params, limit: input.limit },
+-    types: { ...types, limit: { type: "int64" } },
+-  });
++  const identity = await requireCandidateIdentity(input.candidateInput);
++  const candidateId = identity.id;
+ 
+-  const clicks = rows.map((row: any) => {
+-    const r = row.toJSON();
+-    return {
+-      click_id: String(r.click_id),
+-      candidate_name: r.candidate_name ? String(r.candidate_name) : null,
+-      email: r.email ? String(r.email) : null,
+-      phone: r.phone ? String(r.phone) : null,
+-      job_id: r.job_id ? String(r.job_id) : null,
+-      specialty: r.specialty ? String(r.specialty) : null,
+-      state: r.state ? String(r.state) : null,
+-      clicked_at: r.clicked_at ? String(r.clicked_at) : null,
+-      match_status: String(r.match_status || "unmatched"),
+-      ingested_at: String(r.ingested_at),
+-    };
++  const [rows] = await db.run({
++    sql: `SELECT first_name, last_name FROM hc_candidates WHERE id = @candidateId LIMIT 1`,
++    params: { candidateId },
++    types: { candidateId: { type: "string" } },
+   });
+ 
+-  return {
+-    object_type: "interested_clicks",
+-    action: "fetch_interested_clicks",
+-    query_params: {
+-      hours: input.hours,
+-      specialty: input.specialty || null,
+-      state: input.state || null,
+-      match_status: input.matchStatus || null,
+-      limit: input.limit,
+-    },
+-    total: clicks.length,
+-    clicks,
+-  };
+-}
++  if (rows.length === 0) {
++    throw new Error(`${CANDIDATE_NOT_FOUND_CODE}: No candidate found for candidate_id ${candidateId}`);
++  }
+ 
+-// ── Demand Trends Tool ────────────────────────────────────────────
++  const row = rows[0].toJSON();
++  const currentFirstName = row.first_name != null ? String(row.first_name) : null;
++  const currentLastName = row.last_name != null ? String(row.last_name) : null;
+ 
+-async function getDemandTrends(input: {
+-  specialty?: string;
+-  state?: string;
+-  days: number;
+-  limit: number;
+-}): Promise<{
+-  object_type: "demand_trends";
+-  action: "get_demand_trends";
+-  query_params: Record<string, unknown>;
+-  total: number;
+-  trends: Array<{
+-    roll_date: string;
+-    specialty: string;
+-    state: string;
+-    click_count: number;
+-    unique_candidates: number;
+-  }>;
+-}> {
+-  const cutoffDate = new Date();
+-  cutoffDate.setDate(cutoffDate.getDate() - input.days);
+-  const cutoff = cutoffDate.toISOString().split("T")[0];
++  const nextFirstName = firstName.provided ? firstName.value : currentFirstName;
++  const nextLastName = lastName.provided ? lastName.value : currentLastName;
+ 
+-  const conditions = ["roll_date >= @cutoff"];
+-  const params: Record<string, unknown> = { cutoff };
+-  const types: Record<string, { type: string }> = { cutoff: { type: "date" } };
++  const changedFields: {
++    first_name?: { from: string | null; to: string | null };
++    last_name?: { from: string | null; to: string | null };
++  } = {};
+ 
+-  if (input.specialty) {
+-    conditions.push("LOWER(specialty) = @specialty");
+-    params.specialty = input.specialty.toLowerCase();
+-    types.specialty = { type: "string" };
++  if (firstName.provided) {
++    changedFields.first_name = { from: currentFirstName, to: nextFirstName };
+   }
+-  if (input.state) {
+-    conditions.push("UPPER(state) = @state");
+-    params.state = input.state.toUpperCase();
+-    types.state = { type: "string" };
++  if (lastName.provided) {
++    changedFields.last_name = { from: currentLastName, to: nextLastName };
+   }
+ 
+-  const [rows] = await db.run({
+-    sql: `SELECT roll_date, specialty, state, click_count, unique_candidates
+-          FROM market_demand_daily
+-          WHERE ${conditions.join(" AND ")}
+-          ORDER BY roll_date DESC, click_count DESC
+-          LIMIT @limit`,
+-    params: { ...params, limit: input.limit },
+-    types: { ...types, limit: { type: "int64" } },
+-  });
++  const noChange =
++    (!firstName.provided || currentFirstName === nextFirstName) &&
++    (!lastName.provided || currentLastName === nextLastName);
++  const writeTimestamp = new Date().toISOString();
+ 
+-  const trends = rows.map((row: any) => {
+-    const r = row.toJSON();
++  if (noChange) {
+     return {
+-      roll_date: String(r.roll_date),
+-      specialty: String(r.specialty),
+-      state: String(r.state),
+-      click_count: Number(r.click_count),
+-      unique_candidates: Number(r.unique_candidates),
++      object_type: "candidate_name",
++      candidate_id: candidateId,
++      nova_id: identity.nova_id,
++      action: "update_candidate_name",
++      write_timestamp: writeTimestamp,
++      rows_updated: 0,
++      changed_fields: changedFields,
++      outcome: "no_change",
+     };
++  }
++
++  const setClauses: string[] = [];
++  const params: Record<string, unknown> = { candidateId, updatedAt: new Date(writeTimestamp) };
++  const types: Record<string, { type: string }> = { candidateId: { type: "string" }, updatedAt: { type: "timestamp" } };
++
++  if (firstName.provided) {
++    setClauses.push("first_name = @firstName");
++    params.firstName = nextFirstName;
++    types.firstName = { type: "string" };
++  }
++  if (lastName.provided) {
++    setClauses.push("last_name = @lastName");
++    params.lastName = nextLastName;
++    types.lastName = { type: "string" };
++  }
++  setClauses.push("updated_at = @updatedAt");
++
++  let rowsUpdated = 0;
++  await db.runTransactionAsync(async (tx: any) => {
++    const [count] = await tx.runUpdate({
++      sql: `UPDATE hc_candidates SET ${setClauses.join(", ")} WHERE id = @candidateId`,
++      params,
++      types,
++    });
++    rowsUpdated = Number(count);
++    await tx.commit();
+   });
+ 
+   return {
+-    object_type: "demand_trends",
+-    action: "get_demand_trends",
+-    query_params: {
+-      specialty: input.specialty || null,
+-      state: input.state || null,
+-      days: input.days,
+-      limit: input.limit,
+-    },
+-    total: trends.length,
+-    trends,
++    object_type: "candidate_name",
++    candidate_id: candidateId,
++    nova_id: identity.nova_id,
++    action: "update_candidate_name",
++    write_timestamp: writeTimestamp,
++    rows_updated: rowsUpdated,
++    changed_fields: changedFields,
++    outcome: "updated",
+   };
+ }

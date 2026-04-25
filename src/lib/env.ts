@@ -36,4 +36,5 @@ export function optionalEnv(key: string, fallback: string): string {
 
 export const GOOGLE_CLOUD_PROJECT = requireEnv("GOOGLE_CLOUD_PROJECT");
 export const VERTEX_AI_AYAOPS_URL_DATASTORE = requireEnv("VERTEX_AI_AYAOPS_URL_DATASTORE");
+export const GITHUB_TOKEN = requireEnv("GITHUB_TOKEN");
 export const SPANNER_INSTANCE = optionalEnv("SPANNER_INSTANCE", "game-data");

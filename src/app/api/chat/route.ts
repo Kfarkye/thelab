@@ -6,6 +6,7 @@ import { routeRequest, MODEL_META, type ModelId } from "@/lib/router/model-route
 import { callClaude } from "@/lib/providers/claude";
 import { DB_TOOL_DECLARATIONS, executeDbTool } from "@/lib/spanner/tools";
 import { resolve as resolveHub } from "@/lib/resolver";
+import { getCachedConstitution } from "@/lib/git-governance/engine";
 import { interceptGroundedWrite } from "@/lib/ayaops/grounded-write-interceptor";
 import { getEvidenceInlineData } from "@/lib/evidence/store";
 import {
@@ -54,13 +55,11 @@ const ai = new GoogleGenAI({
 const AYAOPS_WRITE_TOOL_NAMES = new Set([
   "update_candidate_status",
   "update_candidate_profession",
+  "update_candidate_name",
   "add_candidate_note",
   "create_com_draft_email",
 ]);
-const AYAOPS_READ_TOOL_NAMES = new Set([
-  "fetch_interested_clicks",
-  "get_demand_trends",
-]);
+const AYAOPS_READ_TOOL_NAMES = new Set<string>();
 
 const AYAOPS_WRITE_TOOL_DECLARATIONS = DB_TOOL_DECLARATIONS.filter((tool) =>
   AYAOPS_WRITE_TOOL_NAMES.has(String((tool as { name?: unknown }).name || "")),
@@ -73,14 +72,14 @@ const AYAOPS_READ_TOOL_DECLARATIONS = DB_TOOL_DECLARATIONS.filter((tool) =>
 const ACCESS_HUB_DECLARATION = {
   name: "access_hub",
   description:
-    "Access the Data Hub to resolve any entity — candidates, templates, facilities, jobs. Returns identity block + canonical URLs + available actions. Path format: '{entity}/{identifier}' e.g. 'candidates/Fontaine' or 'templates/initial-outreach'. The identifier can be a name, ID, or search term.",
+    "Access the Data Hub to resolve any entity: candidates, templates, facilities, jobs, games, picks. Returns identity block + canonical URLs + available actions. Path format: '{entity}/{identifier}' e.g. 'candidates/Fontaine', 'templates/initial-outreach', 'games/401695431', or 'picks/pick_123'. The identifier can be a name, ID, or search term.",
   parameters: {
     type: "object" as const,
     properties: {
       path: {
         type: "string" as const,
         description:
-          "Hub path, e.g. 'candidates/Fontaine', 'templates/initial-outreach', 'facilities/Rush'",
+          "Hub path, e.g. 'candidates/Fontaine', 'templates/initial-outreach', 'facilities/Rush', 'games/401695431_nba', 'picks/pick_123'",
       },
     },
     required: ["path"],
@@ -133,7 +132,17 @@ Be precise about dates, deadlines, and regulatory requirements. Use markdown for
   sports: `You are a sports intelligence analyst with access to Google Search.
 The user is in Pacific Time (PT / America/Los_Angeles). Always reference times in PT, not UTC or ET unless comparing.
 Your expertise: injury reports, lineup changes, late scratches, betting market implications, DFS pricing, playoff scenarios, trade rumors, and game-day intel.
-Always cite your sources with inline numbers like [1], [2]. Be concise, factual, and direct. Prioritize recency — the freshest data wins. Use markdown formatting.`,
+When the user references a specific game from workspace context, call access_hub({ path: "games/{id}" }) first to ground canonical game URLs and structured game data.
+When the user asks for picks, output normalized pick contracts using canonical enums:
+- market_type: SPREAD | TOTAL | MONEYLINE | PLAYER_PROP
+- side: HOME | AWAY | OVER | UNDER
+- priority_band: FEATURED | STANDARD | WATCH
+- event_status: SCHEDULED | LIVE | FINAL | POSTPONED
+- grading_status: PENDING | WON | LOST | PUSH | VOID
+Use display_text for canonical pick wording.
+Rationale length rule: FEATURED can use up to 280 chars. STANDARD and WATCH must stay at 140 chars or less.
+For consumer settlement phrasing, keep it direct and bet-facing: "covered/hit/missed/lost" plus units. Avoid product-internal phrasing like "added to your track record."
+Do not emit bracketed citation numbers. Fold source attribution into prose when useful, and let the Sources panel carry verification links. Be concise, factual, and direct. Prioritize recency, the freshest data wins. Use markdown formatting.`,
 
   code: `You are a senior software engineer with access to Google Search for documentation lookup.
 The user is in Pacific Time (PT / America/Los_Angeles).
@@ -161,6 +170,8 @@ READ PATH (default):
 - Candidate reads and summaries are grounded from URL sources via the access_hub tool, not ad-hoc candidate search.
 - Dynamic resolver hub:
   - access_hub({ path: "candidates/{id_or_name}" }) → canonical candidate grounding payload + available actions.
+  - access_hub({ path: "candidates?specialty={specialty}&status={status}&limit={n}" }) → candidate collection query for list/roster asks.
+  - access_hub({ path: "dietitians?specialty={specialty}&status={status}&limit={n}" }) → shorthand alias for dietitian roster queries.
   - access_hub({ path: "facilities/{name}" }) → canonical facility grounding payload.
   - access_hub({ path: "jobs/{id}" }) → canonical job grounding payload.
   - access_hub({ path: "templates/{id_or_name}" }) → canonical template structure and required fields for drafting.
@@ -176,27 +187,39 @@ WRITE PATH (mutation only):
 
 MANDATORY RULES:
 1. Reads come from grounded URL retrieval via access_hub. Writes go through write tools.
-2. Resolve identity via URL hub before asking the user for IDs:
+2. COLLECTION NAVIGATION MANDATE: If a recruiter asks for a list (candidates, deals, dietitians, facilities, jobs, submittals, contracts), treat it as queryable system data and run the list query flow, do not decline.
+   - Assume a collection endpoint exists and apply available filters/sorts.
+   - If a requested filter is not supported, return available results plus a clear capability gap in recruiter language, never an inability apology.
+3. Resolve identity via URL hub before asking the user for IDs:
    - Call access_hub({ path: "candidates/{id_or_name}" }) first.
    - Once resolved, reuse the returned canonical ID for all tools in that turn.
-3. If selected candidate context is present, treat it as authoritative unless user names a different candidate.
-4. If candidate context is active and user says "him/her/them", reuse that candidate context for writes.
-5. Never simulate tool calls. If a write is requested, execute the real write tool.
-6. For status-change requests, call update_candidate_status and ground confirmation in returned write payload.
-7. For note/save/log requests, call add_candidate_note and ground confirmation in returned write payload.
-8. Only call create_com_draft_email when the user explicitly asks to save/log/store a draft in-system.
+4. If selected candidate context is present, treat it as authoritative unless user names a different candidate.
+5. If candidate context is active and user says "him/her/them", reuse that candidate context for writes.
+6. Never simulate tool calls. If a write is requested, execute the real write tool.
+7. For status-change requests, call update_candidate_status and ground confirmation in returned write payload.
+8. For note/save/log requests, call add_candidate_note and ground confirmation in returned write payload.
+9. Only call create_com_draft_email when the user explicitly asks to save/log/store a draft in-system.
    If they only want wording/copy, return plain draft text with no write tool.
-9. For profession/specialty changes, call update_candidate_profession and ground confirmation in returned write payload.
-10. For copy/paste-ready drafts, never use markdown blockquotes (">") and do not wrap draft text in quotation marks.
-11. Unless user asks for variants, provide one best draft.
-12. When RingCentral SMS thread payload is provided, treat it as communications ingest and preserve raw thread details in write summary.
-13. Use markdown formatting. Be direct and operational.
-14. ANTI-CONTEXT-BLEED — HARD RULE: Each user message is its OWN intent. Prior conversation does NOT imply the next action.
+10. For profession/specialty changes, call update_candidate_profession and ground confirmation in returned write payload.
+11. For copy/paste-ready drafts, never use markdown blockquotes (">") and do not wrap draft text in quotation marks.
+12. Unless user asks for variants, provide one best draft.
+13. When RingCentral SMS thread payload is provided, treat it as communications ingest and preserve raw thread details in write summary.
+14. Use markdown formatting. Be direct and operational.
+15. ANTI-CONTEXT-BLEED - HARD RULE: Each user message is its OWN intent. Prior conversation does NOT imply the next action.
     - NEVER draft an email/template unless the user's CURRENT message explicitly contains a word like "draft", "write", "send", "compose", "email", or "margin approval".
     - "Add this candidate" / "Pull this candidate" = candidate CRUD only. Find them, update them if needed, return their profile. Do NOT draft.
     - A screenshot upload = extract data from the screenshot. Do NOT assume the user wants a repeat of prior conversation workflows.
     - If the user's message does not explicitly request a draft, do NOT create one. Zero tolerance.
-    - If an imageIntent directive is present (e.g. [INTENT: ADD_CANDIDATE]), follow that directive exactly and ignore all prior conversation context.`,
+    - If an imageIntent directive is present (e.g. [INTENT: ADD_CANDIDATE]), follow that directive exactly and ignore all prior conversation context.
+16. TEMPLATE ENFORCEMENT: If a user asks you to draft a specific breakdown, form, or email, you MUST execute access_hub({ path: "templates/<search>" }) FIRST to retrieve the correct structure before returning any copy. Never invent schemas organically.
+17. RECRUITER-FACING RESPONSE VOICE: User-facing chat responses must use plain recruiter language, not operator/admin vocabulary.
+    - Never use first-person system narration ("I updated", "I found", "I successfully...").
+    - Never use operator/developer phrasing such as "Resource Resolved", "Items rendered", "Querying", "endpoint", "payload", "REST", or similar system jargon.
+    - Prefer factual recruiter phrasing such as "12 dietitians match Renal specialty in your book."
+18. DRAFTED COMMUNICATION VOICE: Email/SMS/Teams drafts written on behalf of recruiters preserve first-person recruiter voice ("I", "we").
+19. NO INFRASTRUCTURE LEAKAGE IN CHAT: Never expose URLs, query strings, API paths, tool names, or internal system notes in recruiter-facing responses unless the user explicitly asks for technical details.
+20. LIST INTENT FIT: For list queries, return concise results in recruiter language (count + top matches + suggested next actions). If results only partially match user intent, tighten filters or call out the gap and offer the next refinement.
+21. TYPOGRAPHY: No em-dash or en-dash in user-facing copy, including drafted communications. Use commas, periods, parentheses, or "to".`,
 };
 
 const WORLDCUP_WRITEUP_BASE_URL = String(process.env.WORLDCUP_WRITEUP_BASE_URL || "https://thedrip.bet/worldcup")
@@ -218,6 +241,7 @@ const VISION_PROMPTS: Record<string, string> = {
   healthcare: "You are an expert healthcare document analyst. The user is in Pacific Time (PT). Analyze this image for: credential details (provider, cert type, expiration dates, ID numbers), compliance documents, license information, or any healthcare-related data. Extract all structured information. Use markdown formatting.",
   sports: "You are an expert sports visual analyst. The user is in Pacific Time (PT). Analyze this image for: box scores, lineups, injury reports, betting slips, DFS screenshots, standings, or any sports-related data. Extract all structured information. Use markdown formatting.",
   code: "You are an expert code analyst. The user is in Pacific Time (PT). Analyze this image for: code snippets, error messages, stack traces, terminal output, architecture diagrams, database schemas, or any development-related content. Extract the code or error text, identify the issue, and provide a fix. Use markdown formatting with correct language-tagged code blocks.",
+  ayaops: "You are an expert recruiter and healthcare travel staffing visual analyst. Provide a rigorous, structured data extraction of this screenshot. Extract ALL candidate data, assignment parameters (Facility, Start/End Dates, Shift Types, Hours), and specific Financial/Pay data (Taxable Rate, Stipend, Gross Pay). Retain exact numerical values, IDs, and identifiers without modification.",
 };
 
 const SANDBOX_TOOL_DECLARATIONS = [
@@ -364,33 +388,33 @@ function safeParseTags(raw: unknown): string[] {
 
 // ── Human-readable tool labels for SSE chips ────────────────────
 const TOOL_LABELS: Record<string, string> = {
-  access_hub: "Looking up record…",
-  search_candidates: "Searching candidates…",
-  get_candidate_by_id: "Loading candidate…",
-  list_candidates_by_status: "Listing by status…",
-  list_stale_prospects: "Finding stale prospects…",
-  get_candidate_profile_link: "Getting profile link…",
-  get_internal_grounding_context: "Loading internal context…",
-  ingest_nova_profile: "Ingesting profile…",
-  update_candidate_status: "Updating status…",
-  update_candidate_profession: "Updating profession…",
-  update_candidate_specialty: "Updating specialty…",
-  add_candidate_note: "Saving note…",
-  create_com_draft_email: "Drafting email…",
+  access_hub: "Hub lookup",
+  search_candidates: "Candidate search",
+  get_candidate_by_id: "Candidate lookup",
+  list_candidates_by_status: "Status filter",
+  list_stale_prospects: "Prospect scan",
+  get_candidate_profile_link: "Profile link",
+  get_internal_grounding_context: "Context lookup",
+  ingest_nova_profile: "Profile ingest",
+  update_candidate_status: "Status mutation",
+  update_candidate_profession: "Profession mutation",
+  update_candidate_specialty: "Specialty mutation",
+  add_candidate_note: "Note mutation",
+  create_com_draft_email: "Draft mutation",
 };
 const TOOL_LABELS_DONE: Record<string, string> = {
   access_hub: "Record loaded",
-  search_candidates: "Search complete",
+  search_candidates: "Search resolved",
   get_candidate_by_id: "Candidate loaded",
   list_candidates_by_status: "Candidates listed",
-  list_stale_prospects: "Prospects found",
+  list_stale_prospects: "Prospects resolved",
   get_candidate_profile_link: "Profile link ready",
   get_internal_grounding_context: "Context loaded",
   ingest_nova_profile: "Profile ingested",
   update_candidate_status: "Status updated",
   update_candidate_profession: "Profession updated",
   update_candidate_specialty: "Specialty updated",
-  add_candidate_note: "Note saved",
+  add_candidate_note: "Note updated",
   create_com_draft_email: "Draft created",
 };
 
@@ -736,6 +760,108 @@ function readString(value: unknown): string {
   return "";
 }
 
+function deriveAyaopsReadFallbackHubPath(
+  prompt: string,
+  selectedCandidateInput?: string,
+): string {
+  const raw = readString(prompt);
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+
+  const selected = readString(selectedCandidateInput);
+  if (selected && /\b(him|her|them|candidate|profile|record)\b/.test(lower)) {
+    return `candidates/${selected}`;
+  }
+
+  if (/\bworking\b[\s\w]{0,24}\bcandidates?\b/.test(lower)) return "candidates/working";
+  if (/\bprestart(s)?\b/.test(lower)) return "candidates/prestart";
+  if (/\bdietitian(s)?\b/.test(lower)) return `dietitians/${raw}`;
+  if (/\bcandidates?\b/.test(lower)) return `candidates/${raw}`;
+
+  const lookupMatch = raw.match(
+    /(?:pull up|bring up|show|open|find|get|lookup|look up|check)\s+([A-Za-z][A-Za-z'.-]+(?:\s+[A-Za-z][A-Za-z'.-]+)+)/i,
+  );
+  if (lookupMatch?.[1]) {
+    return `candidates/${lookupMatch[1].trim()}`;
+  }
+
+  return "";
+}
+
+function buildAyaopsHubFallbackText(hubResult: unknown): string {
+  const payload = asJsonRecord(hubResult);
+  if (!payload) return "";
+
+  const type = readString(payload.type).toLowerCase();
+  const status = readString(payload.status).toLowerCase();
+  const summary = readString(payload.summary);
+  const data = asJsonRecord(payload.data);
+
+  if (type === "candidate_collection" && data) {
+    const items = Array.isArray(data.items) ? data.items : [];
+    const countRaw = Number(data.count);
+    const count = Number.isFinite(countRaw) ? countRaw : items.length;
+    const topNames = items
+      .slice(0, 3)
+      .map((item) => readString((item as Record<string, unknown>).name))
+      .filter(Boolean);
+
+    if (count <= 0) return summary || "No matching candidates were found.";
+    if (topNames.length === 0) return `${count} candidates match your filters.`;
+    return `${count} candidates match your filters. Top ${topNames.length}: ${topNames.join(", ")}.`;
+  }
+
+  if (type === "candidate") {
+    if (status === "resolved") return summary || "Candidate record loaded.";
+    if (status === "ambiguous" || status === "not_found") return summary;
+  }
+
+  return summary;
+}
+
+function shortStableHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function deriveWriteResultTransactionId(event: Record<string, unknown>): string {
+  const payload = asJsonRecord(event.payload) || {};
+  const changedFields =
+    payload.changed_fields && typeof payload.changed_fields === "object"
+      ? JSON.stringify(payload.changed_fields)
+      : "";
+  const signature = [
+    readString(event.action || payload.action),
+    readString(event.outcome || payload.outcome),
+    readString(event.objectType || event.object_type || payload.object_type),
+    readString(event.rowsUpdated ?? event.rows_updated ?? payload.rows_updated),
+    readString(event.code || payload.code),
+    readString(payload.candidate_id),
+    readString(payload.nova_id),
+    readString(payload.thread_id),
+    readString(payload.note_id),
+    readString(payload.event_id),
+    readString(payload.write_timestamp || payload.updated_at || payload.created_at),
+    changedFields,
+  ].join("|");
+  return `tx_${shortStableHash(signature)}`;
+}
+
+function buildWriteResultEvent(event: Record<string, unknown>): Record<string, unknown> {
+  if (String(event.type || "") !== "write_result") return event;
+  const transactionId =
+    readString(event.transaction_id) ||
+    readString(event.transactionId) ||
+    deriveWriteResultTransactionId(event);
+  const normalized = { ...event, transaction_id: transactionId } as Record<string, unknown>;
+  if ("transactionId" in normalized) delete normalized.transactionId;
+  return normalized;
+}
+
 function normalizeHttpUri(value: unknown): string {
   const uri = readString(value);
   if (!uri) return "";
@@ -875,6 +1001,77 @@ function buildUserFacingLookupErrorMessage(toolName: string, rawError: unknown):
   return `Could not complete ${name.replace(/_/g, " ")} right now. Please retry.`;
 }
 
+type AyaopsRosterDigest = {
+  total: number;
+  statuses: Record<string, number>;
+  specialties: Record<string, number>;
+};
+
+function normalizeAyaopsRosterDigest(input: unknown): AyaopsRosterDigest | null {
+  const record = asJsonRecord(input);
+  if (!record) return null;
+
+  const totalRaw = Number(record.total);
+  const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? Math.floor(totalRaw) : 0;
+
+  const normalizeBucket = (value: unknown): Record<string, number> => {
+    const bucket = asJsonRecord(value);
+    if (!bucket) return {};
+    const entries = Object.entries(bucket)
+      .map(([key, count]) => {
+        const normalizedKey = readString(key).toLowerCase();
+        const normalizedCount = Number(count);
+        if (!normalizedKey || !Number.isFinite(normalizedCount) || normalizedCount <= 0) return null;
+        return [normalizedKey, Math.floor(normalizedCount)] as const;
+      })
+      .filter((entry): entry is readonly [string, number] => Boolean(entry))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12);
+    return Object.fromEntries(entries);
+  };
+
+  const statuses = normalizeBucket(record.statuses);
+  const specialties = normalizeBucket(record.specialties);
+
+  if (total <= 0 && Object.keys(statuses).length === 0 && Object.keys(specialties).length === 0) {
+    return null;
+  }
+
+  return { total, statuses, specialties };
+}
+
+function inferAyaopsCollectionHubPath(prompt: string): string {
+  const normalized = readString(prompt).replace(/\s+/g, " ");
+  if (!normalized) return "";
+
+  if (/^(candidates|dietitians)(\/|\?|$)/i.test(normalized)) {
+    return normalized;
+  }
+
+  const lower = normalized.toLowerCase();
+  const listVerb = /\b(show|list|find|get|pull|rank|sort|filter|which|who|how many|top)\b/.test(lower);
+  const rosterEntity = /\b(candidates?|dietitians?|nurses?|travelers?)\b/.test(lower);
+  const rosterQualifier = /\b(all|working|active|prestart|pending|pipeline|submitted|completed|cold|replied|renal)\b/.test(
+    lower,
+  );
+  const explicitCollectionIntent =
+    /\b(candidates?|dietitians?|nurses?|travelers?)\b/.test(lower) &&
+    /\b(all|list|roster|show|find|get|pull|rank|sort|filter|which|who|how many|top|me)\b/.test(
+      lower,
+    );
+  const singleCandidateLikely =
+    Boolean(inferCandidateNameFromPrompt(normalized)) &&
+    !/\b(all|list|roster|top|how many|which|who)\b/.test(lower);
+
+  if (singleCandidateLikely && !explicitCollectionIntent) return "";
+  if (!((listVerb && (rosterEntity || rosterQualifier)) || (rosterEntity && rosterQualifier))) return "";
+
+  if (/\bdietitians?\b/.test(lower)) {
+    return `dietitians/${normalized}`;
+  }
+  return `candidates/${normalized}`;
+}
+
 function inferCandidateUrlInput(input: {
   selectedContext: SelectedCandidateContext | null;
   uiContext?: { threadId?: string; candidateId?: string; candidateName?: string };
@@ -892,8 +1089,24 @@ function inferCandidateUrlInput(input: {
   const uuidMatch = promptText.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i);
   if (uuidMatch) return uuidMatch[0];
 
-  const novaMatch = promptText.match(/\b\d{6,10}\b/);
-  if (novaMatch) return novaMatch[0];
+  const labeledNumericIdMatch = promptText.match(
+    /\b(candidate[_\s-]?id|nova[_\s-]?id|candidate|nova)\b[\s:#-]{0,12}(\d{6,10})\b/i,
+  );
+  if (labeledNumericIdMatch?.[2]) return labeledNumericIdMatch[2];
+
+  if (/\b(candidate|nova|profile)\b/i.test(promptText)) {
+    const numericMatches = Array.from(promptText.matchAll(/\b\d{6,10}\b/g));
+    for (const match of numericMatches) {
+      const value = readString(match[0]);
+      if (!value) continue;
+      const start = Number(match.index || 0);
+      const leftWindow = promptText.slice(Math.max(0, start - 24), start).toLowerCase();
+      if (/\b(call|text|sms|phone|tel|mobile)\b/.test(leftWindow)) continue;
+      const rightWindow = promptText.slice(start + value.length, start + value.length + 8);
+      if (/[%$]/.test(rightWindow) || /[%$]/.test(leftWindow)) continue;
+      return value;
+    }
+  }
 
   const fromPromptName = inferCandidateNameFromPrompt(promptText);
   if (fromPromptName) return fromPromptName;
@@ -905,21 +1118,51 @@ function inferCandidateUrlInput(input: {
 }
 
 function inferCandidateNameFromPrompt(prompt: string): string {
-  const normalized = readString(prompt)?.replace(/\s+/g, " ") || "";
+  const normalized = readString(prompt).replace(/\s+/g, " ");
   if (!normalized) return "";
 
-  const byVerb = normalized.match(
-    /\b(?:look up|pull up|find|get|show|summarize|open|status(?: of)?|move|update|draft)\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on)\b|[?.!,]|$)/i,
-  );
-  const byCandidate = normalized.match(
+  const patterns = [
+    /\b(?:look up|pull up|find|get|show|summarize|open|status(?: of)?|move|update|draft|about|status of|how is|with|for|tell me about|check on)\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on|with|about)\b|[?.!,]|$)/i,
     /\bcandidate\s+([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})(?=\s+(?:to|into|for|in|on)\b|[?.!,]|$)/i,
-  );
+    /\b([a-z][a-z'`.-]*(?:\s+[a-z][a-z'`.-]*){0,2})'s\s+(?:assignment|status|profile|contract|availability|email|phone|details)\b/i,
+  ];
 
-  const candidatePhrase = readString(byVerb?.[1] || byCandidate?.[1]) || "";
+  let candidatePhrase = "";
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match?.[1]) {
+      candidatePhrase = readString(match[1]);
+      if (candidatePhrase) break;
+    }
+  }
+
   if (!candidatePhrase) return "";
 
   const lowered = candidatePhrase.toLowerCase();
-  if (["him", "her", "them", "this candidate", "that candidate", "candidate"].includes(lowered)) {
+  if (
+    [
+      "me",
+      "my",
+      "us",
+      "our",
+      "him",
+      "her",
+      "them",
+      "this candidate",
+      "that candidate",
+      "candidate",
+      "the candidate",
+      "the margin",
+      "a pay",
+      "pay package",
+    ].includes(lowered)
+  ) {
+    return "";
+  }
+
+  if (
+    /\b(candidates?|dietitians?|nurses?|travelers?|prestarts?|roster|list)\b/.test(lowered)
+  ) {
     return "";
   }
 
@@ -959,47 +1202,6 @@ function inferCandidateInputFromHistory(history?: { role: string; text: string }
   }
 
   return "";
-}
-
-function buildCandidateGroundingResolverUrl(request: NextRequest, candidateInput: string): string | null {
-  const host = readString(request.headers.get("x-forwarded-host")) || readString(request.headers.get("host"));
-  if (!host) return null;
-  const protocol = readString(request.headers.get("x-forwarded-proto")) || "https";
-  return `${protocol}://${host}/api/grounding/c/${encodeURIComponent(candidateInput)}`;
-}
-
-function buildCandidateGroundingPageUrl(request: NextRequest, candidateInput: string): string | null {
-  const host = readString(request.headers.get("x-forwarded-host")) || readString(request.headers.get("host"));
-  if (!host) return null;
-  const protocol = readString(request.headers.get("x-forwarded-proto")) || "https";
-  return `${protocol}://${host}/c/${encodeURIComponent(candidateInput)}`;
-}
-
-function extractCandidateGroundingJsonFromPage(html: string): string | null {
-  const match = html.match(/<script[^>]*id=["']candidate-grounding-json["'][^>]*>([\s\S]*?)<\/script>/i);
-  if (!match) return null;
-  const parsed = readString(match[1]);
-  if (!parsed) return null;
-  try {
-    JSON.parse(parsed);
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function extractCandidateGroundingJsonFromHub(payload: unknown): string | null {
-  const parsed = asJsonRecord(payload);
-  const candidate = asJsonRecord(parsed?.candidate);
-  if (!candidate) return null;
-  const serialized = JSON.stringify(candidate);
-  if (!serialized) return null;
-  try {
-    JSON.parse(serialized);
-    return serialized;
-  } catch {
-    return null;
-  }
 }
 
 const TEMPLATE_CATALOG = [
@@ -1082,15 +1284,15 @@ function buildInitialOutreachDraft(args: Record<string, unknown>): RenderedEmail
   const grossWeeklyPayFormatted = formatCurrency(grossWeeklyPay);
   const weeklyHoursText = Number.isInteger(weeklyHours) ? String(weeklyHours) : String(weeklyHours);
 
-  const subject = `${specialty} Assignment - ${facilityName} | ${grossWeeklyPayFormatted}/week`;
+  const subject = `${specialty} Assignment at ${facilityName} | ${grossWeeklyPayFormatted}/week`;
   const body = [
     `Hi ${firstName},`,
     ``,
-    `Thanks for your interest in the ${specialty} position at ${facilityName}. Here's the full breakdown - this looks like a strong fit for your background:`,
+    `Thanks for your interest in the ${specialty} position at ${facilityName}. Here's the full breakdown, this looks like a strong fit for your background:`,
     ``,
     `Facility: ${facilityName}`,
     `Location: ${city}, ${state}`,
-    `Assignment Dates: ${startDate} - ${endDate}`,
+    `Assignment Dates: ${startDate} to ${endDate}`,
     `Shifts & Hours: ${shiftType} (${weeklyHoursText} hours/week)`,
     ``,
     `Pay Package:`,
@@ -1098,7 +1300,7 @@ function buildInitialOutreachDraft(args: Record<string, unknown>): RenderedEmail
     `Meals & Housing Stipend: ${weeklyStipendFormatted}/week`,
     `Total Gross Weekly Pay: ${grossWeeklyPayFormatted}`,
     ``,
-    `This role is moving quickly - I can get you submitted today if everything looks good.`,
+    `This role is moving quickly, I can get you submitted today if everything looks good.`,
     ``,
     `To move forward, please confirm:`,
     `- Are you available to start ${startDate}?`,
@@ -1192,7 +1394,7 @@ function buildPayPackageSnippetDraft(args: Record<string, unknown>): RenderedEma
   const body = [
     `Facility: ${facilityName}`,
     `Location: ${city}, ${state}`,
-    `Assignment Dates: ${startDate} - ${endDate}`,
+    `Assignment Dates: ${startDate} to ${endDate}`,
     `Shifts & Hours/Week: ${shiftType} (${weeklyHoursText} hours/week)`,
     `Specialty: ${specialty}`,
     ``,
@@ -1730,7 +1932,13 @@ export async function POST(request: NextRequest) {
       selectedMarginContext?: Record<string, unknown>;
       modelOverride?: ModelId;
       imageIntent?: string;
-      uiContext?: { threadId?: string; candidateId?: string; candidateName?: string; activeItems?: Array<Record<string, unknown>> };
+      uiContext?: {
+        threadId?: string;
+        candidateId?: string;
+        candidateName?: string;
+        activeItems?: Array<Record<string, unknown>>;
+        rosterDigest?: Record<string, unknown> | null;
+      };
     };
 
     if (!prompt || typeof prompt !== "string") {
@@ -1742,7 +1950,7 @@ export async function POST(request: NextRequest) {
     const hasImage = hasInlineImage || hasSavedImage;
     const requestedMode = mode || "sports";
     const activeMode =
-      requestedMode === "facility" || requestedMode === "margins" || requestedMode === "clicks"
+      requestedMode === "facility" || requestedMode === "margins"
         ? "ayaops"
         : requestedMode;
     // Architecture drift prevention: strict URL Hub routing only. No ad-hoc search tools.
@@ -1816,18 +2024,9 @@ MODE OVERRIDE:
 - Candidate-specific identity, status, and write actions MUST remain grounded to internal DB tools.
 - Never fabricate internal data. Keep external claims source-cited.`;
     }
-    if (!hasImage && requestedMode === "clicks") {
-      systemPrompt = `${systemPrompt}
-
-CLICKS WORKSPACE MODE:
-- Prioritize click-intelligence workflows over candidate lifecycle workflows.
-- Use fetch_interested_clicks for recent click activity and matched/unmatched lead slices.
-- Use get_demand_trends for specialty/state demand analysis over time.
-- Do not run mutation tools unless the user explicitly requests a write action.`;
-    }
-
     // ── Build user prompt with optional candidate grounding ─────
     let fullPrompt = prompt;
+    let hasPrefetchedAyaopsObservation = false;
     if (isInternalRecord && internalContext?.candidate) {
       const candidateGrounding = formatCandidateContext(internalContext.candidate as CandidateRecord);
       fullPrompt = `${candidateGrounding}\n\n${prompt}`;
@@ -1863,7 +2062,7 @@ candidate_name="${resolvedName}"
 candidate_email="${resolvedEmail}"
 current_bucket="${currentBucket}"
 context_source="${contextSource}"
-CRITICAL: When candidate_id is provided above, you MUST pass it directly to write tools (update_candidate_status, add_candidate_note, create_com_draft_email, update_candidate_profession). Do NOT call access_hub first — the candidate is already resolved. Call the write tool immediately with candidate_id="${authoritativeCandidateId}".]`;
+CRITICAL: When candidate_id is provided above, you MUST pass it directly to write tools (update_candidate_status, add_candidate_note, create_com_draft_email, update_candidate_profession). Do NOT call access_hub first, the candidate is already resolved. Call the write tool immediately with candidate_id="${authoritativeCandidateId}".]`;
     }
 
     // Inject grounded UI context if available (thread or inferred candidate)
@@ -1876,104 +2075,197 @@ ${ctxJson}
 Rule: If the user asks to "draft a reply", "update status", or references "this candidate", strictly use the IDs from this context block. Do not search for other candidates.]`;
     }
     
-    if (activeMode === "code" && uiContext?.activeItems && Array.isArray(uiContext.activeItems)) {
+    // ── GaC: Direct Git-governance injection via Octokit ──
+    if (activeMode === "ayaops" || activeMode === "code") {
+      const constitution = await getCachedConstitution();
       fullPrompt = `${fullPrompt}
 
-[System note: LIVE ARCHITECTURE LEDGER
-The following are the active architecture decisions and system rules dynamically loaded from the state ledger:
-${JSON.stringify(uiContext.activeItems.map((item) => ({
+[System note: LIVE ARCHITECTURE LEDGER - VER: ${constitution.version}
+The following governance rules are injected deterministically from the repository HEAD commit via the Git-as-Governance engine. Your response MUST comply with every "accepted" verdict below.
+${JSON.stringify(constitution.rules, null, 2)}
+CRITICAL: These are laws, not suggestions. Treat each rule with the same strictness as returning valid JSON.]`;
+    }
+
+    // ── Supplemental: dynamic Spanner verdicts from client state (code mode only) ──
+    if (activeMode === "code" && uiContext?.activeItems && Array.isArray(uiContext.activeItems)) {
+      const acceptedItems = uiContext.activeItems.filter((item) => {
+        const record = asJsonRecord(item);
+        const status = readString(record?.status);
+        return status.toLowerCase() === "accepted";
+      });
+      const dynamicVerdictItems = acceptedItems.length > 0 ? acceptedItems : uiContext.activeItems;
+      if (dynamicVerdictItems.length > 0) {
+        fullPrompt = `${fullPrompt}
+
+[System note: DYNAMIC VERDICTS (from Spanner verdict ledger)
+${JSON.stringify(dynamicVerdictItems.map((item) => ({
   verdict: item.label,
   details: item.preview,
   status: item.status,
 })), null, 2)}
-Rule: Use this active context as the single source of truth for architectural constraints and repo conventions.]`;
+Rule: These supplement the Live Architecture Ledger above. Use as additional context for repo conventions.]`;
+      }
     }
 
     if (activeMode === "ayaops") {
-      const candidateUrlInput = inferCandidateUrlInput({
-        selectedContext,
-        uiContext,
-        prompt,
-        history,
-      });
-      const candidateResolverUrl =
-        candidateUrlInput.length > 0
-          ? buildCandidateGroundingResolverUrl(request, candidateUrlInput)
-          : null;
+      const rosterDigest = normalizeAyaopsRosterDigest(uiContext?.rosterDigest);
+      if (rosterDigest) {
+        fullPrompt = `${fullPrompt}
 
-      if (candidateResolverUrl) {
+[System note: ROSTER_MAP
+You are managing ${rosterDigest.total} candidates.
+Status distribution: ${Object.entries(rosterDigest.statuses)
+  .map(([status, count]) => `${status}:${count}`)
+  .join(", ") || "none"}.
+Specialty distribution: ${Object.entries(rosterDigest.specialties)
+  .map(([specialty, count]) => `${specialty}(${count})`)
+  .join(", ") || "none"}.
+If asked for a list, prefer grounded collection retrieval and refine by intent.]`;
+      }
+
+      const formatResolverCandidateOption = (entry: unknown): string => {
+        const record = asJsonRecord(entry);
+        const name = readString(record?.display_name || record?.name) || "Unknown candidate";
+        const candidateId = readString(record?.candidate_id || record?.id) || "";
+        const novaId = readString(record?.nova_id) || "";
+        const specialty = readString(record?.specialty) || "";
+        const status = readString(record?.assignment_status || record?.status) || "";
+        const facilityName = readString(record?.facility_name) || "";
+        const facilityCity = readString(record?.facility_city) || "";
+        const facilityState = readString(record?.facility_state) || "";
+        const recentActivityAt =
+          readString(record?.recent_activity_at || record?.recentActivityAt) || "";
+
+        const contextSegments: string[] = [];
+        if (specialty) contextSegments.push(`specialty: ${specialty}`);
+        if (status) contextSegments.push(`status: ${status}`);
+        if (facilityName || facilityCity || facilityState) {
+          const loc = [facilityCity, facilityState].filter(Boolean).join(", ");
+          contextSegments.push(`location: ${facilityName}${loc ? ` (${loc})` : ""}`);
+        }
+        if (recentActivityAt) contextSegments.push(`recent activity: ${recentActivityAt}`);
+
+        return `${name}${candidateId ? ` (candidate_id: ${candidateId})` : ""}${novaId ? ` (nova_id: ${novaId})` : ""}${contextSegments.length > 0 ? ` | ${contextSegments.join(" | ")}` : ""}`;
+      };
+
+      const collectionPath = inferAyaopsCollectionHubPath(prompt);
+      if (collectionPath) {
         try {
-          const resolverResponse = await fetch(candidateResolverUrl, {
-            cache: "no-store",
-            headers: { "User-Agent": "thelab-candidate-grounding-fetch/1.0" },
-          });
-
-          if (resolverResponse.ok) {
-            const resolverPayload = (await resolverResponse.json()) as Record<string, unknown>;
-            const sourceJson = extractCandidateGroundingJsonFromHub(resolverPayload);
-            const resolvedIdentifier = asJsonRecord(resolverPayload.resolved_identifier);
-            const resolvedCandidateId = readString(resolvedIdentifier?.candidate_id) || "";
-            const resolvedName = readString(resolvedIdentifier?.display_name) || "";
-            const actionUrl = readString(resolverPayload.action_url) || "";
-            if (sourceJson) {
+          const collectionResult = await resolveHub(collectionPath);
+          if (
+            collectionResult.status === "resolved" &&
+            collectionResult.type === "candidate_collection"
+          ) {
+            const collectionData = asJsonRecord(collectionResult.data);
+            const collectionItemsRaw = Array.isArray(collectionData?.items)
+              ? collectionData.items
+              : [];
+            const collectionItems = collectionItemsRaw
+              .slice(0, 10)
+              .map((entry) => {
+                const record = asJsonRecord(entry);
+                return {
+                  id: readString(record?.id) || null,
+                  name: readString(record?.name) || null,
+                  specialty: readString(record?.specialty) || null,
+                  profession: readString(record?.profession) || null,
+                  status: readString(record?.status || record?.assignment_status) || null,
+                  facility: readString(record?.facility_name) || null,
+                  state: readString(record?.facility_state || record?.home_state) || null,
+                  assignment_end: readString(record?.assignment_end) || null,
+                  last_contact_at: readString(record?.last_contact_at) || null,
+                };
+              })
+              .filter((entry) => Boolean(entry.name));
+            const countRaw = Number(collectionData?.count);
+            const count = Number.isFinite(countRaw) ? countRaw : collectionItemsRaw.length;
+            const observationPayload = {
+              type: collectionResult.type,
+              status: collectionResult.status,
+              summary: collectionResult.summary,
+              count,
+              filters_applied: asJsonRecord(collectionData?.filters_applied) || {},
+              capability_gaps: Array.isArray(collectionData?.capability_gaps)
+                ? collectionData?.capability_gaps
+                : [],
+              items: collectionItems,
+            };
+            const observationJson = JSON.stringify(observationPayload);
+            if (observationJson) {
               fullPrompt = `${fullPrompt}
+
+[System note: CURRENT_OBSERVATION (collection prefetch from URL hub)
+${observationJson}]`;
+              hasPrefetchedAyaopsObservation = true;
+            }
+          } else {
+            const summary = readString(collectionResult.summary);
+            if (summary) {
+              fullPrompt = `${fullPrompt}
+
+[System note: Collection prefetch returned non-resolved status.
+path="${collectionPath}"
+summary="${summary}"]`;
+            }
+          }
+        } catch (sourceErr) {
+          console.warn("[candidate_collection_prefetch] resolve failed:", sourceErr);
+        }
+      }
+
+      if (!collectionPath) {
+        const candidateUrlInput = inferCandidateUrlInput({
+          selectedContext,
+          uiContext,
+          prompt,
+          history,
+        });
+        if (candidateUrlInput.length > 0) {
+          try {
+            const resolverPayload = await resolveHub(`candidates/${candidateUrlInput}`);
+            if (resolverPayload.status === "resolved") {
+              const sourceJson = JSON.stringify(asJsonRecord(resolverPayload.data) || {});
+              const resolvedCandidateId = readString(resolverPayload.id);
+              const resolvedName = readString(
+                asJsonRecord(resolverPayload.data)?.display_name || resolverPayload.summary,
+              );
+              if (sourceJson) {
+                fullPrompt = `${fullPrompt}
 
 [System note: Dynamic candidate grounding hub resolved candidate context for this turn.
-resolver_url="${candidateResolverUrl}"
 resolved_candidate_id="${resolvedCandidateId}"
 resolved_candidate_name="${resolvedName}"
-action_url="${actionUrl}"
 Use this JSON as authoritative candidate read context:
 ${sourceJson}]`;
-            }
-          } else if (resolverResponse.status === 409) {
-            const resolverPayload = (await resolverResponse.json()) as Record<string, unknown>;
-            const candidates = Array.isArray(resolverPayload.candidates)
-              ? resolverPayload.candidates
-                  .map((entry) => {
-                    const record = asJsonRecord(entry);
-                    const name = readString(record?.display_name) || "Unknown Candidate";
-                    const candidateId = readString(record?.candidate_id) || "";
-                    const novaId = readString(record?.nova_id) || "";
-                    return `${name}${candidateId ? ` (candidate_id: ${candidateId})` : ""}${novaId ? ` (nova_id: ${novaId})` : ""}`;
-                  })
-                  .filter(Boolean)
-                  .slice(0, 5)
-              : [];
-            if (candidates.length > 0) {
-              fullPrompt = `${fullPrompt}
+                hasPrefetchedAyaopsObservation = true;
+              }
+            } else if (resolverPayload.status === "ambiguous") {
+              const candidates = Array.isArray(resolverPayload.alternatives)
+                ? resolverPayload.alternatives
+                    .map((entry) => formatResolverCandidateOption(entry))
+                    .filter(Boolean)
+                    .slice(0, 5)
+                : [];
+              if (candidates.length > 0) {
+                fullPrompt = `${fullPrompt}
 
 [System note: Candidate resolver found multiple matches for "${candidateUrlInput}".
 Do not guess. Ask the user to pick one of these:
 - ${candidates.join("\n- ")}]`;
-            }
-          } else {
-            console.warn(
-              `[candidate_url_grounding] non-200 response for ${candidateResolverUrl}: ${resolverResponse.status}`,
-            );
-
-            const candidatePageUrl = buildCandidateGroundingPageUrl(request, candidateUrlInput);
-            if (candidatePageUrl) {
-              const pageResponse = await fetch(candidatePageUrl, {
-                cache: "no-store",
-                headers: { "User-Agent": "thelab-candidate-grounding-fetch/1.0" },
-              });
-              if (pageResponse.ok) {
-                const pageHtml = await pageResponse.text();
-                const pageJson = extractCandidateGroundingJsonFromPage(pageHtml);
-                if (pageJson) {
-                  fullPrompt = `${fullPrompt}
-
-[System note: Canonical candidate URL grounding was loaded from page fallback.
-source_url="${candidatePageUrl}"
-Use this JSON as authoritative candidate read context:
-${pageJson}]`;
-                }
               }
+            } else if (resolverPayload.status === "not_found") {
+              const resolverMessage =
+                readString(resolverPayload.summary) ||
+                `No exact candidate match for "${candidateUrlInput}".`;
+              fullPrompt = `${fullPrompt}
+
+[System note: Candidate resolver found zero exact matches for "${candidateUrlInput}".
+Resolver message: ${resolverMessage}
+Do not guess. Ask the user to clarify the candidate identity.]`;
             }
+          } catch (sourceErr) {
+            console.warn("[candidate_url_grounding] resolveHub failed:", sourceErr);
           }
-        } catch (sourceErr) {
-          console.warn("[candidate_url_grounding] fetch failed:", sourceErr);
         }
       }
     }
@@ -1982,7 +2274,8 @@ ${pageJson}]`;
     if (activeMode === "ayaops") {
       systemPrompt = `${systemPrompt}
 
-Rule: If any tool returns error_code "AMBIGUOUS_MATCH" with alternatives, DO NOT retry the search. Stop immediately and present the alternatives to the user. Ask them to choose.`;
+Rule: If any tool returns error_code "AMBIGUOUS_MATCH" or "AMBIGUOUS_CANDIDATE" with alternatives, DO NOT retry the search. Stop immediately and present the alternatives to the user with context so they can choose.
+Rule: If any tool returns error_code "CANDIDATE_NOT_FOUND", ask the user for clarification (full name, candidate ID, or Nova ID). Do not guess.`;
     }
 
     if (requestedMode === "margins") {
@@ -2055,7 +2348,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
             );
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({
+                `data: ${JSON.stringify(buildWriteResultEvent({
                   type: "write_result",
                   outcome: "failed",
                   action: "update_candidate_status",
@@ -2071,7 +2364,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
                       ? "selected_context_missing"
                       : "tool_execution_failed",
                   },
-                })}\n\n`,
+                }))}\n\n`,
               ),
             );
             controller.enqueue(
@@ -2124,7 +2417,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
 
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({
+              `data: ${JSON.stringify(buildWriteResultEvent({
                 type: "write_result",
                 outcome,
                 action: "update_candidate_status",
@@ -2132,7 +2425,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
                 rowsUpdated,
                 code: null,
                 payload: resultObj,
-              })}\n\n`,
+              }))}\n\n`,
             ),
           );
           controller.enqueue(
@@ -2145,8 +2438,8 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
                     : outcome === "no_change"
                       ? `${candidateName} is already in Offer status (no change).`
                       : oldStatus && newStatus
-                        ? `Updated ${candidateName} status: ${oldStatus} -> ${newStatus}.`
-                        : `Updated ${candidateName} to Offer status.`,
+                        ? `${candidateName}: ${oldStatus} to ${newStatus}.`
+                        : `${candidateName}: Offer status updated.`,
               })}\n\n`,
             ),
           );
@@ -2186,7 +2479,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
         start(controller) {
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({
+              `data: ${JSON.stringify(buildWriteResultEvent({
                 type: "write_result",
                 outcome: "failed",
                 action: "ingest_ringcentral_thread",
@@ -2198,7 +2491,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
                   error:
                     "Could not parse a valid RingCentral thread JSON object. Check quotes/braces and remove trailing commas.",
                 },
-              })}\n\n`,
+              }))}\n\n`,
             ),
           );
           controller.enqueue(
@@ -2234,7 +2527,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
         start(controller) {
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({
+              `data: ${JSON.stringify(buildWriteResultEvent({
                 type: "write_result",
                 outcome: "failed",
                 action: "ingest_margin_payload",
@@ -2246,7 +2539,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
                   error:
                     "Could not parse a valid aya_margin_calculator JSON object. Check quotes/braces and remove trailing commas.",
                 },
-              })}\n\n`,
+              }))}\n\n`,
             ),
           );
           controller.enqueue(
@@ -2287,7 +2580,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
         start(controller) {
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({
+              `data: ${JSON.stringify(buildWriteResultEvent({
                 type: "write_result",
                 outcome: "failed",
                 action: "ingest_nova_profile",
@@ -2299,7 +2592,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
                   error:
                     "Could not parse a valid nova_candidate_profile JSON object. Check quotes/braces and remove trailing commas.",
                 },
-              })}\n\n`,
+              }))}\n\n`,
             ),
           );
           controller.enqueue(
@@ -2360,7 +2653,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
 
         fullPrompt = `${fullPrompt}
 
-[System note: ingest_ringcentral_thread executed successfully before this turn.
+[System note: ingest_ringcentral_thread executed before this turn.
 thread_id="${String(ringcentralResult.thread_id || "")}"
 event_id="${String(ringcentralResult.event_id || "")}"
 candidate_link_status="${String(ringcentralResult.candidate_link_status || "")}"
@@ -2374,7 +2667,7 @@ Return only operational summary: save status, link status, and next best action.
           start(controller) {
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({
+                `data: ${JSON.stringify(buildWriteResultEvent({
                   type: "write_result",
                   outcome: "failed",
                   action: "ingest_ringcentral_thread",
@@ -2385,7 +2678,7 @@ Return only operational summary: save status, link status, and next best action.
                     code: "RINGCENTRAL_INGEST_FAILED",
                     error: ringcentralMessage,
                   },
-                })}\n\n`,
+                }))}\n\n`,
               ),
             );
             controller.enqueue(
@@ -2462,7 +2755,7 @@ Return only operational summary: save status, link status, and next best action.
 
         fullPrompt = `${fullPrompt}
 
-[System note: ingest_margin_payload executed successfully before this turn. Margin payload has been saved to margin ledger event_id "${String(marginResult.event_id || "")}".]`;
+[System note: ingest_margin_payload executed before this turn. Margin payload is persisted with event_id "${String(marginResult.event_id || "")}".]`;
       } catch (marginErr) {
         const marginMessage = marginErr instanceof Error ? marginErr.message : String(marginErr);
         const encoder = new TextEncoder();
@@ -2470,7 +2763,7 @@ Return only operational summary: save status, link status, and next best action.
           start(controller) {
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({
+                `data: ${JSON.stringify(buildWriteResultEvent({
                   type: "write_result",
                   outcome: "failed",
                   action: "ingest_margin_payload",
@@ -2481,7 +2774,7 @@ Return only operational summary: save status, link status, and next best action.
                     code: "MARGIN_INGEST_FAILED",
                     error: marginMessage,
                   },
-                })}\n\n`,
+                }))}\n\n`,
               ),
             );
             controller.enqueue(
@@ -2526,7 +2819,7 @@ Return only operational summary: save status, link status, and next best action.
           start(controller) {
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({
+                `data: ${JSON.stringify(buildWriteResultEvent({
                   type: "write_result",
                   outcome: "failed",
                   action: "ingest_nova_profile",
@@ -2537,7 +2830,7 @@ Return only operational summary: save status, link status, and next best action.
                     code: "PROFILE_INGEST_FAILED",
                     error: ingestErrorMessage,
                   },
-                })}\n\n`,
+                }))}\n\n`,
               ),
             );
             controller.enqueue(
@@ -2603,7 +2896,7 @@ Return only operational summary: save status, link status, and next best action.
 
       fullPrompt = `${fullPrompt}
 
-[System note: ingest_nova_profile already executed successfully before this turn. Candidate is now persisted in the internal DB. Use candidate_id "${canonicalCandidateId}"${novaId ? ` (nova_id "${novaId}")` : ""} for any follow-up add_candidate_note or create_com_draft_email action.]`;
+[System note: ingest_nova_profile already executed before this turn. Candidate is persisted for follow-up actions. Use candidate_id "${canonicalCandidateId}"${novaId ? ` (nova_id "${novaId}")` : ""} for any add_candidate_note or create_com_draft_email action.]`;
     }
 
     // ── Grounded Write Interceptor ─────────────────────────────────
@@ -2756,6 +3049,9 @@ Return only operational summary: save status, link status, and next best action.
       ];
     } else {
       tools = [{ googleSearch: {} }];
+      if (activeMode === "sports") {
+        tools.push({ functionDeclarations: [ACCESS_HUB_DECLARATION] });
+      }
       if (activeMode === "worldcup") {
         tools.push({ functionDeclarations: SANDBOX_TOOL_DECLARATIONS });
       }
@@ -2763,12 +3059,12 @@ Return only operational summary: save status, link status, and next best action.
 
     const declaredToolNames =
       activeMode === "ayaops"
-        ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...AYAOPS_READ_TOOL_DECLARATIONS]
+        ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...AYAOPS_READ_TOOL_DECLARATIONS, ACCESS_HUB_DECLARATION]
           .map((tool) => String((tool as { name?: string }).name || ""))
           .filter(Boolean)
         : [];
 
-    const toolPolicy = classifyToolRequirement({
+    const rawToolPolicy = classifyToolRequirement({
       // Important: classify write intent from the user's raw prompt only.
       // Using the expanded prompt can create false positives because
       // injected system notes contain verbs like "write"/"update".
@@ -2776,17 +3072,34 @@ Return only operational summary: save status, link status, and next best action.
       availableToolNames: declaredToolNames,
       mode: activeMode,
     });
+    const toolPolicy =
+      activeMode === "ayaops" &&
+      hasPrefetchedAyaopsObservation &&
+      rawToolPolicy.requiredToolKind === "read"
+        ? {
+            ...rawToolPolicy,
+            readGroundingIntent: false,
+            requiredToolKind: "none",
+            toolRequired: false,
+          }
+        : rawToolPolicy;
 
-    if (toolPolicy.toolRequired && !toolPolicy.hasMatchingWriteTool) {
+    if (toolPolicy.toolRequired && !toolPolicy.hasMatchingRequiredTool) {
+      const requiresWrite = toolPolicy.requiredToolKind === "write";
       const payload = {
         type: "error",
-        code: "TOOL_UNAVAILABLE_FOR_WRITE_INTENT",
-        message:
-          "This request requires a write-capable tool, but no matching write tool is currently available. Please use a supported execute path or ask for a read-only lookup.",
+        code: requiresWrite
+          ? "TOOL_UNAVAILABLE_FOR_WRITE_INTENT"
+          : "TOOL_UNAVAILABLE_FOR_READ_INTENT",
+        message: requiresWrite
+          ? "This request requires a write-capable tool, but no matching write tool is currently available. Please use a supported execute path or ask for a read-only lookup."
+          : "This request requires a grounded read tool, but no matching read tool is currently available. Please retry in AyaOps mode.",
       };
 
       console.warn(`[tool_policy] ${JSON.stringify({
-        event: "TOOL_UNAVAILABLE_FOR_WRITE_INTENT",
+        event: requiresWrite
+          ? "TOOL_UNAVAILABLE_FOR_WRITE_INTENT"
+          : "TOOL_UNAVAILABLE_FOR_READ_INTENT",
         tool_required: true,
         tool_called: false,
         tool_name: "",
@@ -2794,6 +3107,7 @@ Return only operational summary: save status, link status, and next best action.
         simulated_tool_text_detected: false,
         retry_count: 0,
         matched_verb: toolPolicy.matchedVerb,
+        required_tool_kind: toolPolicy.requiredToolKind,
       })}`);
 
       const encoder = new TextEncoder();
@@ -2848,8 +3162,13 @@ Return only operational summary: save status, link status, and next best action.
           if (activeMode === "ayaops") {
             const MAX_TOOL_ROUNDS = 4;
             const MAX_STRICT_RETRIES = 1;
-            const emit = (payload: Record<string, unknown>) =>
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+            const emit = (payload: Record<string, unknown>) => {
+              const normalized =
+                String(payload.type || "") === "write_result"
+                  ? buildWriteResultEvent(payload)
+                  : payload;
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalized)}\n\n`));
+            };
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const collectRound = async (stream: any): Promise<{
@@ -2942,6 +3261,7 @@ Return only operational summary: save status, link status, and next best action.
             let activeCandidateInput = selectedContextCandidateInput;
             let activeCandidateEmail = selectedContext?.candidate_email || "";
             let lastNonEmptyModelText = "";
+            let lastHubReadResult: Record<string, unknown> | null = null;
 
             if (preIngestWriteEvent) {
               emit(preIngestWriteEvent);
@@ -3004,14 +3324,14 @@ Return only operational summary: save status, link status, and next best action.
                     executionOutcomes.push({
                       ok: false,
                       name,
-                      error: `Tool '${name}' is not available in AyaOps URL-grounded mode.`,
+                      error: `Tool '${name}' is not available in the current mode.`,
                     });
                     toolResponses.push({
                       functionResponse: {
                         name,
                         response: {
                           result: null,
-                          error: `Tool '${name}' is not available in AyaOps URL-grounded mode.`,
+                          error: `Tool '${name}' is not available in the current mode.`,
                         },
                       },
                     });
@@ -3043,7 +3363,7 @@ Return only operational summary: save status, link status, and next best action.
                     type: "tool_status",
                     tool: name,
                     status: "running",
-                    label: TOOL_LABELS[name] || `Running ${name.replace(/_/g, " ")}…`,
+                    label: TOOL_LABELS[name] || name.replace(/_/g, " "),
                   });
 
                   const toolStartTime = Date.now();
@@ -3182,6 +3502,9 @@ Return only operational summary: save status, link status, and next best action.
                     executionOutcomes.push({ ok: false, name, error: toolResult.error });
                   } else {
                     executionOutcomes.push({ ok: true, name });
+                    if (name === "access_hub" && toolResult.result && typeof toolResult.result === "object") {
+                      lastHubReadResult = toolResult.result as Record<string, unknown>;
+                    }
 
                     if (name === "get_internal_grounding_context" && toolResult.result && typeof toolResult.result === "object") {
                       const refs = (toolResult.result as { references?: unknown }).references;
@@ -3296,7 +3619,7 @@ Return only operational summary: save status, link status, and next best action.
               if (turnDecision.action === "emit_text") {
                 let textToEmit = finalText;
                 if (sandboxTaskCreated) {
-                  textToEmit = "Preview ready — Review in Sandbox";
+                  textToEmit = "Preview ready. Review in Sandbox.";
                 }
                 if (internalReferences.length > 0 && !/\[INT-\d+\]/i.test(textToEmit)) {
                   const refLines = internalReferences
@@ -3330,8 +3653,95 @@ Return only operational summary: save status, link status, and next best action.
 
               const errorCode =
                 String(turnDecision.code || "TOOL_REQUIRED_FLOW_FAILED").toUpperCase();
+              if (
+                errorCode === "TOOL_NOT_CALLED_WHEN_REQUIRED" &&
+                toolPolicy.requiredToolKind === "read"
+              ) {
+                const fallbackHubPath = deriveAyaopsReadFallbackHubPath(
+                  prompt,
+                  activeCandidateInput || selectedContextCandidateInput || "",
+                );
+                if (fallbackHubPath) {
+                  emit({
+                    type: "tool_status",
+                    tool: "access_hub",
+                    status: "running",
+                    label: TOOL_LABELS.access_hub || "Hub lookup",
+                  });
+
+                  let fallbackResult: Awaited<ReturnType<typeof resolveHub>> | null = null;
+                  let fallbackError = "";
+                  const fallbackStart = Date.now();
+                  try {
+                    fallbackResult = await resolveHub(fallbackHubPath);
+                  } catch (fallbackErr) {
+                    fallbackError =
+                      fallbackErr instanceof Error ? fallbackErr.message : "hub fallback failed";
+                  }
+
+                  emit({
+                    type: "tool_status",
+                    tool: "access_hub",
+                    status: fallbackError ? "failed" : "ok",
+                    latency_ms: Date.now() - fallbackStart,
+                    label: fallbackError
+                      ? `${TOOL_LABELS_DONE.access_hub || "Record loaded"} failed`
+                      : TOOL_LABELS_DONE.access_hub || "Record loaded",
+                  });
+
+                  if (!fallbackError && fallbackResult) {
+                    telemetry.tool_called = true;
+                    telemetry.tool_execution_success = true;
+                    hasExecutedTool = true;
+                    calledToolNames.add("access_hub");
+                    lastHubReadResult = fallbackResult as Record<string, unknown>;
+                    logToolPolicy("TOOL_AUTO_READ_FALLBACK", {
+                      round,
+                      fallback_path: fallbackHubPath,
+                    });
+
+                    roundContents = [
+                      ...roundContents,
+                      { role: "model", parts: roundParts },
+                      {
+                        role: "user",
+                        parts: [
+                          {
+                            functionResponse: {
+                              name: "access_hub",
+                              response: { result: fallbackResult },
+                            },
+                          },
+                        ],
+                      },
+                    ];
+
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const fallbackConfig: any = cachedContentName
+                      ? { cachedContent: cachedContentName, temperature: 1.0 }
+                      : { tools, temperature: 1.0, systemInstruction: systemPrompt };
+
+                    roundStream = await ai.models.generateContentStream({
+                      model: geminiModel,
+                      contents: roundContents,
+                      config: fallbackConfig,
+                    });
+                    round += 1;
+                    continue;
+                  }
+                }
+              }
+              if (errorCode === "EMPTY_RESPONSE" && lastHubReadResult) {
+                const fallbackText = buildAyaopsHubFallbackText(lastHubReadResult);
+                if (fallbackText) {
+                  emit({ type: "text", text: fallbackText });
+                  logToolPolicy("TERMINAL_TEXT_FROM_HUB_FALLBACK", { round });
+                  didEmitTerminal = true;
+                  break;
+                }
+              }
               if (sandboxTaskCreated && errorCode !== "TOOL_EXECUTION_FAILED") {
-                emit({ type: "text", text: "Preview ready — Review in Sandbox" });
+                emit({ type: "text", text: "Preview ready. Review in Sandbox." });
                 didEmitTerminal = true;
                 break;
               }
@@ -3458,7 +3868,7 @@ Return only operational summary: save status, link status, and next best action.
           if (sandboxTaskCreated && !standardTextEmitted) {
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({ type: "text", text: "Preview ready — Review in Sandbox" })}\n\n`,
+                `data: ${JSON.stringify({ type: "text", text: "Preview ready. Review in Sandbox." })}\n\n`,
               ),
             );
           }
