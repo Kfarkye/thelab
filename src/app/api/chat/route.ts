@@ -2077,7 +2077,8 @@ Rule: If the user asks to "draft a reply", "update status", or references "this 
     
     // ── GaC: Direct Git-governance injection via Octokit ──
     if (activeMode === "ayaops" || activeMode === "code") {
-      const constitution = await getCachedConstitution();
+      const ledgerPath = activeMode === "code" ? "docs/ledger/code-engineering.json" : "docs/ledger/recruiter-voice.json";
+      const constitution = await getCachedConstitution(undefined, undefined, ledgerPath);
       fullPrompt = `${fullPrompt}
 
 [System note: LIVE ARCHITECTURE LEDGER - VER: ${constitution.version}

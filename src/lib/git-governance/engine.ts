@@ -20,8 +20,8 @@ const DEFAULT_OWNER = "Kfarkye";
 const DEFAULT_REPO = "thelab";
 const DEFAULT_PATH = "docs/ledger/recruiter-voice.json";
 
-let cachedConstitution: CachedConstitution | null = null;
-const ALLOWED_PATHS = ["architecture-ledger/rules.json", "docs/ledger/recruiter-voice.json"];
+const cachedConstitutions: Record<string, CachedConstitution> = {};
+const ALLOWED_PATHS = ["architecture-ledger/rules.json", "docs/ledger/recruiter-voice.json", "docs/ledger/code-engineering.json"];
 const STRICT_BLOCKLIST = [".env", "private_keys", "secrets", "package.json"];
 
 function isConstitutionFresh(cache: CachedConstitution): boolean {
@@ -47,8 +47,14 @@ function extractAcceptedRules(rawContent: string): GovernanceRule[] {
   });
 }
 
-export function invalidateConstitutionCache(): void {
-  cachedConstitution = null;
+export function invalidateConstitutionCache(path?: string): void {
+  if (path) {
+    delete cachedConstitutions[path];
+  } else {
+    for (const key in cachedConstitutions) {
+      delete cachedConstitutions[key];
+    }
+  }
 }
 
 export async function getCachedConstitution(
@@ -56,8 +62,9 @@ export async function getCachedConstitution(
   repo = DEFAULT_REPO,
   path = DEFAULT_PATH,
 ): Promise<CachedConstitution> {
-  if (cachedConstitution && isConstitutionFresh(cachedConstitution)) {
-    return cachedConstitution;
+  const existing = cachedConstitutions[path];
+  if (existing && isConstitutionFresh(existing)) {
+    return existing;
   }
 
   assertPathIsAllowed(path);
@@ -75,24 +82,26 @@ export async function getCachedConstitution(
     const decodedContent = Buffer.from(content.content, "base64").toString("utf-8");
     const rules = extractAcceptedRules(decodedContent);
 
-    cachedConstitution = {
+    const newCache: CachedConstitution = {
       version: ref.object.sha,
       timestamp: new Date().toISOString(),
       fetchedAt: Date.now(),
       rules,
     };
-
-    return cachedConstitution;
+    
+    cachedConstitutions[path] = newCache;
+    return newCache;
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Falling back to local Git-as-Governance caching.");
-      cachedConstitution = {
+      console.warn(`Falling back to local Git-as-Governance caching for ${path}.`);
+      const fallback: CachedConstitution = {
         version: "local-dev-fallback",
         timestamp: new Date().toISOString(),
         fetchedAt: Date.now(),
         rules: [],
       };
-      return cachedConstitution;
+      cachedConstitutions[path] = fallback;
+      return fallback;
     }
     throw error;
   }
