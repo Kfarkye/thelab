@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/spanner-pool";
+import { normalizeMLBStatusCode } from "@/lib/sports/status";
 
 const LEAGUE_LABEL_BY_ID = new Map<string, string>([
   ["mlb", "MLB"],
@@ -300,7 +301,7 @@ function mapGameTableRow(row: Record<string, unknown>): CanonicalSportsGame {
     awayLogo: row.AwayLogo ? String(row.AwayLogo) : null,
     date: toDateOnly(row.GameDate),
     startTime: toIsoOrNull(row.ScheduledStartAt),
-    status: row.Status ? String(row.Status) : null,
+    status: normalizeMLBStatusCode(row.Status),
     venue: row.Venue ? String(row.Venue) : null,
     sport: "baseball",
     leagueId: "mlb",
@@ -333,8 +334,8 @@ function mapGameResultRow(row: Record<string, unknown>): CanonicalSportsGame {
     startTime: toIsoOrNull(row.StartTime),
     status:
       row.StartTime && new Date(String(row.StartTime)).getTime() > Date.now()
-        ? "scheduled"
-        : "post",
+        ? "SCHEDULED"
+        : "FINAL",
     venue: null,
     sport: row.Sport ? String(row.Sport) : null,
     leagueId,
@@ -545,7 +546,7 @@ export async function searchCanonicalSportsGames(
       id,
       label: `${away} @ ${home}`,
       leagueLabel: "MLB",
-      status: row.Status ? String(row.Status) : null,
+      status: normalizeMLBStatusCode(row.Status),
     });
   }
 

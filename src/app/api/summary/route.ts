@@ -7,6 +7,7 @@ import { listVerdicts } from "@/lib/verdicts/verdict-ledger";
 import { LIVE_ARCHITECTURE_LEDGER_ACCEPTED } from "@/lib/verdicts/live-architecture-ledger";
 import { buildSportsGameUrls } from "@/lib/sports/game-canonical";
 import { computeTrackRecord, listResolvedPicks, todayDateKey } from "@/lib/sports/picks-ledger";
+import { isLivePayloadStale, normalizeMLBStatusCode } from "@/lib/sports/status";
 
 const SPORTS_SOCCER_LEAGUES = [
   { key: "epl", label: "EPL", leagueIds: ["eng.1"] },
@@ -216,6 +217,25 @@ async function sportsSummary() {
     return Number.isFinite(parsed) ? parsed : null;
   };
 
+  const parseLiveSituation = (value: unknown): Record<string, unknown> | null => {
+    if (value == null) return null;
+    if (typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+    if (typeof value !== "string") return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
   const mlbItems = gameListRows.map((r: any) => {
     const row = r.toJSON();
     const awayName = (row.away_team as string) || "TBD";
@@ -233,7 +253,7 @@ async function sportsSummary() {
       awayLogo: (row.away_logo as string) || null,
       date: toDateOnly(row.GameDate),
       startTime: toIsoOrNull(row.ScheduledStartAt),
-      status: (row.Status as string) || null,
+      status: normalizeMLBStatusCode(row.Status),
       venue: (row.Venue as string) || null,
       league: "MLB",
       writeupUrl,
@@ -262,7 +282,8 @@ async function sportsSummary() {
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamScore END) AS HomeScore,
           MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamScore END) AS AwayScore,
           MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.TeamLogoURL END) AS HomeLogo,
-          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo
+          MAX(CASE WHEN LOWER(gr.Side) = 'away' THEN gr.TeamLogoURL END) AS AwayLogo,
+          MAX(CASE WHEN LOWER(gr.Side) = 'home' THEN gr.live_situation END) AS LiveSituation
         FROM GameResult gr
         WHERE LOWER(gr.Sport) = 'baseball'
           AND LOWER(gr.LeagueID) = 'mlb'
@@ -282,6 +303,7 @@ async function sportsSummary() {
         awayScore: number | null;
         homeLogo: string | null;
         awayLogo: string | null;
+        live: Record<string, unknown> | null;
       }
     >();
     for (const r of mlbGrRows) {
@@ -297,6 +319,7 @@ async function sportsSummary() {
         awayScore: toNumberOrNull(row.AwayScore),
         homeLogo: (row.HomeLogo as string) || null,
         awayLogo: (row.AwayLogo as string) || null,
+        live: parseLiveSituation(row.LiveSituation),
       });
     }
     // Merge into mlbItems
@@ -311,6 +334,15 @@ async function sportsSummary() {
         item.total = enrichment.total;
         item.homeScore = enrichment.homeScore;
         item.awayScore = enrichment.awayScore;
+        const hasFreshLivePayload = Boolean(enrichment.live) && !isLivePayloadStale(enrichment.live);
+        if (item.status === "FINAL" || item.status === "POSTPONED") {
+          item.live = null;
+        } else if (hasFreshLivePayload) {
+          item.live = enrichment.live;
+          item.status = "LIVE";
+        } else {
+          item.live = null;
+        }
         // Use ESPN logos if Game table logos are missing
         if (!item.homeLogo && enrichment.homeLogo) item.homeLogo = enrichment.homeLogo;
         if (!item.awayLogo && enrichment.awayLogo) item.awayLogo = enrichment.awayLogo;

@@ -1,0 +1,2 @@
+./scratch/find-gemini.mjs
+./scripts/tests/model-version.test.mjs

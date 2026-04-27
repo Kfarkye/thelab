@@ -1248,6 +1248,30 @@ body {
   color: #4A4741;
 }
 
+.lp-live-games-bucket {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.lp-day-live {
+  background: #ECE6D9;
+  border-left: 3px solid #B8904A;
+}
+
+.lp-day-live .lp-day-label {
+  color: #2A2723;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lp-day-live .lp-day-count {
+  background: #E5DCC7;
+  color: #6B6253;
+}
+
 /* League section headers within dates */
 .lp-league-header {
   display: flex;
@@ -6202,6 +6226,11 @@ body {
   min-width: 0;
 }
 
+.sp-team-name-win {
+  color: #1F1A14;
+  font-weight: 700;
+}
+
 .sp-team-rec {
   font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
   font-size: 11px;
@@ -6222,6 +6251,10 @@ body {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
+}
+
+.sp-score-win {
+  color: #1F1A14;
 }
 
 .sp-line {
@@ -9883,4 +9916,27 @@ body {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* ── MLB Live Situation (Weissach) ─── */
+.mlb-live-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  background: #1F1A14;
+  border: 1px solid rgba(31, 26, 20, 0.2);
+  color: #FAF6EE;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  line-height: 1.2;
+  padding: 3px 7px;
+  border-radius: 28px;
+  white-space: nowrap;
+}
+
+.mlb-base-active {
+  background-color: #f59e0b; /* Amber accent */
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
 }

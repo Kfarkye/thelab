@@ -11,5 +11,6 @@ tmp
 .env*
 .gcloudignore
 scripts
+scratch
 *.md
 tsconfig.tsbuildinfo

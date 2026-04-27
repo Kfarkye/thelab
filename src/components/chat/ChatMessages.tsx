@@ -76,6 +76,64 @@ function extractCandidateNameFromMessage(messageText: string): string | null {
   return null;
 }
 
+function extractSnapshotCandidateName(messageText: string): string | null {
+  const text = String(messageText || "");
+  if (!text) return null;
+
+  const patterns = [
+    /Candidate Profile:\s*\*?\*?\s*([^\n*]+)/i,
+    /Candidate:\s*\*?\*?\s*([^\n*]+)/i,
+    /^\s*\*?\*?Name[:\s]+\*?\*?\s*([^\n*]+)/im,
+    /details for\s+\*?\*?([\w][\w\s.'`-]+[\w])\*?\*?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const normalized = String(match[1] || "")
+      .replace(/[*_]/g, "")
+      .replace(/\s*[•|].*$/, "")
+      .trim();
+    if (normalized) return normalized;
+  }
+
+  const lines = text
+    .split("\n")
+    .map((line) => line.replace(/[*_]/g, "").trim())
+    .filter(Boolean)
+    .slice(0, 12);
+
+  for (const line of lines) {
+    if (
+      /^(record loaded|profile metadata|specialty|status|recent|email|address|emergency contact|last submitted|last profile update|initial docs uploaded progress|recruiter|team leader)/i.test(
+        line,
+      )
+    ) {
+      continue;
+    }
+    const candidate = line.replace(/\s*[•|].*$/, "").trim();
+    if (/^[A-Z][A-Za-z.'`-]+(?:\s+[A-Z][A-Za-z.'`-]+){1,3}$/.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function hasExtractedCandidateSnapshot(messageText: string): boolean {
+  const text = String(messageText || "");
+  if (!text) return false;
+
+  let signals = 0;
+  if (extractSnapshotCandidateName(text)) signals += 1;
+  if (/(candidate profile|profile metadata)/i.test(text)) signals += 1;
+  if (/(email|primary phone|phone|home address|address|location)\s*:/i.test(text)) signals += 1;
+  if (/(profession|specialty)\s*:/i.test(text)) signals += 1;
+  if (/(aya id|nova id|employment type|experience)\s*:/i.test(text)) signals += 1;
+
+  return signals >= 3;
+}
+
 function normalizeDraftTypography(value: string): string {
   if (!value) return "";
   return value
@@ -462,6 +520,12 @@ export function ChatMessages({
   copyToClipboard,
   modeConfig,
 }: ChatMessagesProps) {
+  const imagePromptMessageIds = new Set(
+    visibleMessages
+      .filter((message) => message.role === "user" && Boolean(message.imageUrl))
+      .map((message) => message.id),
+  );
+
   return (
         <div className="c-scroll">
           <div className="c-messages">
@@ -657,7 +721,8 @@ export function ChatMessages({
                                 </button>
                               )}
                               {(state.mode === "ayaops" || state.mode === "facility" || state.mode === "margins") &&
-                                /Candidate Profile[:\s]/i.test(msg.text) &&
+                                hasExtractedCandidateSnapshot(msg.text) &&
+                                Boolean(msg.requestUserMessageId && imagePromptMessageIds.has(msg.requestUserMessageId)) &&
                                 msg.writeResult?.action !== "candidate_ingest" && (
                                 <button
                                   className="c-action-btn c-action-btn-primary"
@@ -666,7 +731,7 @@ export function ChatMessages({
                                 >
                                   {ingestingCandidateMessageId === msg.id
                                     ? "Adding..."
-                                    : "Add to System"}
+                                    : "Add Snapshot"}
                                 </button>
                               )}
                               {msg.writeResult?.action === "candidate_ingest" &&

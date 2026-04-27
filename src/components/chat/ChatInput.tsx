@@ -1,5 +1,5 @@
 import React, { SetStateAction } from "react";
-import { X, Paperclip, Send, UserPlus } from "lucide-react";
+import { X, Paperclip, Send } from "lucide-react";
 import { ChatState, ChatAction, ModeConfig, ImageIntent, SavedImage, ModelOverride } from "@/lib/types/chat";
 
 interface ChatInputProps {
@@ -20,8 +20,6 @@ interface ChatInputProps {
   setModelOverride: (val: ModelOverride) => void;
   uploadingImage: boolean;
   CapabilityDropdown: any;
-  showQuickAddCandidate?: boolean;
-  onQuickAddCandidate?: () => void;
 }
 
 export function ChatInput({
@@ -42,8 +40,6 @@ export function ChatInput({
   setModelOverride,
   uploadingImage,
   CapabilityDropdown,
-  showQuickAddCandidate,
-  onQuickAddCandidate,
 }: ChatInputProps) {
   return (
         <div className="c-dock">
@@ -113,18 +109,6 @@ export function ChatInput({
             <button type="button" className="c-attach-btn" onClick={() => fileInputRef.current?.click()}>
               <Paperclip size={16} />
             </button>
-            {showQuickAddCandidate && onQuickAddCandidate && (
-              <button
-                type="button"
-                className="c-add-candidate-btn"
-                onClick={onQuickAddCandidate}
-                disabled={state.loading || uploadingImage}
-                title="Upload a screenshot to add a candidate"
-              >
-                <UserPlus size={14} />
-                <span>Add candidate</span>
-              </button>
-            )}
             <textarea
               ref={inputRef}
               value={state.input}

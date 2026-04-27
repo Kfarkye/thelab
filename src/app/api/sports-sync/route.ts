@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { Spanner } from "@google-cloud/spanner";
 import crypto from "crypto";
 import { getSportsDb, spannerClient } from "@/lib/spanner-pool";
+import { requireEnv } from "@/lib/env";
+import { normalizeMLBStatusCode } from "@/lib/sports/status";
 
 // ── ESPN Config ───────────────────────────────────────────
 const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports";
@@ -283,6 +285,94 @@ export async function POST(req: NextRequest) {
         }
 
         const { written, errors } = await upsertToSpanner(allRows);
+
+        // Fetch MLB Live Status via StatsAPI schedule → gamePk resolution
+        if (config.leagueId === "mlb") {
+          try {
+            requireEnv("MLB_SYNC_ENABLED");
+            const { fetchMLBLiveState } = await import("@/lib/sports/mlb-api");
+
+            // Step 1: Fetch today's MLB schedule to get gamePk → team mapping
+            const schedRes = await fetch(
+              `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${date}`,
+              { signal: AbortSignal.timeout(10_000) }
+            );
+            if (!schedRes.ok) throw new Error(`MLB schedule HTTP ${schedRes.status}`);
+            const schedData = await schedRes.json();
+            
+            // Step 2: Build team name → gamePk lookup (normalize to lowercase for fuzzy matching)
+            const gamePkByTeam = new Map<string, { gamePk: string; status: string }>();
+            for (const d of schedData.dates || []) {
+              for (const g of d.games || []) {
+                const status = g.status?.detailedState || "Unknown";
+                const homeName = (g.teams?.home?.team?.name || "").toLowerCase();
+                const awayName = (g.teams?.away?.team?.name || "").toLowerCase();
+                const pk = String(g.gamePk);
+                gamePkByTeam.set(homeName, { gamePk: pk, status });
+                gamePkByTeam.set(awayName, { gamePk: pk, status });
+              }
+            }
+
+            // Step 3: For each ESPN home row, resolve gamePk and fetch live state
+            const seen = new Set<string>();
+            for (const row of allRows) {
+              if (row.Side !== "home") continue;
+              const teamKey = (row.TeamName || "").toLowerCase();
+              const match = gamePkByTeam.get(teamKey);
+              if (!match || seen.has(match.gamePk)) continue;
+              seen.add(match.gamePk);
+
+              const normalizedStatus = normalizeMLBStatusCode(match.status);
+              const db = getSportsDb();
+              const homeId = allRows.find((r: any) => r.MatchID === row.MatchID && r.Side === "home")?.GameResultID;
+              const awayId = allRows.find((r: any) => r.MatchID === row.MatchID && r.Side === "away")?.GameResultID;
+              const updates: any[] = [];
+
+              if (normalizedStatus === "LIVE") {
+                const liveData = await fetchMLBLiveState(match.gamePk);
+                if (liveData) {
+                  if (homeId) updates.push({
+                    GameResultID: homeId,
+                    live_situation: liveData,
+                    last_sync_at: Spanner.COMMIT_TIMESTAMP,
+                    is_live_stale: false,
+                  });
+                  if (awayId) updates.push({
+                    GameResultID: awayId,
+                    live_situation: liveData,
+                    last_sync_at: Spanner.COMMIT_TIMESTAMP,
+                    is_live_stale: false,
+                  });
+                }
+              } else {
+                // Any non-live state must clear stale in-game payload so finished games
+                // do not linger in the live bucket on the client.
+                if (homeId) updates.push({
+                  GameResultID: homeId,
+                  live_situation: null,
+                  last_sync_at: Spanner.COMMIT_TIMESTAMP,
+                  is_live_stale: true,
+                });
+                if (awayId) updates.push({
+                  GameResultID: awayId,
+                  live_situation: null,
+                  last_sync_at: Spanner.COMMIT_TIMESTAMP,
+                  is_live_stale: true,
+                });
+              }
+
+              if (updates.length > 0) {
+                await db.table("GameResult").update(updates);
+                console.log(
+                  `[mlb-live] ${normalizedStatus} ${row.TeamName} vs ${row.OpponentName} (gamePk=${match.gamePk})`,
+                );
+              }
+            }
+          } catch (e: any) {
+            console.warn("[mlb-live] MLB live fetch failed:", e.message);
+          }
+        }
+
         totalEvents += events.length;
         totalWritten += written;
 

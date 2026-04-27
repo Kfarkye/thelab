@@ -20,6 +20,24 @@ interface IngestCandidateBody {
   ingested_by?: string;
 }
 
+function normalizeString(value: unknown, maxLength: number): string | null {
+  const normalized = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
+}
+
+function normalizeEmail(value: unknown): string | null {
+  const normalized = normalizeString(value, 320);
+  return normalized ? normalized.toLowerCase() : null;
+}
+
+function normalizeState(value: unknown): string | null {
+  const normalized = normalizeString(value, 2);
+  return normalized ? normalized.toUpperCase() : null;
+}
+
 /**
  * POST /api/candidates/ingest
  *
@@ -33,8 +51,27 @@ interface IngestCandidateBody {
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as IngestCandidateBody;
+    const sanitized = {
+      first_name: normalizeString(body.first_name, 100),
+      last_name: normalizeString(body.last_name, 100),
+      email: normalizeEmail(body.email),
+      phone: normalizeString(body.phone, 40),
+      profession: normalizeString(body.profession, 100),
+      specialty: normalizeString(body.specialty, 100),
+      current_city: normalizeString(body.current_city, 100),
+      current_state: normalizeState(body.current_state),
+      employment_type: normalizeString(body.employment_type, 60),
+      nova_id: normalizeString(body.nova_id, 32),
+      source: normalizeString(body.source, 40),
+      notes: normalizeString(body.notes, 500),
+      ingested_by: normalizeString(body.ingested_by, 120),
+      years_experience:
+        typeof body.years_experience === "number" && Number.isFinite(body.years_experience)
+          ? body.years_experience
+          : undefined,
+    };
 
-    if (!body.first_name || !body.last_name) {
+    if (!sanitized.first_name || !sanitized.last_name) {
       return Response.json(
         { error: "first_name and last_name are required" },
         { status: 400 },
@@ -44,10 +81,10 @@ export async function POST(request: NextRequest) {
     const db = getRecruitingDb();
 
     // ── Deduplicate by email on hc_candidates ──────────────────
-    if (body.email) {
+    if (sanitized.email) {
       const [existing] = await db.run({
         sql: `SELECT id, first_name, last_name, nova_id FROM hc_candidates WHERE email = @email LIMIT 1`,
-        params: { email: body.email },
+        params: { email: sanitized.email },
         types: { email: { type: "string" } },
       });
       if (existing.length > 0) {
@@ -71,7 +108,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Also check by full name to catch cases without email ────
-    const nameLower = `${body.first_name} ${body.last_name}`.toLowerCase().trim();
+    const nameLower = `${sanitized.first_name} ${sanitized.last_name}`.toLowerCase().trim();
     const [nameMatch] = await db.run({
       sql: `SELECT id, first_name, last_name, nova_id FROM hc_candidates
             WHERE LOWER(CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))) = @nameLower
@@ -105,25 +142,25 @@ export async function POST(request: NextRequest) {
     await table.insert([
       {
         id: candidateId,
-        nova_id: body.nova_id || null,
-        first_name: body.first_name,
-        last_name: body.last_name,
-        email: body.email || null,
-        phone: body.phone || null,
-        profession: body.profession || null,
-        specialty: body.specialty || null,
-        home_city: body.current_city || null,
-        home_state: body.current_state || null,
-        source: body.source || "screenshot",
+        nova_id: sanitized.nova_id || null,
+        first_name: sanitized.first_name,
+        last_name: sanitized.last_name,
+        email: sanitized.email || null,
+        phone: sanitized.phone || null,
+        profession: sanitized.profession || null,
+        specialty: sanitized.specialty || null,
+        home_city: sanitized.current_city || null,
+        home_state: sanitized.current_state || null,
+        source: sanitized.source || "screenshot",
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
     ]);
 
-    const candidateName = `${body.first_name} ${body.last_name}`;
+    const candidateName = `${sanitized.first_name} ${sanitized.last_name}`;
     const hubUrl = `/api/hub/candidates/${encodeURIComponent(candidateId)}`;
-    const novaUrl = body.nova_id
-      ? `https://nova.ayahealthcare.com/#/recruiting/candidates/${body.nova_id}/new-profile/about`
+    const novaUrl = sanitized.nova_id
+      ? `https://nova.ayahealthcare.com/#/recruiting/candidates/${sanitized.nova_id}/new-profile/about`
       : null;
 
     return Response.json({
@@ -131,7 +168,7 @@ export async function POST(request: NextRequest) {
       result: {
         outcome: "inserted",
         candidate_id: candidateId,
-        nova_id: body.nova_id || null,
+        nova_id: sanitized.nova_id || null,
         name: candidateName,
         hub_url: hubUrl,
         nova_url: novaUrl,

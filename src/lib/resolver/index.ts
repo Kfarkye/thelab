@@ -128,11 +128,19 @@ function parsePath(rawPath: string): {
     };
   }
 
-  const entityRaw = trimmed.substring(0, slashIndex).toLowerCase();
-  const identifier = trimmed.substring(slashIndex + 1).trim();
-  const entity = ENTITY_ALIASES[entityRaw];
+  let entityRaw = trimmed.substring(0, slashIndex).toLowerCase();
+  let identifier = trimmed.substring(slashIndex + 1).trim();
+  
+  // Special rewrite for full sports paths like sports/mlb/game/747040
+  if (entityRaw === "sports" && identifier.includes("/game/")) {
+    const parts = identifier.split("/game/");
+    entityRaw = "games";
+    identifier = parts[1];
+  }
 
-  if (!entity) {
+  const entity = ENTITY_ALIASES[entityRaw] || entityRaw; // Fallback so we can route appropriately
+
+  if (!ENTITY_ALIASES[entityRaw] && entityRaw !== "games") {
     // Unknown entity prefix — treat the whole thing as a candidate search
     return {
       entity: "candidates",

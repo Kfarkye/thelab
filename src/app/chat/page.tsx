@@ -840,7 +840,6 @@ function RightPanel({
   imagesLoading,
   onUseImage,
   onTogglePin,
-  onAddCandidate,
   onLinkCandidate,
   onProcessCredential,
   selectedCandidateId,
@@ -852,7 +851,6 @@ function RightPanel({
   imagesLoading: boolean;
   onUseImage: (image: SavedImage) => void;
   onTogglePin: (image: SavedImage) => void;
-  onAddCandidate: (image: SavedImage) => void;
   onLinkCandidate: (image: SavedImage) => void;
   onProcessCredential?: (image: SavedImage) => void;
   selectedCandidateId: string | null;
@@ -958,9 +956,6 @@ function RightPanel({
                     </div>
                     <div className="rp-image-actions">
                       <button className="rp-image-action" onClick={() => onUseImage(image)}>Use in chat</button>
-                      <button className="rp-image-action" onClick={() => onAddCandidate(image)}>
-                        Add candidate
-                      </button>
                       <button className="rp-image-action" onClick={() => onTogglePin(image)}>
                         {image.isPinned ? "Unpin" : "Pin"}
                       </button>
@@ -1147,7 +1142,110 @@ export default function ChatPage() {
   const announcedSandboxTasksRef = useRef<Set<string>>(new Set());
   const lastAutoOpenedMsgIdRef = useRef<string | null>(null);
 
-  const modeConfig = MODES[state.mode];
+  const modeConfig = useMemo(() => {
+    const base = MODES[state.mode];
+    if (!summary || !Array.isArray(summary.items)) return base;
+    const sg = [...base.suggestions];
+
+    if (state.mode === "sports") {
+      const items = summary.items;
+      const picks = Array.isArray(summary.sportsPicks) ? summary.sportsPicks : [];
+
+      const readLivePayload = (item: PanelItem): Record<string, unknown> | null => {
+        if (item.live && typeof item.live === "object" && !Array.isArray(item.live)) {
+          return item.live;
+        }
+        return null;
+      };
+
+      const readLiveNumber = (payload: Record<string, unknown> | null, key: string): number | null => {
+        if (!payload) return null;
+        const value = payload[key];
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+
+      const readLiveString = (payload: Record<string, unknown> | null, key: string): string => {
+        if (!payload) return "";
+        const value = payload[key];
+        return typeof value === "string" ? value.trim() : "";
+      };
+
+      const liveGames = items.filter((item) => {
+        const status = typeof item.status === "string" ? item.status.toLowerCase() : "";
+        if (item.is_live_stale) return false;
+        if (status.includes("final") || status.includes("post") || status.includes("scheduled")) return false;
+        if (status.includes("live")) return true;
+        return readLivePayload(item) != null;
+      });
+
+      if (liveGames.length > 0) {
+        const g = liveGames[0];
+        const livePayload = readLivePayload(g);
+        const title = g.label || g.display || `${g.awayName || g.away || "Away"} vs ${g.homeName || g.home || "Home"}`;
+        const inning = readLiveNumber(livePayload, "inning");
+        const half = readLiveString(livePayload, "half").toUpperCase();
+        const periodStr = inning != null ? `${half === "TOP" ? "Top" : "Bot"} ${inning}` : "";
+        let scoreStr = "";
+        if (g.awayScore != null && g.homeScore != null) {
+          scoreStr = `${g.awayScore}-${g.homeScore}`;
+        } else {
+          const balls = readLiveNumber(livePayload, "balls");
+          const strikes = readLiveNumber(livePayload, "strikes");
+          if (balls != null && strikes != null) scoreStr = `${balls}-${strikes}`;
+        }
+        const contextParts = [periodStr, scoreStr].filter(Boolean);
+        const contextStr = contextParts.length > 0 ? ` — ${contextParts.join(", ")}` : "";
+        sg[0] = `${title} is live${contextStr}. What's the situation?`;
+      }
+
+      const nowLocal = new Date();
+      const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
+      
+      const todayUpcomingGames = items.filter((i) => {
+        const d = i.startTime ? String(i.startTime).slice(0, 10) : (i.date ? String(i.date).slice(0, 10) : "");
+        if (d !== todayStr) return false;
+        const statusStr = String(i.status || "").toLowerCase();
+        return !liveGames.includes(i) && !statusStr.includes("final");
+      });
+      
+      if (todayUpcomingGames.length > 0) {
+        sg[1] = `${todayUpcomingGames.length} games are upcoming today. Show me the lines.`;
+      }
+
+      const pendingPicks = picks.filter((p) => p.grading_status === "pending" || !p.result);
+      if (pendingPicks.length > 0) {
+        sg[2] = `You have ${pendingPicks.length} pending picks. Review grading status.`;
+      }
+      return { ...base, suggestions: sg };
+    }
+
+    if (state.mode === "ayaops") {
+      const items = summary.items;
+      let monthEndedCount = 0;
+      let credentialGapsCount = 0;
+      
+      for (const i of items) {
+        if (typeof i.touchDaysToEnd === "number" && i.touchDaysToEnd > -30 && i.touchDaysToEnd <= 30) {
+          monthEndedCount++;
+        }
+        const status = String(i.derivedCurrentStatus || i.assignmentStatus || i.status || "").toLowerCase();
+        if (status.includes("credential") || status.includes("pending")) {
+          credentialGapsCount++;
+        }
+      }
+      
+      if (monthEndedCount > 0) {
+        sg[0] = `${monthEndedCount} contracts ended this month — review pipeline impact`;
+      }
+      if (credentialGapsCount > 0) {
+        sg[2] = `${credentialGapsCount} travelers flagged for credential gaps.`;
+      }
+      return { ...base, suggestions: sg };
+    }
+
+    return base;
+  }, [state.mode, summary]);
   const isOpsMode =
     state.mode === "ayaops" ||
     state.mode === "facility" ||
@@ -1674,9 +1772,9 @@ export default function ChatPage() {
     if (state.mode === "sports") {
       setSelectedWorkspaceItem(null);
       dispatch({ type: "SET_SELECTED_CANDIDATE", payload: null });
-      const canonicalUrl = item.publicUrl || item.apiUrl || item.hubUrl || "";
-      if (canonicalUrl) {
-        window.open(canonicalUrl, "_blank", "noopener,noreferrer");
+      const canonicalGameUrl = item.publicUrl || (item.id ? `/sports/games/${encodeURIComponent(item.id)}` : "");
+      if (canonicalGameUrl) {
+        window.location.assign(canonicalGameUrl);
       } else {
         const matchup = item.away && item.home
           ? `${item.away} vs ${item.home}`
@@ -1762,33 +1860,6 @@ export default function ChatPage() {
   const handleUseSavedImage = (image: SavedImage) => {
     dispatch({ type: "SET_PENDING_IMAGE", payload: null });
     setPendingSavedImage(image);
-    inputRef.current?.focus();
-  };
-
-  const handleAddCandidateFromSavedImage = (image: SavedImage) => {
-    dispatch({ type: "SET_PENDING_IMAGE", payload: null });
-    dispatch({ type: "SET_IMAGE_INTENT", payload: "add_candidate" });
-    setPendingSavedImage(image);
-    if (!state.input.trim()) {
-      dispatch({ type: "SET_INPUT", payload: "Add this candidate to the system from the screenshot." });
-    }
-    inputRef.current?.focus();
-  };
-
-  const handleQuickAddCandidate = () => {
-    if (state.loading || uploadingImage) return;
-    if (state.mode !== "ayaops") {
-      switchMode("ayaops");
-    }
-    dispatch({ type: "SET_PENDING_IMAGE", payload: null });
-    setPendingSavedImage(null);
-    dispatch({ type: "SET_IMAGE_INTENT", payload: "add_candidate" });
-    if (!state.input.trim()) {
-      dispatch({ type: "SET_INPUT", payload: "Add this candidate to the system from the screenshot." });
-    }
-    window.setTimeout(() => {
-      fileInputRef.current?.click();
-    }, 0);
     inputRef.current?.focus();
   };
 
@@ -1960,6 +2031,44 @@ export default function ChatPage() {
   const handleAddCandidateToSystem = useCallback(
     async (message: Message) => {
       const text = message.text || "";
+      const normalizeTextField = (value: string | null | undefined, maxLength: number): string | null => {
+        const normalized = String(value || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!normalized) return null;
+        return normalized.slice(0, maxLength);
+      };
+
+      const parseCityStateFromSnapshot = (
+        snapshotText: string,
+      ): { city: string | null; stateCode: string | null } => {
+        const lines = snapshotText
+          .split("\n")
+          .map((line) => line.replace(/[*_]/g, "").trim())
+          .filter(Boolean);
+
+        const locationLine = lines.find((line) =>
+          /^(?:[-•]\s*)?(?:home address|address|location)\s*:/i.test(line),
+        );
+
+        const candidateSources: string[] = [];
+        if (locationLine) {
+          candidateSources.push(locationLine.replace(/^(?:[-•]\s*)?(?:home address|address|location)\s*:\s*/i, ""));
+        }
+        candidateSources.push(snapshotText);
+
+        for (const source of candidateSources) {
+          const cityStateMatch = source.match(/(?:,\s*|\b)([A-Za-z .'-]{2,80}?)\s*,\s*([A-Z]{2})(?:\b|[^A-Z])/);
+          if (!cityStateMatch) continue;
+          const parsedCity = normalizeTextField(cityStateMatch[1], 100);
+          const parsedState = normalizeTextField(cityStateMatch[2], 2)?.toUpperCase() || null;
+          if (parsedCity && parsedState) {
+            return { city: parsedCity, stateCode: parsedState };
+          }
+        }
+
+        return { city: null, stateCode: null };
+      };
 
       // Parse structured candidate fields from the AI's markdown output
       const extract = (pattern: RegExp): string | null => {
@@ -1969,8 +2078,32 @@ export default function ChatPage() {
 
       // Extract candidate name — try specific heading patterns first
       let fullName = extract(/Candidate Profile:\s*\*?\*?\s*(.+)/i)
+        || extract(/Candidate:\s*\*?\*?\s*([^\n*]+)/i)
+        || extract(/^Name[:\s]*([^\n*]+)/im)
         || extract(/details for\s+\*?\*?([\w][\w\s]+[\w])\*?\*?\s/i)
         || extract(/\*\*?(?:Name|Candidate)[:\s]*\*?\*?\s*(.+)/i);
+
+      if (!fullName) {
+        const lines = text
+          .split("\n")
+          .map((line) => line.replace(/[*_]/g, "").trim())
+          .filter(Boolean)
+          .slice(0, 12);
+        for (const line of lines) {
+          if (
+            /^(record loaded|profile metadata|specialty|status|recent|email|address|emergency contact|last submitted|last profile update|initial docs uploaded progress|recruiter|team leader)/i.test(
+              line,
+            )
+          ) {
+            continue;
+          }
+          const candidateLine = line.replace(/\s*[•|].*$/, "").trim();
+          if (/^[A-Z][A-Za-z.'`-]+(?:\s+[A-Z][A-Za-z.'`-]+){1,3}$/.test(candidateLine)) {
+            fullName = candidateLine;
+            break;
+          }
+        }
+      }
 
       if (!fullName) {
         appendAssistantSystemMessage("Could not extract candidate name from this message.");
@@ -1984,21 +2117,25 @@ export default function ChatPage() {
         .trim();
 
       const nameParts = fullName.split(/\s+/);
-      const firstName = nameParts[0] || "";
-      const lastName = nameParts.slice(1).join(" ") || "";
+      const firstName = normalizeTextField(nameParts[0] || "", 100) || "";
+      const lastName = normalizeTextField(nameParts.slice(1).join(" "), 100) || "";
 
-      const novaId = extract(/(?:Aya ID|Nova ID)[:\s]*(\d+)/i);
-      const email = extract(/(?:Email)[:\s]*([^\s*]+@[^\s*]+)/i);
-      const phone = extract(/(?:Primary Phone)[:\s]*([\d().\-\s+]+)/i);
-      const profession = extract(/(?:Profession)[:\s]*([^\n*]+)/i)?.replace(/:\s*$/, "");
-      const specialty = extract(/(?:Specialty)[:\s]*([^\n*]+)/i)?.replace(/:\s*$/, "");
+      const novaId = normalizeTextField(extract(/(?:Aya ID|Nova ID)[:\s]*(\d+)/i), 32);
+      const email = normalizeTextField(extract(/(?:Email)[:\s]*([^\s*]+@[^\s*]+)/i), 320);
+      const phone = normalizeTextField(extract(/(?:Primary Phone)[:\s]*([\d().\-\s+]+)/i), 40);
+      const profession = normalizeTextField(
+        extract(/(?:Profession)[:\s]*([^\n*]+)/i)?.replace(/:\s*$/, ""),
+        100,
+      );
+      const specialty = normalizeTextField(
+        extract(/(?:Specialty)[:\s]*([^\n*]+)/i)?.replace(/:\s*$/, ""),
+        100,
+      );
       const experienceRaw = extract(/(?:Experience)[:\s]*(\d+)/i);
-      const employmentType = extract(/(?:Employment Type)[:\s]*([^\n*]+)/i);
+      const employmentType = normalizeTextField(extract(/(?:Employment Type)[:\s]*([^\n*]+)/i), 60);
 
-      // Parse city/state from address or location field
-      const addressMatch = text.match(/(?:Home Address|Address|Location)[:\s]*[^,]*,\s*([^,]+),\s*([A-Z]{2})/i);
-      const city = addressMatch ? addressMatch[1].trim() : null;
-      const stateCode = addressMatch ? addressMatch[2].trim() : null;
+      // Parse city/state from line-safe address/location fields.
+      const { city, stateCode } = parseCityStateFromSnapshot(text);
 
       setIngestingCandidateMessageId(message.id);
       try {
@@ -3466,8 +3603,6 @@ export default function ChatPage() {
           setModelOverride={setModelOverride}
           uploadingImage={uploadingImage}
           CapabilityDropdown={CapabilityDropdown}
-          showQuickAddCandidate={state.mode === "ayaops"}
-          onQuickAddCandidate={handleQuickAddCandidate}
         />
       </div>
 
@@ -3480,7 +3615,6 @@ export default function ChatPage() {
           imagesLoading={imagesLoading}
           onUseImage={handleUseSavedImage}
           onTogglePin={handleToggleImagePin}
-          onAddCandidate={handleAddCandidateFromSavedImage}
           onLinkCandidate={handleLinkImageCandidate}
           onProcessCredential={handleProcessCredential}
           selectedCandidateId={state.selectedCandidate?.id || null}

@@ -1,5 +1,5 @@
 import React, { useRef, useState, useMemo, useCallback, useEffect } from "react";
-import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, UserPlus, Calculator } from "lucide-react";
+import { Send, Copy, Check, Plus, ChevronDown, ChevronRight, X, Paperclip, Mic, Search, MoreHorizontal, PanelLeft, Loader2, CheckCircle, AlertCircle, Zap, ShieldCheck, MapPin, ExternalLink, FileText, Phone, MessageSquare, Mail, Calculator } from "lucide-react";
 import { ConsoleMode, SummaryData, PanelItem } from "@/lib/types/chat";
 import {
   formatShortDate, readStringSafe, formatAssignmentWindow,
@@ -8,6 +8,7 @@ import {
   buildLicensingReferenceUrl, inferHealthcareContextFromLabel
 } from "@/lib/chat-utils";
 import { MODES } from "@/lib/chat-modes";
+import { isLivePayloadStale, normalizeMLBStatusCode } from "@/lib/sports/status";
 
 export // --- Left Panel ---
   function LeftPanel({
@@ -419,51 +420,59 @@ export // --- Left Panel ---
           "Belgian Pro League": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/144.png&w=40&h=40",
           "Argentina Primera": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/1.png&w=40&h=40",
         };
-        // Collect leagues that have games today; if none, use the most recent date with games
-        const todayLeagues: { name: string; count: number; logo: string | null }[] = [];
-        const seen = new Set<string>();
+        const leaguesWithGamesToday = new Set<string>();
         const counts = new Map<string, number>();
-
-        // First pass: try today
+        const firstDateByLeague = new Map<string, string>();
         for (const item of items) {
           const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
-          if (d !== todayStr) continue;
           const league = item.league || "Other";
+
           counts.set(league, (counts.get(league) || 0) + 1);
+
+          if (d && !firstDateByLeague.has(league)) {
+            firstDateByLeague.set(league, d);
+          }
+          if (d === todayStr) {
+            leaguesWithGamesToday.add(league);
+          }
         }
 
-        // Fallback: if no games today, find the most recent date that has games
-        let activeDate = todayStr;
-        if (counts.size === 0) {
-          let latestDate = "";
-          for (const item of items) {
-            const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
-            if (d && d > latestDate) latestDate = d;
-          }
-          if (latestDate) {
-            activeDate = latestDate;
-            for (const item of items) {
-              const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
-              if (d !== latestDate) continue;
-              const league = item.league || "Other";
-              counts.set(league, (counts.get(league) || 0) + 1);
+        const sortedLeagues = Array.from(counts.entries())
+          .map(([name, count]) => {
+            const hasGamesToday = leaguesWithGamesToday.has(name);
+            return {
+              name,
+              count,
+              logo: leagueLogoMap[name] || null,
+              hasGamesToday,
+              targetDate: hasGamesToday ? todayStr : firstDateByLeague.get(name) || "",
+            };
+          })
+          .sort((a, b) => {
+            if (a.hasGamesToday !== b.hasGamesToday) {
+              return a.hasGamesToday ? -1 : 1;
             }
-          }
-        }
+            if (a.count !== b.count) {
+              return b.count - a.count;
+            }
+            return a.name.localeCompare(b.name);
+          });
 
-        for (const [name, count] of counts) {
-          todayLeagues.push({ name, count, logo: leagueLogoMap[name] || null });
+        if (process.env.NODE_ENV !== "production" && sortedLeagues.length < counts.size) {
+          throw new Error("League loss during UI formatting");
         }
-        if (todayLeagues.length === 0) return null;
+        if (sortedLeagues.length === 0) return null;
         return (
           <div className="lp-league-nav" aria-label="Quick league navigation">
-            {todayLeagues.map((lg) => (
+            {sortedLeagues.map((lg) => (
               <button
                 key={lg.name}
                 type="button"
                 className="lp-league-chip"
                 onClick={() => {
-                  const el = itemsScrollRef.current?.querySelector(`[data-league-id="${activeDate}-${lg.name}"]`);
+                  const el = itemsScrollRef.current?.querySelector(
+                    `[data-league-id="${lg.targetDate}-${lg.name}"]`,
+                  );
                   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
               >
@@ -550,10 +559,127 @@ export // --- Left Panel ---
           (() => {
             // Sports mode: group by date with day separators
             if (mode === "sports") {
+              const normalizeStatusText = (value: unknown): string => {
+                if (typeof value !== "string") return "";
+                return value.trim().toLowerCase();
+              };
+
+              const statusIncludesAny = (text: string, values: string[]): boolean =>
+                values.some((value) => text.includes(value));
+
+              const isLiveGame = (item: PanelItem): boolean => {
+                const livePayload =
+                  item.live && typeof item.live === "object" && !Array.isArray(item.live)
+                    ? (item.live as Record<string, unknown>)
+                    : null;
+                const normalizedStatus = normalizeMLBStatusCode(item.status);
+
+                if (normalizedStatus === "FINAL" || normalizedStatus === "POSTPONED") {
+                  return false;
+                }
+
+                if (normalizedStatus === "LIVE") {
+                  return livePayload ? !isLivePayloadStale(livePayload) : true;
+                }
+
+                const statusCandidates = [
+                  item.status,
+                  livePayload?.status,
+                  livePayload?.state,
+                  livePayload?.game_status,
+                  livePayload?.gameState,
+                  livePayload?.gameStatus,
+                ]
+                  .map(normalizeStatusText)
+                  .filter(Boolean);
+
+                const liveKeywords = [
+                  "live",
+                  "in progress",
+                  "in_progress",
+                  "in-play",
+                  "inplay",
+                  "inning",
+                  "quarter",
+                  "period",
+                  "halftime",
+                  "overtime",
+                  "ot",
+                  "top",
+                  "bottom",
+                ];
+                if (statusCandidates.some((value) => statusIncludesAny(value, liveKeywords))) return true;
+                if (!livePayload || isLivePayloadStale(livePayload)) return false;
+
+                const structuralLiveFields = [
+                  "inning",
+                  "outs",
+                  "balls",
+                  "strikes",
+                  "on_first",
+                  "on_second",
+                  "on_third",
+                  "onFirst",
+                  "onSecond",
+                  "onThird",
+                  "quarter",
+                  "period",
+                  "clock",
+                  "time_remaining",
+                  "timeRemaining",
+                  "progress",
+                ];
+
+                if (structuralLiveFields.some((key) => livePayload[key] != null)) return true;
+                return false;
+              };
+
+              const getLiveBadge = (item: PanelItem): string => {
+                const livePayload =
+                  item.live && typeof item.live === "object" && !Array.isArray(item.live)
+                    ? (item.live as Record<string, unknown>)
+                    : null;
+                if (!livePayload) return "Live";
+
+                const statusLike = [
+                  livePayload.progress,
+                  livePayload.state,
+                  livePayload.status,
+                  livePayload.game_status,
+                  livePayload.gameState,
+                  livePayload.gameStatus,
+                  livePayload.clock,
+                  livePayload.time_remaining,
+                  livePayload.timeRemaining,
+                ].find((value) => typeof value === "string" && value.trim().length > 0) as string | undefined;
+
+                if (statusLike) {
+                  return statusLike.trim().slice(0, 22);
+                }
+
+                if (livePayload.inning != null) return `Inning ${String(livePayload.inning)}`;
+                if (livePayload.quarter != null) return `Q${String(livePayload.quarter)}`;
+                if (livePayload.period != null) return `P${String(livePayload.period)}`;
+                return "Live";
+              };
+
+              const liveStateById = new Map<string, { isLive: boolean; badge: string }>();
+              for (const item of filtered) {
+                const live = isLiveGame(item);
+                liveStateById.set(item.id, { isLive: live, badge: live ? getLiveBadge(item) : "Live" });
+              }
+
+              const liveGames = filtered.filter((item) => liveStateById.get(item.id)?.isLive === true);
+              const scheduledGames = filtered.filter((item) => liveStateById.get(item.id)?.isLive !== true);
+
+              if (process.env.NODE_ENV !== "production" && liveGames.some((game) => liveStateById.get(game.id)?.isLive !== true)) {
+                throw new Error("Invariant failed: non-live game sorted into live bucket");
+              }
+
               // Group by date first
               const grouped: { date: string; label: string; items: PanelItem[] }[] = [];
               let lastDate = "";
-              for (const item of filtered) {
+              for (const item of scheduledGames) {
                 const d = item.startTime ? item.startTime.slice(0, 10) : item.date || "";
                 if (d !== lastDate) {
                   const dateObj = new Date(d + "T12:00:00Z");
@@ -595,103 +721,129 @@ export // --- Left Panel ---
                 "Argentina Primera": "https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/1.png&w=40&h=40",
               };
 
-              return grouped.map((group) => {
-                const isToday = group.date === todayISO;
-                const isPast = group.date < todayISO;
-
-                // Sub-group by league within each date
-                const leagueOrder: string[] = [];
-                const leagueMap = new Map<string, PanelItem[]>();
-                for (const item of group.items) {
-                  const league = item.league || "Other";
-                  if (!leagueMap.has(league)) {
-                    leagueOrder.push(league);
-                    leagueMap.set(league, []);
-                  }
-                  leagueMap.get(league)!.push(item);
-                }
-
+              const renderGameRow = (item: PanelItem) => {
+                const hasWriteup = Boolean(item.writeupUrl);
+                const liveState = liveStateById.get(item.id);
+                const liveBadge = liveState?.isLive ? liveState.badge : null;
+                const statusText = normalizeStatusText(item.status);
+                const isScheduledStatus = statusIncludesAny(statusText, ["pre", "scheduled", "pregame", "pre-game"]);
+                const hasAwayScore = Number.isFinite(item.awayScore as number);
+                const hasHomeScore = Number.isFinite(item.homeScore as number);
+                const hasScores = hasAwayScore && hasHomeScore;
+                const showScores = hasScores && (!isScheduledStatus || Boolean(liveBadge));
+                const awayWins = showScores && (item.awayScore as number) > (item.homeScore as number);
+                const homeWins = showScores && (item.homeScore as number) > (item.awayScore as number);
                 return (
-                  <div key={group.date} data-date={group.date}>
-                    <div className={`lp-day-separator ${isToday ? 'lp-day-today' : ''} ${isPast ? 'lp-day-past' : ''}`}>
-                      <span className="lp-day-label">{isToday ? 'Today' : group.label}</span>
-                      <span className="lp-day-count">{group.items.length}</span>
-                    </div>
-                    {leagueOrder.map((league) => {
-                      const leagueItems = leagueMap.get(league)!;
-                      const leagueLogo = leagueLogoMap[league] || null;
-                      return (
-                        <div key={`${group.date}-${league}`} data-league-id={`${group.date}-${league}`}>
-                          {/* League section header */}
-                          <div className="lp-league-header">
-                            {leagueLogo && (
-                              <img src={leagueLogo} alt="" className="lp-league-logo" />
-                            )}
-                            <span className="lp-league-name">{league}</span>
-                            <span className="lp-league-count">{leagueItems.length}</span>
-                          </div>
-                          {leagueItems.map((item) => {
-                            const hasWriteup = Boolean(item.writeupUrl);
-                            return (
-                              <div
-                                key={item.id}
-                                className={`lp-item lp-item-game ${hasWriteup ? "sp-match-linked" : ""}`}
-                                onClick={() => {
-                                  if (hasWriteup) {
-                                    window.open(item.writeupUrl!, "_blank");
-                                  } else {
-                                    onItemClick(item);
-                                  }
-                                }}
-                              >
-                                <div className="sp-card">
-                                  {/* Team rows */}
-                                  <div className="sp-matchup">
-                                    <div className="sp-team-row">
-                                      {item.awayLogo && <img src={item.awayLogo} alt="" className="sp-team-icon" />}
-                                      <span className="sp-team-name">{item.away || "TBD"}</span>
-                                      {item.awayRecord && <span className="sp-team-rec">{item.awayRecord}</span>}
-                                      {item.spread != null && (
-                                        <span className="sp-line">{item.spread > 0 ? "+" : ""}{item.spread}</span>
-                                      )}
-                                    </div>
-                                    <div className="sp-team-row">
-                                      {item.homeLogo && <img src={item.homeLogo} alt="" className="sp-team-icon" />}
-                                      <span className="sp-team-name">{item.home || "TBD"}</span>
-                                      {item.homeRecord && <span className="sp-team-rec">{item.homeRecord}</span>}
-                                      {item.total != null && (
-                                        <span className="sp-line sp-line-ou">o/u {item.total}</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  {/* Footer: time + venue */}
-                                  <div className="sp-card-foot">
-                                    <span className="sp-foot-time">
-                                      {item.startTime
-                                        ? new Date(item.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-                                        : "TBD"}
-                                    </span>
-                                    {item.venue && (
-                                      <>
-                                        <span className="sp-foot-sep">·</span>
-                                        <span className="sp-foot-venue">{item.venue}</span>
-                                      </>
-                                    )}
-                                    <span
-                                      className={`sp-status-dot ${hasWriteup ? "sp-dot-ready" : "sp-dot-pending"}`}
-                                      title={hasWriteup ? "Writeup published" : "No writeup yet"}
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
+                  <div
+                    key={item.id}
+                    className={`lp-item lp-item-game ${hasWriteup ? "sp-match-linked" : ""}`}
+                    onClick={() => {
+                      if (hasWriteup) {
+                        window.open(item.writeupUrl!, "_blank");
+                      } else {
+                        onItemClick(item);
+                      }
+                    }}
+                  >
+                    <div className="sp-card">
+                      <div className="sp-matchup">
+                        <div className="sp-team-row">
+                          {item.awayLogo && <img src={item.awayLogo} alt="" className="sp-team-icon" />}
+                          <span className={`sp-team-name ${awayWins ? "sp-team-name-win" : ""}`}>{item.away || "TBD"}</span>
+                          {item.awayRecord && <span className="sp-team-rec">{item.awayRecord}</span>}
+                          {showScores ? (
+                            <span className={`sp-score ${awayWins ? "sp-score-win" : ""}`}>{item.awayScore}</span>
+                          ) : item.spread != null ? (
+                            <span className="sp-line">{item.spread > 0 ? "+" : ""}{item.spread}</span>
+                          ) : null}
                         </div>
-                      );
-                    })}
+                        <div className="sp-team-row">
+                          {item.homeLogo && <img src={item.homeLogo} alt="" className="sp-team-icon" />}
+                          <span className={`sp-team-name ${homeWins ? "sp-team-name-win" : ""}`}>{item.home || "TBD"}</span>
+                          {item.homeRecord && <span className="sp-team-rec">{item.homeRecord}</span>}
+                          {showScores ? (
+                            <span className={`sp-score ${homeWins ? "sp-score-win" : ""}`}>{item.homeScore}</span>
+                          ) : item.total != null ? (
+                            <span className="sp-line sp-line-ou">o/u {item.total}</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="sp-card-foot">
+                        <span className="sp-foot-time">
+                          {item.startTime
+                            ? new Date(item.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+                            : "TBD"}
+                        </span>
+                        {item.venue && (
+                          <>
+                            <span className="sp-foot-sep">·</span>
+                            <span className="sp-foot-venue">{item.venue}</span>
+                          </>
+                        )}
+                        {liveBadge && <span className="mlb-live-indicator">{liveBadge}</span>}
+                        <span
+                          className={`sp-status-dot ${hasWriteup ? "sp-dot-ready" : "sp-dot-pending"}`}
+                          title={hasWriteup ? "Writeup published" : "No writeup yet"}
+                        />
+                      </div>
+                    </div>
                   </div>
                 );
-              });
+              };
+
+              return (
+                <>
+                  {liveGames.length > 0 && (
+                    <div className="lp-live-games-bucket">
+                      <div className="lp-day-separator lp-day-live">
+                        <span className="lp-day-label">Live Now</span>
+                        <span className="lp-day-count">{liveGames.length}</span>
+                      </div>
+                      {liveGames.map(renderGameRow)}
+                    </div>
+                  )}
+                  {grouped.map((group) => {
+                    const isToday = group.date === todayISO;
+                    const isPast = group.date < todayISO;
+
+                    const leagueOrder: string[] = [];
+                    const leagueMap = new Map<string, PanelItem[]>();
+                    for (const item of group.items) {
+                      const league = item.league || "Other";
+                      if (!leagueMap.has(league)) {
+                        leagueOrder.push(league);
+                        leagueMap.set(league, []);
+                      }
+                      leagueMap.get(league)!.push(item);
+                    }
+
+                    return (
+                      <div key={group.date} data-date={group.date}>
+                        <div className={`lp-day-separator ${isToday ? "lp-day-today" : ""} ${isPast ? "lp-day-past" : ""}`}>
+                          <span className="lp-day-label">{isToday ? "Today" : group.label}</span>
+                          <span className="lp-day-count">{group.items.length}</span>
+                        </div>
+                        {leagueOrder.map((league) => {
+                          const leagueItems = leagueMap.get(league)!;
+                          const leagueLogo = leagueLogoMap[league] || null;
+                          return (
+                            <div key={`${group.date}-${league}`} data-league-id={`${group.date}-${league}`}>
+                              <div className="lp-league-header">
+                                {leagueLogo && (
+                                  <img src={leagueLogo} alt="" className="lp-league-logo" />
+                                )}
+                                <span className="lp-league-name">{league}</span>
+                                <span className="lp-league-count">{leagueItems.length}</span>
+                              </div>
+                              {leagueItems.map(renderGameRow)}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </>
+              );
             }
 
             if (mode === "worldcup") {

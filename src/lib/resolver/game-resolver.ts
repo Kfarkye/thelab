@@ -16,6 +16,11 @@ function buildSummary(game: ReturnType<typeof withSportsGameUrls>): string {
 }
 
 export async function resolveGame(identifier: string): Promise<HubResponse> {
+  // Check for /live suffix FIRST, before any DB lookups
+  if (identifier.endsWith("/live")) {
+    return resolveLiveGame(identifier.replace(/\/live$/, ""));
+  }
+
   const game = await loadCanonicalSportsGame(identifier);
 
   if (game) {
@@ -110,6 +115,7 @@ export async function resolveGame(identifier: string): Promise<HubResponse> {
     }
   }
 
+
   return {
     type: "game",
     status: "ambiguous",
@@ -124,5 +130,57 @@ export async function resolveGame(identifier: string): Promise<HubResponse> {
       specialty: entry.leagueLabel,
       confidence: 50,
     })),
+  };
+}
+
+export async function resolveLiveGame(gameId: string): Promise<HubResponse> {
+  const { getDb } = await import("@/lib/spanner-pool");
+  const db = getDb("sportsdb");
+  const [rows] = await db.run({
+    sql: `SELECT live_situation, is_live_stale 
+          FROM GameResult 
+          WHERE MatchID = @gameId OR MatchID = CONCAT(@gameId, '_mlb')`,
+    params: { gameId },
+    types: { gameId: { type: "string" } },
+  });
+
+  if (!rows.length) {
+    return {
+      type: "live_status",
+      status: "not_found",
+      summary: `No live data found for game ${gameId}.`,
+      data: null,
+      links: {},
+    };
+  }
+
+  const data = rows[0].toJSON();
+  const situation = data.live_situation;
+  
+  if (!situation) {
+    return {
+      type: "live_status",
+      status: "not_found",
+      summary: `Game ${gameId} has not started or has no live data feed.`,
+      data: null,
+      links: {},
+    };
+  }
+
+  const lastUpdate = new Date(situation.last_updated).getTime();
+  const isStale = data.is_live_stale || (Date.now() - lastUpdate > 300_000);
+
+  return {
+    type: "live_status",
+    status: "resolved",
+    summary: `Live status for game ${gameId}`,
+    data: {
+      url: `hub://sports/mlb/game/${gameId}/live`,
+      ...situation,
+      is_stale: isStale,
+    },
+    links: {
+      game: `/api/hub/games/${encodeURIComponent(gameId)}`,
+    },
   };
 }
