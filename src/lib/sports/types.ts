@@ -13,6 +13,14 @@ export type LiveSituation = {
     third: boolean;
   };
   last_updated: string;
+  status?: string;
+  game_status?: string;
+  progress?: string | null;
+  home_score?: number | null;
+  away_score?: number | null;
+  provider_game_id?: string;
+  provider_match_id?: string | null;
+  [key: string]: unknown;
 };
 
 export type SourceTimeStatus = "EXTRACTED" | "INFERRED";

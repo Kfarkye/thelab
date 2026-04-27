@@ -1,5 +1,9 @@
 import { getDb } from "@/lib/spanner-pool";
 import { normalizeMLBStatusCode } from "@/lib/sports/status";
+import {
+  applyLiveSnapshotToGameRecord,
+  loadGameLiveSnapshotByGameId,
+} from "@/lib/sports/live-snapshot";
 
 const LEAGUE_LABEL_BY_ID = new Map<string, string>([
   ["mlb", "MLB"],
@@ -52,6 +56,12 @@ export type CanonicalSportsGame = {
   awayScore: number | null;
   homeATSResult: string | null;
   awayATSResult: string | null;
+  live: Record<string, unknown> | null;
+  is_live_stale: boolean;
+  liveSource: string | null;
+  lastSyncAt: string | null;
+  providerGameId: string | null;
+  providerMatchId: string | null;
 };
 
 export type CanonicalSportsGameSearchResult = {
@@ -316,6 +326,12 @@ function mapGameTableRow(row: Record<string, unknown>): CanonicalSportsGame {
     awayScore: null,
     homeATSResult: null,
     awayATSResult: null,
+    live: null,
+    is_live_stale: true,
+    liveSource: null,
+    lastSyncAt: null,
+    providerGameId: null,
+    providerMatchId: null,
   };
 }
 
@@ -350,6 +366,12 @@ function mapGameResultRow(row: Record<string, unknown>): CanonicalSportsGame {
     awayScore: toNumberOrNull(row.AwayScore),
     homeATSResult: row.HomeATSResult ? String(row.HomeATSResult) : null,
     awayATSResult: row.AwayATSResult ? String(row.AwayATSResult) : null,
+    live: null,
+    is_live_stale: true,
+    liveSource: null,
+    lastSyncAt: null,
+    providerGameId: null,
+    providerMatchId: null,
   };
 }
 
@@ -420,7 +442,9 @@ export async function loadCanonicalSportsGame(gameIdRaw: string): Promise<Canoni
       });
     }
 
-    return snapshot ? mergeGameWithSnapshot(baseGame, snapshot) : baseGame;
+    const canonicalGame = snapshot ? mergeGameWithSnapshot(baseGame, snapshot) : baseGame;
+    const liveSnapshot = await loadGameLiveSnapshotByGameId(canonicalGame.id);
+    return applyLiveSnapshotToGameRecord(canonicalGame, liveSnapshot);
   }
 
   const matchSql = previewTableExists
@@ -486,7 +510,9 @@ export async function loadCanonicalSportsGame(gameIdRaw: string): Promise<Canoni
 
   if (matchRows.length > 0) {
     const row = matchRows[0].toJSON() as Record<string, unknown>;
-    return mapGameResultRow(row);
+    const canonicalMatch = mapGameResultRow(row);
+    const liveSnapshot = await loadGameLiveSnapshotByGameId(canonicalMatch.id);
+    return applyLiveSnapshotToGameRecord(canonicalMatch, liveSnapshot);
   }
 
   return null;

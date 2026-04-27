@@ -27,14 +27,14 @@ const TEMPLATES = [
     message_type: 'email',
     internal_only: false,
     required_fields: ['name', 'specialty', 'facility', 'city', 'state', 'grossWeeklyPay'],
-    subject_template: '{{specialty}} Assignment – {{facility}} | {{grossWeeklyPay}}/week',
+    subject_template: '{{specialty}} Assignment - {{facility}} | {{grossWeeklyPay}}/week',
     body_template: `Hi {{firstName}},
 
-Thanks for your interest in the {{specialty}} position at {{facility}}. Here's the full breakdown — this looks like an excellent match for your background:
+Thanks for your interest in the {{specialty}} position at {{facility}}. Here is the full breakdown, this looks like an excellent match for your background:
 
 Facility: {{facility}}
 Location: {{city}}, {{state}}
-Assignment Dates: {{startDate}} – {{endDate}}
+Assignment Dates: {{startDate}} to {{endDate}}
 Shifts & Hours: {{shiftType}} ({{weeklyHours}} hours/week)
 
 Pay Package:
@@ -42,12 +42,14 @@ Taxable Hourly Rate: {{taxableRate}}/hr
 Meals & Housing Stipend: {{weeklyStipend}}/week
 Total Gross Weekly Pay: {{grossWeeklyPay}}
 
-This role is moving quickly — I can get you submitted today if everything looks good.
+If this looks like a good fit, I can help move this along today and make sure you are submitted ASAP.
 
-To move forward, just confirm:
+To get everything ready, please confirm:
 - Are you available to start {{startDate}}?
 - Do you have any time-off requests during the contract?
-- Is your Aya profile current (work history, certs, skills checklist)?
+- Is your Aya profile current with your work history and skills checklist?
+
+Please also send over your current certifications. If your profile is not fully updated yet, no worries. You can send me your current resume too, and I can help keep things moving.
 
 Please let me know if you have any questions.
 

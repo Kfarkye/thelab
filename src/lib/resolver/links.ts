@@ -77,6 +77,7 @@ export function buildGameLinks(
     public: `/sports/games/${encodedId}`,
     actions: {
       view_api: `Open /api/sports/games/${encodedId} for canonical game data.`,
+      view_live: `Use access_hub with path="games/${gameId}/live" for the canonical live snapshot.`,
       resolve_again: `Use access_hub with path="games/${gameId}" to re-ground this game.`,
     },
   };

@@ -38,6 +38,15 @@ export default async function SportsGamePage({
   const trends = await loadGameTrendTables(raw, 5);
   const kickoff = game.startTime ? new Date(game.startTime) : null;
   const normalizedStatus = String(game.status || "").trim().toLowerCase();
+  const livePayload =
+    game.live && typeof game.live === "object" && !Array.isArray(game.live)
+      ? (game.live as Record<string, unknown>)
+      : null;
+  const liveProgress =
+    (typeof livePayload?.progress === "string" && livePayload.progress.trim())
+    || (typeof livePayload?.status === "string" && livePayload.status.trim())
+    || (typeof livePayload?.game_status === "string" && livePayload.game_status.trim())
+    || null;
   const isPost =
     normalizedStatus === "post" ||
     normalizedStatus === "final" ||
@@ -47,7 +56,11 @@ export default async function SportsGamePage({
     normalizedStatus.includes("full_time") ||
     normalizedStatus.includes("completed") ||
     normalizedStatus.includes("ended");
-  const isPre = !isPost;
+  const isLive =
+    normalizedStatus === "live" ||
+    normalizedStatus === "in progress" ||
+    normalizedStatus.includes("in progress");
+  const isPre = !isPost && !isLive;
 
   const dateLabel = kickoff
     ? kickoff.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
@@ -67,7 +80,9 @@ export default async function SportsGamePage({
     ? spreadLabel
       ? `${game.awayTeam} travels to ${game.homeTeam} as the ${Math.abs(game.spread ?? 0)}-goal ${(game.spread ?? 0) < 0 ? "favorite" : "underdog"}.`
       : `${game.awayTeam} visits ${game.homeTeam} in ${league} action.`
-    : (() => {
+    : isLive
+      ? `${game.awayTeam} and ${game.homeTeam} are live now${liveProgress ? ` (${liveProgress})` : ""}.`
+      : (() => {
       if (game.homeScore != null && game.awayScore != null) {
         const isDraw = game.homeScore === game.awayScore;
         
@@ -113,6 +128,8 @@ export default async function SportsGamePage({
         <div className="drip-hero" role="img" aria-label="Hero photograph context">
           {isPre ? (
             <span className="drip-hero-note">[ Matchup Preview • {league} ]</span>
+          ) : isLive ? (
+            <span className="drip-hero-note">[ Live Matchup • {league} ]</span>
           ) : (
             <span className="drip-hero-note">[ Final Result • {league} ]</span>
           )}
@@ -155,7 +172,7 @@ export default async function SportsGamePage({
             </div>
           ) : (
             <div className="drip-score-wrap">
-              <span className="drip-score-label">Final Score</span>
+              <span className="drip-score-label">{isPost ? "Final Score" : "Live Score"}</span>
               <div className="drip-score-block">
                 {game.awayScore != null && game.homeScore != null ? (
                   <>
@@ -183,7 +200,13 @@ export default async function SportsGamePage({
 
         {/* Status */}
         <div className="drip-state">
-          {isPost ? "Full time" : isPre && kickoff ? "Scheduled" : "—"}
+          {isPost
+            ? "Full time"
+            : isLive
+              ? `Live${liveProgress ? ` • ${liveProgress}` : ""}`
+              : isPre && kickoff
+                ? "Scheduled"
+                : "—"}
         </div>
 
         {/* Lines */}

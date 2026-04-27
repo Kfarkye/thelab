@@ -3,6 +3,7 @@ import {
   searchCanonicalSportsGames,
   withSportsGameUrls,
 } from "@/lib/sports/game-canonical";
+import { loadGameLiveSnapshotByGameId } from "@/lib/sports/live-snapshot";
 import { buildGameLinks } from "./links";
 import type { HubResponse } from "./candidate-resolver";
 
@@ -50,6 +51,12 @@ export async function resolveGame(identifier: string): Promise<HubResponse> {
         away_record: canonical.awayRecord,
         spread: canonical.spread,
         total: canonical.total,
+        live: canonical.live,
+        is_live_stale: canonical.is_live_stale,
+        live_source: canonical.liveSource,
+        last_sync_at: canonical.lastSyncAt,
+        provider_game_id: canonical.providerGameId,
+        provider_match_id: canonical.providerMatchId,
         writeup_url: canonical.writeupUrl,
         published_at: canonical.publishedAt,
         hub_url: canonical.hubUrl,
@@ -102,6 +109,12 @@ export async function resolveGame(identifier: string): Promise<HubResponse> {
           away_record: canonical.awayRecord,
           spread: canonical.spread,
           total: canonical.total,
+          live: canonical.live,
+          is_live_stale: canonical.is_live_stale,
+          live_source: canonical.liveSource,
+          last_sync_at: canonical.lastSyncAt,
+          provider_game_id: canonical.providerGameId,
+          provider_match_id: canonical.providerMatchId,
           writeup_url: canonical.writeupUrl,
           published_at: canonical.publishedAt,
           hub_url: canonical.hubUrl,
@@ -134,17 +147,8 @@ export async function resolveGame(identifier: string): Promise<HubResponse> {
 }
 
 export async function resolveLiveGame(gameId: string): Promise<HubResponse> {
-  const { getDb } = await import("@/lib/spanner-pool");
-  const db = getDb("sportsdb");
-  const [rows] = await db.run({
-    sql: `SELECT live_situation, is_live_stale 
-          FROM GameResult 
-          WHERE MatchID = @gameId OR MatchID = CONCAT(@gameId, '_mlb')`,
-    params: { gameId },
-    types: { gameId: { type: "string" } },
-  });
-
-  if (!rows.length) {
+  const snapshot = await loadGameLiveSnapshotByGameId(gameId);
+  if (!snapshot) {
     return {
       type: "live_status",
       status: "not_found",
@@ -154,30 +158,34 @@ export async function resolveLiveGame(gameId: string): Promise<HubResponse> {
     };
   }
 
-  const data = rows[0].toJSON();
-  const situation = data.live_situation;
-  
-  if (!situation) {
-    return {
-      type: "live_status",
-      status: "not_found",
-      summary: `Game ${gameId} has not started or has no live data feed.`,
-      data: null,
-      links: {},
-    };
-  }
-
-  const lastUpdate = new Date(situation.last_updated).getTime();
-  const isStale = data.is_live_stale || (Date.now() - lastUpdate > 300_000);
+  const livePayload =
+    snapshot.status === "LIVE" && !snapshot.isLiveStale
+      ? {
+          ...(snapshot.livePayload || {}),
+          status: snapshot.status,
+          game_status: snapshot.status,
+          progress: snapshot.progress || null,
+          last_updated: snapshot.lastSyncAt || null,
+        }
+      : null;
 
   return {
     type: "live_status",
     status: "resolved",
-    summary: `Live status for game ${gameId}`,
+    summary: `${gameId} | ${snapshot.status}${snapshot.progress ? ` | ${snapshot.progress}` : ""}`,
     data: {
       url: `hub://sports/mlb/game/${gameId}/live`,
-      ...situation,
-      is_stale: isStale,
+      game_id: snapshot.gameId,
+      status: snapshot.status,
+      home_score: snapshot.homeScore,
+      away_score: snapshot.awayScore,
+      progress: snapshot.progress,
+      source: snapshot.source,
+      provider_game_id: snapshot.providerGameId,
+      provider_match_id: snapshot.providerMatchId,
+      last_sync_at: snapshot.lastSyncAt,
+      is_stale: snapshot.isLiveStale,
+      live: livePayload,
     },
     links: {
       game: `/api/hub/games/${encodeURIComponent(gameId)}`,

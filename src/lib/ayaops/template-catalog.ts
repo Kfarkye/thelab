@@ -79,14 +79,14 @@ export const OUTREACH_EMAIL_TEMPLATES: EmailTemplate[] = [
     messageType: 'email',
     requiredFields: ['name', 'specialty', 'facility', 'city', 'state', 'grossWeeklyPay'],
     generateContent: (d) => ({
-      subject: `${d.specialty} Assignment – ${d.facility} | ${currency(d.grossWeeklyPay)}/week`,
+      subject: `${d.specialty} Assignment - ${d.facility} | ${currency(d.grossWeeklyPay)}/week`,
       body: `Hi ${d.name.split(' ')[0] || ''},
 
-Thanks for your interest in the ${d.specialty} position at ${d.facility}. Here's the full breakdown — this looks like an excellent match for your background:
+Thanks for your interest in the ${d.specialty} position at ${d.facility}. Here is the full breakdown, this looks like an excellent match for your background:
 
 Facility: ${d.facility}
 Location: ${d.city}, ${d.state}
-Assignment Dates: ${shortDate(d.startDate)} – ${shortDate(d.endDate)}
+Assignment Dates: ${shortDate(d.startDate)} to ${shortDate(d.endDate)}
 Shifts & Hours: ${d.shiftType} (${d.weeklyHours} hours/week)
 
 Pay Package:
@@ -94,12 +94,14 @@ Taxable Hourly Rate: ${currency(d.taxableRate)}/hr
 Meals & Housing Stipend: ${currency(d.weeklyStipend)}/week
 Total Gross Weekly Pay: ${currency(d.grossWeeklyPay)}
 
-This role is moving quickly — I can get you submitted today if everything looks good.
+If this looks like a good fit, I can help move this along today and make sure you are submitted ASAP.
 
-To move forward, just confirm:
+To get everything ready, please confirm:
 - Are you available to start ${shortDate(d.startDate)}?
 - Do you have any time-off requests during the contract?
-- Is your Aya profile current (work history, certs, skills checklist)?
+- Is your Aya profile current with your work history and skills checklist?
+
+Please also send over your current certifications. If your profile is not fully updated yet, no worries. You can send me your current resume too, and I can help keep things moving.
 
 Please let me know if you have any questions.
 
