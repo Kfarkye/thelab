@@ -86,6 +86,58 @@ const ACCESS_HUB_DECLARATION = {
   },
 };
 
+const INGEST_MARGIN_PAYLOAD_DECLARATION = {
+  name: "ingest_margin_payload",
+  description:
+    "Persist pay package or margin approval data extracted from an Aya margin calculator, pay package, offer, or screenshot. Use record_phase='job' when no candidate is attached (pay package inventory). Use record_phase='margin' only when an offer/candidate is attached.",
+  parameters: {
+    type: "object" as const,
+    properties: {
+      view_type: {
+        type: "string" as const,
+        description: "Source view, for example pay_package_screenshot, margin_approval_screenshot, or aya_margin_calculator.",
+      },
+      source_kind: {
+        type: "string" as const,
+        description: "Capture source, normally screenshot_vision.",
+      },
+      screenshot_id: {
+        type: "string" as const,
+        description: "Saved image id when available.",
+      },
+      rows: {
+        type: "array" as const,
+        description: "One or more extracted pay package or margin rows.",
+        items: {
+          type: "object" as const,
+          properties: {
+            record_phase: { type: "string" as const, description: "job for pay package, margin for offer margin approval." },
+            facility_name: { type: "string" as const },
+            profession: { type: "string" as const },
+            specialty: { type: "string" as const },
+            job_id: { type: "string" as const },
+            margin_id: { type: "string" as const },
+            candidate_name: { type: "string" as const },
+            start_date: { type: "string" as const },
+            end_date: { type: "string" as const },
+            shift_type: { type: "string" as const },
+            shift_start_time: { type: "string" as const },
+            shift_end_time: { type: "string" as const },
+            weekly_hours: { type: "number" as const },
+            base_pay_rate_usd: { type: "number" as const },
+            weekly_stipends_usd: { type: "number" as const },
+            gross_weekly_pay_usd: { type: "number" as const },
+            target_margin_pct: { type: "number" as const },
+            actual_margin_pct: { type: "number" as const },
+            raw_text: { type: "string" as const },
+          },
+        },
+      },
+    },
+    required: ["rows"],
+  },
+};
+
 // --- Context Caching (Gemini only) ---
 const cacheStore = new Map<string, { name: string; expireTime: number }>();
 
@@ -219,7 +271,8 @@ MANDATORY RULES:
 18. DRAFTED COMMUNICATION VOICE: Email/SMS/Teams drafts written on behalf of recruiters preserve first-person recruiter voice ("I", "we").
 19. NO INFRASTRUCTURE LEAKAGE IN CHAT: Never expose URLs, query strings, API paths, tool names, or internal system notes in recruiter-facing responses unless the user explicitly asks for technical details.
 20. LIST INTENT FIT: For list queries, return concise results in recruiter language (count + top matches + suggested next actions). If results only partially match user intent, tighten filters or call out the gap and offer the next refinement.
-21. TYPOGRAPHY: No em-dash or en-dash in user-facing copy, including drafted communications. Use commas, periods, parentheses, or "to".`,
+21. TYPOGRAPHY: No em-dash or en-dash in user-facing copy, including drafted communications. Use commas, periods, parentheses, or "to".
+22. WRITE HONESTY: Never say a package, offer, margin, note, draft, candidate, or profile was saved, attached, created, submitted, updated, or moved unless a real write tool or deterministic backend write executed in the current turn and returned success. If no write executed, say what is already true and what action is still needed.`,
 };
 
 const WORLDCUP_WRITEUP_BASE_URL = String(process.env.WORLDCUP_WRITEUP_BASE_URL || "https://thedrip.bet/worldcup")
@@ -633,6 +686,39 @@ function requiresPostIngestWrite(prompt: string): boolean {
   return noteIntent || draftIntent || statusIntent;
 }
 
+function isPayPackageSaveIntent(prompt: string): boolean {
+  const normalized = String(prompt || "").toLowerCase();
+  if (!/\b(save|store|log|persist|attach)\b/.test(normalized)) return false;
+  return /\b(pay\s*package|package details|package|rate details|assignment details)\b/.test(normalized);
+}
+
+function buildEventStreamResponse(
+  events: Array<Record<string, unknown>>,
+  routeMeta: { provider: string; model: string; reason: string },
+) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      }
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Model-Provider": routeMeta.provider,
+      "X-Model-Id": routeMeta.model,
+      "X-Route-Reason": routeMeta.reason,
+    },
+  });
+}
+
 type SelectedCandidateContext = {
   candidate_id: string | null;
   nova_id: string | null;
@@ -643,6 +729,12 @@ type SelectedCandidateContext = {
 };
 
 type SelectedMarginContext = {
+  object_type: string | null;
+  record_phase: string | null;
+  pay_package_id: string | null;
+  margin_object_id: string | null;
+  job_id: string | null;
+  margin_id: string | null;
   candidate_name: string | null;
   profession: string | null;
   specialty: string | null;
@@ -694,6 +786,12 @@ function normalizeSelectedMarginContext(value: unknown): SelectedMarginContext |
     return null;
   };
   const context: SelectedMarginContext = {
+    object_type: readString(input.object_type || input.objectType) || null,
+    record_phase: readString(input.record_phase || input.recordPhase) || null,
+    pay_package_id: readString(input.pay_package_id || input.payPackageId) || null,
+    margin_object_id: readString(input.margin_object_id || input.marginObjectId) || null,
+    job_id: readString(input.job_id || input.jobId) || null,
+    margin_id: readString(input.margin_id || input.marginId) || null,
     candidate_name: readString(input.candidate_name || input.candidateName) || null,
     profession: readString(input.profession) || null,
     specialty: readString(input.specialty) || null,
@@ -2022,7 +2120,7 @@ export async function POST(request: NextRequest) {
       systemPrompt = `${systemPrompt}
 
 MODE OVERRIDE:
-- In Facility and Margins views, you MAY use Google Search grounding for external/public context.
+- In Facility and Packages views, you MAY use Google Search grounding for external/public context.
 - Candidate-specific identity, status, and write actions MUST remain grounded to internal DB tools.
 - Never fabricate internal data. Keep external claims source-cited.`;
     }
@@ -2038,7 +2136,8 @@ MODE OVERRIDE:
     if (imageIntent && hasImage && activeMode === "ayaops") {
       const intentDirectives: Record<string, string> = {
         add_candidate: `[INTENT: ADD_CANDIDATE] The user has selected "Add Candidate" intent. Extract the candidate's name, specialty, facility, and all visible data from the attached screenshot. Do NOT draft emails. Do NOT match existing candidates. Ingest this as a new candidate record.`,
-        margin_approval: `[INTENT: MARGIN_APPROVAL] The user has selected "Margin Approval" intent. Extract margin data from the attached screenshot. Then ground against the canonical template via access_hub({ path: "templates/margin_approval" }) and draft using that template structure.`,
+        pay_package: `[INTENT: PAY_PACKAGE_CAPTURE] The user uploaded a pay package screenshot. Extract the package fields and call ingest_margin_payload. Use rows[0].record_phase = "job" because this is facility-owned package inventory without a candidate/offer attached. Do NOT draft outreach. Do NOT claim anything was saved unless ingest_margin_payload succeeds.`,
+        margin_approval: `[INTENT: MARGIN_APPROVAL_CAPTURE] The user uploaded a margin approval screenshot. Extract the approval fields and call ingest_margin_payload. Use rows[0].record_phase = "margin" only if a candidate or offer is visible; otherwise use "job". Do NOT draft outreach. Do NOT claim anything was saved unless ingest_margin_payload succeeds.`,
         analyze: `[INTENT: ANALYZE] The user has selected "Analyze" intent. Describe and analyze the contents of the attached screenshot. Do NOT perform any write actions. Read-only analysis.`,
       };
       const directive = intentDirectives[imageIntent];
@@ -2282,10 +2381,21 @@ Rule: If any tool returns error_code "CANDIDATE_NOT_FOUND", ask the user for cla
     }
 
     if (requestedMode === "margins") {
+      const selectedIsPayPackage =
+        selectedMargin?.object_type === "pay_package" ||
+        selectedMargin?.record_phase === "job";
       fullPrompt = `${fullPrompt}
 
-[System note: Margins mode output style
-- Do not re-list inventory fields already shown in the margin card.
+[System note: Packages mode output style
+- Canonical model:
+  Facility -> Job -> Pay Package -> Outreach.
+  Facility -> Job -> Offer -> selected Pay Package -> Margin -> Approval.
+  Candidate -> Job -> Offer / Assignment history.
+  Facility -> Candidate -> Job -> Offer -> selected Pay Package -> Margin -> Approval.
+- If the selected object is a pay package, treat it as recruiter/candidate-facing money for outreach. Do not call it a margin.
+- If the selected object is a margin approval, treat margin as internal approval math only.
+- If the user says to save selected package details, do not invent a save. The selected pay package is already in Packages unless a write event says otherwise.
+- Do not re-list inventory fields already shown in the package or approval card.
 - Never surface internal IDs (record keys, job IDs, calc IDs) unless the user explicitly asks.
 - Answer in 2-3 sentences max:
   1) deal read,
@@ -2294,9 +2404,21 @@ Rule: If any tool returns error_code "CANDIDATE_NOT_FOUND", ask the user for cla
 - Use plain recruiter language; no generic suggestion menus.]`;
 
       if (selectedMargin) {
-        fullPrompt = `${fullPrompt}
+        fullPrompt = selectedIsPayPackage
+          ? `${fullPrompt}
 
-[Selected margin context]
+[Selected pay package context]
+Role: ${selectedMargin.specialty || selectedMargin.profession || "Unknown"}
+Facility: ${selectedMargin.facility_name || "Unknown"}${selectedMargin.facility_city || selectedMargin.facility_state ? ` (${[selectedMargin.facility_city, selectedMargin.facility_state].filter(Boolean).join(", ")})` : ""}
+Assignment: ${selectedMargin.assignment_start || "--"} to ${selectedMargin.assignment_end || "--"}
+Weekly gross: ${selectedMargin.weekly_gross ?? "unknown"}
+Base pay: ${selectedMargin.base_pay_rate ?? "unknown"}
+Weekly stipends: ${selectedMargin.weekly_stipends ?? "unknown"}
+Weekly hours: ${selectedMargin.weekly_hours ?? "unknown"}
+Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"}-${selectedMargin.shift_end || "--"}]`
+          : `${fullPrompt}
+
+[Selected margin approval context]
 Candidate: ${selectedMargin.candidate_name || "Unknown"}
 Role: ${selectedMargin.specialty || selectedMargin.profession || "Unknown"}
 Facility: ${selectedMargin.facility_name || "Unknown"}${selectedMargin.facility_city || selectedMargin.facility_state ? ` (${[selectedMargin.facility_city, selectedMargin.facility_state].filter(Boolean).join(", ")})` : ""}
@@ -2475,6 +2597,36 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
       activeMode === "ayaops" ? extractMarginCalculatorPayload(prompt) : null;
     const hasMarginPayloadHint =
       activeMode === "ayaops" ? containsMarginPayloadHint(prompt) : false;
+    const selectedIsPayPackage =
+      requestedMode === "margins" &&
+      Boolean(selectedMargin) &&
+      (selectedMargin?.object_type === "pay_package" || selectedMargin?.record_phase === "job");
+
+    if (
+      activeMode === "ayaops" &&
+      selectedIsPayPackage &&
+      isPayPackageSaveIntent(prompt) &&
+      !autoMarginPayload
+    ) {
+      const role = selectedMargin?.specialty || selectedMargin?.profession || "selected role";
+      const facility = selectedMargin?.facility_name || "selected facility";
+      const gross =
+        typeof selectedMargin?.weekly_gross === "number"
+          ? formatCurrency(selectedMargin.weekly_gross)
+          : "the listed weekly gross";
+
+      return buildEventStreamResponse(
+        [
+          {
+            type: "text",
+            text:
+              `This pay package is already saved in Packages: ${role} at ${facility}, ${gross}/wk. ` +
+              "Nothing new was written from that message. To use it, create an offer from the selected package or tell me the candidate name to attach it to.",
+          },
+        ],
+        { provider: route.provider, model: route.model, reason: "selected_pay_package_already_saved" },
+      );
+    }
 
     if (activeMode === "ayaops" && hasRingCentralPayloadHint && !autoRingCentralPayload) {
       const encoder = new TextEncoder();
@@ -2756,9 +2908,19 @@ Return only operational summary: save status, link status, and next best action.
         preIngestExecuted = true;
         requireFollowupWriteAfterIngest = false;
 
-        fullPrompt = `${fullPrompt}
+        const rowLabel = rowsUpdated === 1 ? "row" : "rows";
+        const text =
+          outcome === "no_change"
+            ? "Package data already matched Packages. No new rows were written. Next useful action: create an offer from the package when you have a candidate."
+            : `Package data saved to Packages (${rowsUpdated} ${rowLabel}). Next useful action: create an offer from the package when you have a candidate.`;
 
-[System note: ingest_margin_payload executed before this turn. Margin payload is persisted with event_id "${String(marginResult.event_id || "")}".]`;
+        return buildEventStreamResponse(
+          [
+            buildWriteResultEvent(preIngestWriteEvent),
+            { type: "text", text },
+          ],
+          { provider: route.provider, model: route.model, reason: "margin_payload_deterministic_ingest" },
+        );
       } catch (marginErr) {
         const marginMessage = marginErr instanceof Error ? marginErr.message : String(marginErr);
         const encoder = new TextEncoder();
@@ -3018,6 +3180,7 @@ Return only operational summary: save status, link status, and next best action.
       // Mutations remain explicit DB write tools.
       const ayaopsFunctionDeclarations = [
         ACCESS_HUB_DECLARATION,
+        INGEST_MARGIN_PAYLOAD_DECLARATION,
         ...AYAOPS_READ_TOOL_DECLARATIONS,
         ...(enableAyaopsSandbox
           ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...SANDBOX_TOOL_DECLARATIONS]
@@ -3062,7 +3225,7 @@ Return only operational summary: save status, link status, and next best action.
 
     const declaredToolNames =
       activeMode === "ayaops"
-        ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...AYAOPS_READ_TOOL_DECLARATIONS, ACCESS_HUB_DECLARATION]
+        ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...AYAOPS_READ_TOOL_DECLARATIONS, ACCESS_HUB_DECLARATION, INGEST_MARGIN_PAYLOAD_DECLARATION]
           .map((tool) => String((tool as { name?: string }).name || ""))
           .filter(Boolean)
         : [];
@@ -3319,7 +3482,8 @@ Return only operational summary: save status, link status, and next best action.
                     name === "update_candidate_status" ||
                     name === "update_candidate_profession" ||
                     name === "add_candidate_note" ||
-                    name === "create_com_draft_email";
+                    name === "create_com_draft_email" ||
+                    name === "ingest_margin_payload";
                   const isSandboxTool = SANDBOX_TOOL_NAMES.has(name);
 
                   if (!name) continue;
@@ -3401,6 +3565,39 @@ Return only operational summary: save status, link status, and next best action.
                         const hubPath = typeof toolArgs.path === "string" ? toolArgs.path : "";
                         const hubResult = await resolveHub(hubPath);
                         toolResult = { result: hubResult };
+                      } else if (name === "ingest_margin_payload") {
+                        const inputRows = Array.isArray(toolArgs.rows)
+                          ? toolArgs.rows
+                              .map((entry) => asJsonRecord(entry))
+                              .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+                          : [];
+                        const marginResult = await ingestMarginLedgerCapture({
+                          view_type: readString(toolArgs.view_type || toolArgs.viewType) || "pay_package_screenshot",
+                          source_kind: readString(toolArgs.source_kind || toolArgs.sourceKind) || "screenshot_vision",
+                          source_url: readString(toolArgs.source_url || toolArgs.sourceUrl) || null,
+                          screenshot_id: readString(toolArgs.screenshot_id || toolArgs.screenshotId || imageRecordId) || null,
+                          captured_at: readString(toolArgs.captured_at || toolArgs.capturedAt) || new Date().toISOString(),
+                          raw_capture_json: toolArgs,
+                          rows: inputRows,
+                        });
+                        const canonicalUpserted = Number(marginResult.canonical_upserted || 0);
+                        const canonicalUpdated = Number(marginResult.canonical_updated || 0);
+                        const rowsUpdated = canonicalUpserted + canonicalUpdated;
+                        const outcome =
+                          canonicalUpserted > 0
+                            ? "inserted"
+                            : canonicalUpdated > 0
+                              ? "updated"
+                              : "no_change";
+                        toolResult = {
+                          result: {
+                            ...marginResult,
+                            action: "ingest_margin_payload",
+                            object_type: "margin_ledger_capture",
+                            rows_updated: rowsUpdated,
+                            outcome,
+                          },
+                        };
                       } else {
                         toolResult = await executeDbTool(name, toolArgs);
                       }

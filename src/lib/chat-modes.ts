@@ -75,13 +75,13 @@ export const MODES: Record<ConsoleMode, ModeConfig> = {
   },
   margins: {
     id: "margins",
-    label: "Margins",
+    label: "Packages",
     suggestions: [
-      "What's the read on this margin?",
-      "Where's the risk in this package?",
-      "What should I lock before submit?",
+      "Create outreach copy from the selected package",
+      "Create an offer from the selected package",
+      "Review the selected margin",
     ],
-    placeholder: "What's the risk here?",
+    placeholder: "Ask about pay packages, offers, or margins...",
   },
   agent: {
     id: "agent",

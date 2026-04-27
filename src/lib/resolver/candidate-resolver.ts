@@ -296,16 +296,41 @@ export async function resolveCandidateCollection(
                  AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline', 'completed', 'cancelled')
                ORDER BY
                  CASE
+                   WHEN LOWER(a1.status) IN ('active', 'pending_start')
+                     AND COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') <= CURRENT_DATE('America/Los_Angeles')
+                     AND COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31') >= CURRENT_DATE('America/Los_Angeles') THEN 0
                    WHEN LOWER(a1.status) = 'pending_start'
-                     AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
-                     AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE() THEN 0
-                   WHEN LOWER(a1.status) = 'active' THEN 1
-                   WHEN LOWER(a1.status) = 'in_pipeline' THEN 2
-                   WHEN LOWER(a1.status) = 'completed' THEN 3
-                   WHEN LOWER(a1.status) = 'cancelled' THEN 4
-                   ELSE 5
+                     AND SAFE_CAST(a1.start_date AS DATE) > CURRENT_DATE('America/Los_Angeles') THEN 1
+                   WHEN LOWER(a1.status) = 'active'
+                     AND COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31') >= CURRENT_DATE('America/Los_Angeles') THEN 2
+                   WHEN LOWER(a1.status) = 'in_pipeline' THEN 3
+                   WHEN LOWER(a1.status) IN ('active', 'pending_start', 'completed') THEN 4
+                   WHEN LOWER(a1.status) = 'cancelled' THEN 5
+                   ELSE 6
                  END,
-                 COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') DESC,
+                 CASE
+                   WHEN LOWER(a1.status) IN ('active', 'pending_start')
+                     AND COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') <= CURRENT_DATE('America/Los_Angeles')
+                     AND COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31') >= CURRENT_DATE('America/Los_Angeles')
+                     THEN SAFE_CAST(a1.start_date AS DATE)
+                   ELSE NULL
+                 END DESC,
+                 CASE
+                   WHEN LOWER(a1.status) = 'pending_start'
+                     AND SAFE_CAST(a1.start_date AS DATE) > CURRENT_DATE('America/Los_Angeles')
+                     THEN SAFE_CAST(a1.start_date AS DATE)
+                   ELSE NULL
+                 END ASC,
+                 CASE
+                   WHEN LOWER(a1.status) = 'in_pipeline'
+                     THEN COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '9999-12-31')
+                   ELSE NULL
+                 END ASC,
+                 CASE
+                   WHEN LOWER(a1.status) IN ('active', 'pending_start', 'completed', 'cancelled')
+                     THEN COALESCE(SAFE_CAST(a1.end_date AS DATE), SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
+                   ELSE COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
+                 END DESC,
                  a1.id DESC
                LIMIT 1
              )

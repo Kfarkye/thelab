@@ -67,7 +67,8 @@ const CAPABILITY_OPTIONS: { value: ModelOverride; label: string; hint: string }[
 
 const IMAGE_INTENTS: { value: ImageIntent; icon: React.ReactNode; label: string }[] = [
   { value: "add_candidate", icon: <UserPlus size={13} />, label: "Add Candidate" },
-  { value: "margin_approval", icon: <Calculator size={13} />, label: "Margin Approval" },
+  { value: "pay_package", icon: <Calculator size={13} />, label: "Pay Package" },
+  { value: "margin_approval", icon: <Calculator size={13} />, label: "Margin" },
   { value: "analyze", icon: <Search size={13} />, label: "Analyze" },
 ];
 
@@ -1453,6 +1454,9 @@ export default function ChatPage() {
                   return {
                     id,
                     label,
+                    objectType: readStringSafe(row.objectType) || null,
+                    recordPhase: readStringSafe(row.recordPhase) || null,
+                    payPackageId: readStringSafe(row.payPackageId) || null,
                     marginObjectId: readStringSafe(row.marginObjectId) || id,
                     candidateName: readStringSafe(row.candidateName) || null,
                     candidateId: readStringSafe(row.candidateId) || null,
@@ -1692,6 +1696,9 @@ export default function ChatPage() {
     reader.onloadend = async () => {
       const imageDataUrl = reader.result as string;
       dispatch({ type: "SET_PENDING_IMAGE", payload: imageDataUrl });
+      if (state.mode === "margins") {
+        dispatch({ type: "SET_IMAGE_INTENT", payload: "pay_package" });
+      }
       setPendingSavedImage(null);
       setUploadingImage(true);
       try {
@@ -1814,9 +1821,12 @@ export default function ChatPage() {
       setSourcesMsg(null);
       setRightPanelMode("closed");
       dispatch({ type: "SET_SELECTED_CANDIDATE", payload: null });
+      const isPayPackage = item.objectType === "pay_package" || item.recordPhase === "job";
       dispatch({
         type: "SET_INPUT",
-        payload: "What's the read on this margin?",
+        payload: isPayPackage
+          ? "Draft outreach from this pay package."
+          : "What's the read on this margin approval?",
       });
       inputRef.current?.focus();
       return;
@@ -1859,6 +1869,9 @@ export default function ChatPage() {
 
   const handleUseSavedImage = (image: SavedImage) => {
     dispatch({ type: "SET_PENDING_IMAGE", payload: null });
+    if (state.mode === "margins") {
+      dispatch({ type: "SET_IMAGE_INTENT", payload: "pay_package" });
+    }
     setPendingSavedImage(image);
     inputRef.current?.focus();
   };
@@ -2033,10 +2046,21 @@ export default function ChatPage() {
       const text = message.text || "";
       const normalizeTextField = (value: string | null | undefined, maxLength: number): string | null => {
         const normalized = String(value || "")
+          .replace(/^(?:[-•]\s*)?(?:name|candidate|candidate name|display name|full name|profile)\s*:\s*/i, "")
           .replace(/\s+/g, " ")
           .trim();
         if (!normalized) return null;
         return normalized.slice(0, maxLength);
+      };
+
+      const cleanExtractedName = (value: string | null): string | null => {
+        const normalized = normalizeTextField(value, 160)
+          ?.replace(/\s*[•|].*$/, "")
+          .replace(/\s+-\s+.*$/, "")
+          .trim();
+        if (!normalized) return null;
+        const nameMatch = normalized.match(/[A-Z][A-Za-z.'`-]+(?:\s+[A-Z][A-Za-z.'`-]+){1,4}/);
+        return nameMatch ? nameMatch[0] : null;
       };
 
       const parseCityStateFromSnapshot = (
@@ -2047,22 +2071,23 @@ export default function ChatPage() {
           .map((line) => line.replace(/[*_]/g, "").trim())
           .filter(Boolean);
 
-        const locationLine = lines.find((line) =>
-          /^(?:[-•]\s*)?(?:home address|address|location)\s*:/i.test(line),
+        const locationLines = lines.filter((line) =>
+          /^(?:[-•]\s*)?(?:home address|address|location|city\/state|city|home city)\s*:/i.test(line),
         );
 
         const candidateSources: string[] = [];
-        if (locationLine) {
-          candidateSources.push(locationLine.replace(/^(?:[-•]\s*)?(?:home address|address|location)\s*:\s*/i, ""));
+        for (const locationLine of locationLines) {
+          candidateSources.push(
+            locationLine.replace(/^(?:[-•]\s*)?(?:home address|address|location|city\/state|city|home city)\s*:\s*/i, ""),
+          );
         }
-        candidateSources.push(snapshotText);
 
         for (const source of candidateSources) {
-          const cityStateMatch = source.match(/(?:,\s*|\b)([A-Za-z .'-]{2,80}?)\s*,\s*([A-Z]{2})(?:\b|[^A-Z])/);
+          const cityStateMatch = source.match(/\b([A-Za-z .'-]{2,60}?)\s*,\s*([A-Z]{2})(?:\b|[^A-Z])/);
           if (!cityStateMatch) continue;
-          const parsedCity = normalizeTextField(cityStateMatch[1], 100);
+          const parsedCity = normalizeTextField(cityStateMatch[1], 60);
           const parsedState = normalizeTextField(cityStateMatch[2], 2)?.toUpperCase() || null;
-          if (parsedCity && parsedState) {
+          if (parsedCity && parsedState && !/^(unknown|n\/a|none)$/i.test(parsedCity)) {
             return { city: parsedCity, stateCode: parsedState };
           }
         }
@@ -2077,11 +2102,11 @@ export default function ChatPage() {
       };
 
       // Extract candidate name — try specific heading patterns first
-      let fullName = extract(/Candidate Profile:\s*\*?\*?\s*(.+)/i)
-        || extract(/Candidate:\s*\*?\*?\s*([^\n*]+)/i)
-        || extract(/^Name[:\s]*([^\n*]+)/im)
+      let fullName = cleanExtractedName(extract(/Candidate Profile:\s*\*?\*?\s*(.+)/i))
+        || cleanExtractedName(extract(/Candidate:\s*\*?\*?\s*([^\n*]+)/i))
+        || cleanExtractedName(extract(/^Name\s*:\s*([^\n*]+)/im))
         || extract(/details for\s+\*?\*?([\w][\w\s]+[\w])\*?\*?\s/i)
-        || extract(/\*\*?(?:Name|Candidate)[:\s]*\*?\*?\s*(.+)/i);
+        || cleanExtractedName(extract(/\*\*?(?:Name|Candidate)[:\s]*\*?\*?\s*(.+)/i));
 
       if (!fullName) {
         const lines = text
@@ -2111,10 +2136,12 @@ export default function ChatPage() {
       }
 
       // Strip markdown formatting and stray label prefixes
-      fullName = fullName
-        .replace(/[*_]/g, "")
-        .replace(/^Profile:\s*/i, "")
-        .trim();
+      fullName = cleanExtractedName(fullName);
+
+      if (!fullName) {
+        appendAssistantSystemMessage("Could not extract a clean candidate name from this message.");
+        return;
+      }
 
       const nameParts = fullName.split(/\s+/);
       const firstName = normalizeTextField(nameParts[0] || "", 100) || "";
@@ -2529,8 +2556,18 @@ export default function ChatPage() {
 
       const selectedMarginContext: SelectedMarginContextPayload | null =
         state.mode === "margins" && selectedWorkspaceItem
-          ? {
-            candidate_name: selectedWorkspaceItem.candidateName || selectedWorkspaceItem.label || null,
+          ? (() => {
+            const isPayPackage =
+              selectedWorkspaceItem.objectType === "pay_package" ||
+              selectedWorkspaceItem.recordPhase === "job";
+            return {
+            object_type: selectedWorkspaceItem.objectType || null,
+            record_phase: selectedWorkspaceItem.recordPhase || null,
+            pay_package_id: selectedWorkspaceItem.payPackageId || null,
+            margin_object_id: selectedWorkspaceItem.marginObjectId || null,
+            job_id: selectedWorkspaceItem.jobId || null,
+            margin_id: selectedWorkspaceItem.marginId || null,
+            candidate_name: isPayPackage ? null : selectedWorkspaceItem.candidateName || selectedWorkspaceItem.label || null,
             profession: selectedWorkspaceItem.profession || null,
             specialty: selectedWorkspaceItem.specialty || null,
             facility_name: selectedWorkspaceItem.facilityName || null,
@@ -2547,7 +2584,8 @@ export default function ChatPage() {
             shift_type: selectedWorkspaceItem.shiftType || null,
             shift_start: selectedWorkspaceItem.shiftStart || null,
             shift_end: selectedWorkspaceItem.shiftEnd || null,
-          }
+            };
+          })()
           : null;
       const rosterDigest =
         state.mode === "ayaops" ? buildAyaopsRosterDigest(summary) : null;
@@ -2829,12 +2867,24 @@ export default function ChatPage() {
   const handleSubmit = async (e?: FormEvent, promptOverride?: string) => {
     if (e) e.preventDefault();
     const hasPendingImage = Boolean(state.pendingImage || pendingSavedImage);
-    const prompt = (promptOverride ?? state.input).trim() || (hasPendingImage ? "What's in this image?" : "");
+    const rawPrompt = (promptOverride ?? state.input).trim();
+    const packagesImageCapturePrompt =
+      hasPendingImage &&
+      state.mode === "margins" &&
+      (
+        !state.input.trim() ||
+        /^Create concise candidate outreach from this selected pay package\./i.test(rawPrompt) ||
+        /^Draft fast outreach for this pay package\./i.test(rawPrompt)
+      );
+    const prompt = packagesImageCapturePrompt
+      ? "Extract and save this pay package or margin screenshot."
+      : rawPrompt || (hasPendingImage ? "What's in this image?" : "");
     if ((!prompt && !hasPendingImage) || state.loading) return;
     const requestWorkspaceScope = workspaceScopeFor(state.mode, selectedWorkspaceItem);
     const sentImage = state.pendingImage;
     const sentSavedImage = pendingSavedImage;
-    const sentImageIntent = state.imageIntent;
+    const sentImageIntent =
+      state.imageIntent || (state.mode === "margins" && hasPendingImage ? "pay_package" : null);
 
     const userMessageId = uid();
     dispatch({
@@ -2982,9 +3032,9 @@ export default function ChatPage() {
 
   const candidateHubUrl = useMemo(() => {
     if (!activeAyaCandidate) return "";
-    if (activeAyaCandidate.hubUrl) return activeAyaCandidate.hubUrl;
     if (activeAyaCandidate.novaId) return `/c/${encodeURIComponent(activeAyaCandidate.novaId)}`;
-    if (activeAyaCandidate.id) return `/api/hub/candidates/${encodeURIComponent(activeAyaCandidate.id)}`;
+    if (activeAyaCandidate.id) return `/c/${encodeURIComponent(activeAyaCandidate.id)}`;
+    if (activeAyaCandidate.hubUrl) return activeAyaCandidate.hubUrl;
     return "";
   }, [activeAyaCandidate]);
 
@@ -3041,6 +3091,7 @@ export default function ChatPage() {
         onRefreshData={() => fetchSummary(state.mode)}
         marginSubTab={marginSubTab}
         onMarginSubTabChange={setMarginSubTab}
+        getAuthToken={user ? () => user.getIdToken() : undefined}
         chatLoading={state.loading}
         mobileOpen={mobileRailOpen}
         onMobileClose={() => setMobileRailOpen(false)}
@@ -3404,6 +3455,8 @@ export default function ChatPage() {
 
         {state.mode === "margins" && selectedWorkspaceItem && (() => {
           const pkg = selectedWorkspaceItem;
+          const isPayPackage = pkg.objectType === "pay_package" || pkg.recordPhase === "job" || marginSubTab === "jobs";
+          const primaryActionLabel = isPayPackage ? "Draft Outreach" : "Review Margin";
           const copyPackageText = () => {
             const specialty = pkg.specialty || pkg.profession || "Assignment";
             const facility = pkg.facilityName || "TBD";
@@ -3427,137 +3480,136 @@ export default function ChatPage() {
             ];
             navigator.clipboard.writeText(lines.join("\n"));
           };
+          const sendPackageActionToComposer = () => {
+            const specialty = pkg.specialty || pkg.profession || "role";
+            const facility = pkg.facilityName || "this facility";
+            const gross = formatMoney(pkg.weeklyGross);
+            const schedule = formatShiftCadence(pkg.weeklyHours, pkg.shiftType, pkg.shiftStart, pkg.shiftEnd);
+            const prompt = isPayPackage
+              ? [
+                `Create concise candidate outreach from this selected pay package.`,
+                `Facility: ${facility}`,
+                `Role: ${specialty}`,
+                `Pay: ${gross}/wk`,
+                `Dates: ${formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}`,
+                `Schedule: ${schedule || "--"} | ${formatShiftWindow(pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}`,
+              ].join("\n")
+              : [
+                `Draft the margin approval for this offer.`,
+                `Facility: ${facility}`,
+                `Role: ${specialty}`,
+                `Pay package: ${gross}/wk`,
+                `Actual margin: ${formatPct(pkg.actualMarginPct)}`,
+                `Target margin: ${formatPct(pkg.targetMarginPct)}`,
+              ].join("\n");
+            dispatch({ type: "SET_INPUT", payload: prompt });
+            inputRef.current?.focus();
+          };
           return (
-          <section className="c-margin-premium-card" id="margin-outreach-card">
-            {/* ── Action Bar ── */}
-            <div className="c-margin-actions">
-              <button
-                type="button"
-                className="c-margin-action-primary"
-                onClick={() => {
-                  copyPackageText();
-                  const btn = document.getElementById("copy-pkg-btn");
-                  if (btn) { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy Package"; }, 1800); }
-                }}
-                id="copy-pkg-btn"
-              >
-                Copy Package
-              </button>
-              {pkg.rcThreadUrl && (
-                <a className="c-margin-action-secondary" href={pkg.rcThreadUrl} target="_blank" rel="noopener noreferrer">
-                  SMS
-                </a>
-              )}
-              {pkg.outlookThreadUrl && (
-                <a className="c-margin-action-secondary" href={pkg.outlookThreadUrl} target="_blank" rel="noopener noreferrer">
-                  Email
-                </a>
-              )}
+          <section className={`c-package-brief ${isPayPackage ? "is-pay-package" : "is-margin"}`} id="margin-outreach-card">
+            <div className="c-package-brief-head">
+              <div className="c-package-title">
+                <div className="c-package-title-row">
+                  <span className="c-package-kicker">{isPayPackage ? "Pay Package" : "Margin"}</span>
+                  <span className="c-package-status">{isPayPackage ? "Package record" : "Approval record"}</span>
+                </div>
+                <h2>{pkg.specialty || pkg.profession || "Role"}</h2>
+                <p>{pkg.facilityName || "Facility pending"}</p>
+              </div>
+              <div className="c-package-actions">
+                <button
+                  type="button"
+                  className="c-margin-action-primary"
+                  onClick={sendPackageActionToComposer}
+                >
+                  {primaryActionLabel}
+                </button>
+                {isPayPackage && (
+                  <button
+                    type="button"
+                    className="c-margin-action-secondary"
+                    onClick={copyPackageText}
+                  >
+                    Copy
+                  </button>
+                )}
+                {pkg.rcThreadUrl && (
+                  <a className="c-margin-action-secondary" href={pkg.rcThreadUrl} target="_blank" rel="noopener noreferrer">
+                    SMS
+                  </a>
+                )}
+                {pkg.outlookThreadUrl && (
+                  <a className="c-margin-action-secondary" href={pkg.outlookThreadUrl} target="_blank" rel="noopener noreferrer">
+                    Email
+                  </a>
+                )}
+              </div>
             </div>
 
-            {/* ── Section 1: Assignment ── */}
-            <div className="c-pkg-section">
-              <div className="c-pkg-section-label">Assignment</div>
-              <div className="c-pkg-section-content">
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Specialty</span>
-                  <span className="c-pkg-field-value">{pkg.specialty || pkg.profession || "--"}</span>
+            <div className="c-package-brief-grid">
+              <div className="c-package-pay-box">
+                <span className="c-package-pay-label">Weekly Gross</span>
+                <strong>{formatMoney(pkg.weeklyGross)}<small>/wk</small></strong>
+                <div className="c-package-pay-metrics">
+                  <span>Base <b>{formatMoney(pkg.basePayRate)}/hr</b></span>
+                  <span>Stipends <b>{formatMoney(pkg.weeklyStipends)}/wk</b></span>
                 </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Facility</span>
-                  <span className="c-pkg-field-value">{pkg.facilityName || "--"}</span>
+              </div>
+
+              <div className="c-package-fact-grid">
+                <div className="c-package-fact">
+                  <span>Dates</span>
+                  <strong>{formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}</strong>
                 </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Location</span>
-                  <span className="c-pkg-field-value">{[pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ") || "--"}</span>
+                <div className="c-package-fact">
+                  <span>Schedule</span>
+                  <strong>
+                    {formatShiftCadence(pkg.weeklyHours, pkg.shiftType, pkg.shiftStart, pkg.shiftEnd) || "--"}
+                    {pkg.weeklyHours != null ? ` · ${pkg.weeklyHours}h` : ""}
+                  </strong>
                 </div>
-                {marginDistance && (
-                  <div className="c-pkg-row">
-                    <span className="c-pkg-field-label">Distance</span>
-                    <span className="c-pkg-field-value">{marginDistance.distance} · {marginDistance.duration}</span>
-                  </div>
-                )}
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Dates</span>
-                  <span className="c-pkg-field-value">{formatAssignmentWindow(pkg.assignmentStart, pkg.assignmentEnd)}</span>
+                <div className="c-package-fact">
+                  <span>Shift</span>
+                  <strong>{formatShiftWindow(pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}</strong>
+                </div>
+                <div className="c-package-fact">
+                  <span>Location</span>
+                  <strong>{[pkg.facilityCity, pkg.facilityState].filter(Boolean).join(", ") || "Location pending"}</strong>
                 </div>
               </div>
             </div>
 
             {marginTimeline && (
-              <div className="c-margin-premium-timeline">
+              <div className="c-package-progress">
                 <div className="c-margin-premium-timeline-bar">
                   <div className="c-margin-premium-timeline-fill" style={{ width: `${marginTimeline.pct}%` }} />
                 </div>
-                <span className="c-margin-premium-timeline-lbl">{marginTimeline.label}</span>
+                <span>{marginTimeline.label}</span>
               </div>
             )}
 
-            {/* ── Section 2: Compensation ── */}
-            <div className="c-pkg-section">
-              <div className="c-pkg-section-label">Compensation</div>
-              <div className="c-pkg-section-content">
-                <div className="c-pkg-row c-pkg-row-highlight">
-                  <span className="c-pkg-field-label">Weekly Gross</span>
-                  <span className="c-pkg-field-value c-pkg-field-primary">{formatMoney(pkg.weeklyGross)}<small>/wk</small></span>
-                </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Base Rate</span>
-                  <span className="c-pkg-field-value">{formatMoney(pkg.basePayRate)}<small>/hr</small></span>
-                </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Stipends</span>
-                  <span className="c-pkg-field-value">{formatMoney(pkg.weeklyStipends)}<small>/wk</small></span>
-                </div>
-              </div>
-            </div>
+            {marginDistance && (
+              <div className="c-package-distance">Distance: {marginDistance.distance} · {marginDistance.duration}</div>
+            )}
 
-            {/* ── Section 3: Schedule ── */}
-            <div className="c-pkg-section">
-              <div className="c-pkg-section-label">Schedule</div>
-              <div className="c-pkg-section-content">
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Cadence</span>
-                  <span className="c-pkg-field-value">{formatShiftCadence(pkg.weeklyHours, pkg.shiftType, pkg.shiftStart, pkg.shiftEnd) || "--"}</span>
-                </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Shift Window</span>
-                  <span className="c-pkg-field-value">{formatShiftWindow(pkg.shiftType, pkg.shiftStart, pkg.shiftEnd)}</span>
-                </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Weekly Hours</span>
-                  <span className="c-pkg-field-value">{pkg.weeklyHours ?? "--"}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* ── Internal (hidden) ── */}
             <details className="c-margin-premium-meta-details">
               <summary>Internal</summary>
-              <div className="c-pkg-section-content" style={{ marginTop: 16 }}>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Actual Margin</span>
-                  <span className="c-pkg-field-value">{formatPct(pkg.actualMarginPct)}</span>
+              <div className="c-package-internal-grid">
+                <div>
+                  <span>Actual Margin</span>
+                  <strong>{formatPct(pkg.actualMarginPct)}</strong>
                 </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Target Margin</span>
-                  <span className="c-pkg-field-value">{formatPct(pkg.targetMarginPct)}</span>
+                <div>
+                  <span>Target Margin</span>
+                  <strong>{formatPct(pkg.targetMarginPct)}</strong>
                 </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Last Synced</span>
-                  <span className="c-pkg-field-value">{formatRelativeTime(pkg.lastSeenAt)}</span>
+                <div>
+                  <span>Job Ref</span>
+                  <strong className="c-margin-mono">{pkg.jobId || "--"}</strong>
                 </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Job Ref</span>
-                  <span className="c-pkg-field-value c-margin-mono">{pkg.jobId || "--"}</span>
-                </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Margin Ref</span>
-                  <span className="c-pkg-field-value c-margin-mono">{pkg.marginId || "--"}</span>
-                </div>
-                <div className="c-pkg-row">
-                  <span className="c-pkg-field-label">Ledger ID</span>
-                  <span className="c-pkg-field-value c-margin-mono">{pkg.marginObjectId || pkg.id}</span>
+                <div>
+                  <span>Margin Ref</span>
+                  <strong className="c-margin-mono">{pkg.marginId || "--"}</strong>
                 </div>
               </div>
             </details>
@@ -3565,24 +3617,29 @@ export default function ChatPage() {
           );
         })()}
 
-        <ChatMessages
-          state={state}
-          dispatch={dispatch}
-          inputRef={inputRef}
-          messagesEndRef={messagesEndRef}
-          visibleMessages={visibleMessages}
-          approvingSnapshotMessageId={approvingSnapshotMessageId}
-          ingestingCandidateMessageId={ingestingCandidateMessageId}
-          expandedWritePayloads={expandedWritePayloads}
-          setExpandedWritePayloads={setExpandedWritePayloads}
-          setSourcesMsg={setSourcesMsg}
-          setRightPanelMode={setRightPanelMode}
-          handleApproveHealthcareSnapshot={handleApproveHealthcareSnapshot}
-          handleAddCandidateToSystem={handleAddCandidateToSystem}
-          onRetryAssistantMessage={handleRetryAssistantMessage}
-          copyToClipboard={copyToClipboard}
-          modeConfig={modeConfig}
-        />
+        {!(state.mode === "margins" && selectedWorkspaceItem && visibleMessages.length === 0) && (
+          <ChatMessages
+            state={state}
+            dispatch={dispatch}
+            inputRef={inputRef}
+            messagesEndRef={messagesEndRef}
+            visibleMessages={visibleMessages}
+            approvingSnapshotMessageId={approvingSnapshotMessageId}
+            ingestingCandidateMessageId={ingestingCandidateMessageId}
+            expandedWritePayloads={expandedWritePayloads}
+            setExpandedWritePayloads={setExpandedWritePayloads}
+            setSourcesMsg={setSourcesMsg}
+            setRightPanelMode={setRightPanelMode}
+            handleApproveHealthcareSnapshot={handleApproveHealthcareSnapshot}
+            handleAddCandidateToSystem={handleAddCandidateToSystem}
+            onRetryAssistantMessage={handleRetryAssistantMessage}
+            copyToClipboard={copyToClipboard}
+            modeConfig={modeConfig}
+          />
+        )}
+        {state.mode === "margins" && selectedWorkspaceItem && visibleMessages.length === 0 && (
+          <div className="c-package-compose-spacer" aria-hidden="true" />
+        )}
 
         {/* Input dock */}
         <ChatInput

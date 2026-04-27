@@ -171,6 +171,16 @@ test("add more details phrasing stays read-only in ayaops", () => {
   assert.equal(classification.toolRequired, false);
 });
 
+test("save pay package details is not routed to candidate note writes", () => {
+  const classification = classifyToolRequirement({
+    prompt: "save this pay package details",
+    availableToolNames: READ_AND_WRITE_TOOLS,
+    mode: "ayaops",
+  });
+  assert.equal(classification.writeIntent, false);
+  assert.equal(classification.toolRequired, false);
+});
+
 test("backend tool failure is surfaced as structured failure state", () => {
   const summary = summarizeToolExecution([
     { ok: true, name: "search_candidates" },

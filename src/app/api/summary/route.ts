@@ -935,7 +935,10 @@ async function marginsSummary() {
     const targetMarginDecimal = toPercentDecimal(obj.target_margin_pct);
     return {
       id: obj.margin_object_id,
+      objectType: "margin_approval",
       marginObjectId: obj.margin_object_id,
+      payPackageId: null,
+      recordPhase: "margin",
       label: obj.candidate_name || obj.candidate_id || obj.margin_object_id,
       candidateName: obj.candidate_name,
       candidateId: obj.candidate_id,
@@ -1061,7 +1064,9 @@ async function ayaopsSummary() {
     : ``;
 
   // Candidates with their prioritized assignment + facility.
-  // Product rule: if a traveler is both working and prestart, prestart wins.
+  // Candidate is the parent record; assignment rows are child history. Prefer
+  // the current child assignment over completed children, even if status flags
+  // are stale.
   const [listRows] = await db.run({
     sql: `SELECT c.id, c.nova_id, c.first_name, c.last_name, c.specialty, c.profession,
             c.home_state, c.compliance_risk_level, c.source, c.rc_thread_url, c.outlook_thread_url, c.phone,
@@ -1075,29 +1080,44 @@ async function ayaopsSummary() {
             SELECT a1.id
             FROM hc_assignments a1
             WHERE a1.candidate_id = c.id
-              AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline')
+              AND LOWER(COALESCE(a1.status, '')) IN ('pending_start', 'active', 'in_pipeline', 'completed', 'cancelled')
             ORDER BY
               CASE
+                WHEN LOWER(a1.status) IN ('active', 'pending_start')
+                  AND COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') <= CURRENT_DATE('America/Los_Angeles')
+                  AND COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31') >= CURRENT_DATE('America/Los_Angeles') THEN 0
                 WHEN LOWER(a1.status) = 'pending_start'
-                  AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
-                  AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE() THEN 0
-                WHEN LOWER(a1.status) = 'active' THEN 1
-                WHEN LOWER(a1.status) = 'in_pipeline' THEN 2
-                WHEN LOWER(a1.status) = 'pending_start' THEN 3
-                ELSE 4
+                  AND SAFE_CAST(a1.start_date AS DATE) > CURRENT_DATE('America/Los_Angeles') THEN 1
+                WHEN LOWER(a1.status) = 'active'
+                  AND COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31') >= CURRENT_DATE('America/Los_Angeles') THEN 2
+                WHEN LOWER(a1.status) = 'in_pipeline' THEN 3
+                WHEN LOWER(a1.status) IN ('active', 'pending_start', 'completed') THEN 4
+                WHEN LOWER(a1.status) = 'cancelled' THEN 5
+                ELSE 6
               END,
               CASE
-                WHEN LOWER(a1.status) = 'pending_start'
-                  AND SAFE_CAST(a1.start_date AS DATE) IS NOT NULL
-                  AND SAFE_CAST(a1.start_date AS DATE) >= CURRENT_DATE()
+                WHEN LOWER(a1.status) IN ('active', 'pending_start')
+                  AND COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') <= CURRENT_DATE('America/Los_Angeles')
+                  AND COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31') >= CURRENT_DATE('America/Los_Angeles')
                   THEN SAFE_CAST(a1.start_date AS DATE)
-                WHEN LOWER(a1.status) = 'active'
-                  THEN COALESCE(SAFE_CAST(a1.end_date AS DATE), DATE '9999-12-31')
+                ELSE NULL
+              END DESC,
+              CASE
+                WHEN LOWER(a1.status) = 'pending_start'
+                  AND SAFE_CAST(a1.start_date AS DATE) > CURRENT_DATE('America/Los_Angeles')
+                  THEN SAFE_CAST(a1.start_date AS DATE)
+                ELSE NULL
+              END ASC,
+              CASE
                 WHEN LOWER(a1.status) = 'in_pipeline'
                   THEN COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '9999-12-31')
-                ELSE COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
+                ELSE NULL
               END ASC,
-              COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01') DESC,
+              CASE
+                WHEN LOWER(a1.status) IN ('active', 'pending_start', 'completed', 'cancelled')
+                  THEN COALESCE(SAFE_CAST(a1.end_date AS DATE), SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
+                ELSE COALESCE(SAFE_CAST(a1.start_date AS DATE), DATE '0001-01-01')
+              END DESC,
               a1.id DESC
             LIMIT 1
           )
@@ -1200,7 +1220,7 @@ function getDaysToAssignmentEnd(candidate: CandidateRecord): number | null {
   return dateDiffDays(today, endDate);
 }
 
-// ─── Jobs Summary (Operational — no margin concepts) ────────────────
+// ─── Pay Package Summary (Facility-owned commercial inventory) ──────
 async function jobsSummary() {
   const result = await queryJobBoard({ limit: 250 });
 
@@ -1224,6 +1244,8 @@ async function jobsSummary() {
 
   const items = result.objects.map((obj: any) => ({
     id: obj.margin_object_id,
+    objectType: "pay_package",
+    payPackageId: obj.margin_object_id,
     marginObjectId: obj.margin_object_id,
     recordPhase: obj.record_phase,
     label: obj.facility_name || obj.job_id || obj.margin_object_id,
@@ -1255,6 +1277,7 @@ async function jobsSummary() {
   }
 
   const pulse = {
+    total_pay_packages: items.length,
     total_jobs: items.length,
     specialties: Object.keys(specCounts).length,
     facilities: Object.keys(facCounts).length,

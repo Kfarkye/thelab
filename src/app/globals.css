@@ -4543,38 +4543,41 @@ body {
 
 .c-margin-premium-card {
   background: #ffffff;
-  border-radius: 16px;
+  border-radius: 8px;
   border: 1px solid rgba(0, 0, 0, 0.05);
-  box-shadow: 0 4px 24px -8px rgba(0, 0, 0, 0.06), 0 0 1px 0 rgba(0, 0, 0, 0.1);
-  padding: 24px;
-  margin: 16px 24px;
+  box-shadow: 0 1px 2px rgba(74, 63, 45, 0.04), 0 10px 24px rgba(74, 63, 45, 0.05);
+  padding: 14px 16px 16px;
+  margin: 12px 18px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 14px;
 }
 
 .c-margin-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
 }
 
 .c-margin-action-primary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 24px;
+  height: 34px;
+  padding: 0 14px;
   background: #111827;
   color: #f9fafb;
   border: none;
-  border-radius: 10px;
+  border-radius: 6px;
   font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
-  letter-spacing: 0.01em;
-  min-width: 140px;
+  letter-spacing: 0.02em;
+  min-width: 118px;
 }
 
 .c-margin-action-primary:hover {
@@ -4592,13 +4595,14 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 10px 16px;
+  height: 34px;
+  padding: 0 11px;
   background: transparent;
   color: #374151;
   border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 10px;
+  border-radius: 6px;
   font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
@@ -4779,12 +4783,13 @@ body {
 .c-margin-premium-timeline {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  margin: -2px 0 2px;
 }
 
 .c-margin-premium-timeline-bar {
   flex: 1;
-  height: 8px;
+  height: 5px;
   background: #f3f4f6;
   border-radius: 999px;
   overflow: hidden;
@@ -4798,14 +4803,14 @@ body {
 }
 
 .c-margin-premium-timeline-lbl {
-  font-size: 12px;
+  font-size: 11px;
   color: #6b7280;
   font-weight: 500;
 }
 
 .c-margin-premium-meta-details {
   border-top: 1px solid rgba(0, 0, 0, 0.04);
-  padding-top: 20px;
+  padding-top: 10px;
 }
 
 .c-margin-premium-meta-details summary {
@@ -4875,12 +4880,12 @@ body {
 }
 
 .c-pkg-section-label {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: #9ca3af;
-  padding: 0 0 10px;
+  padding: 0 0 7px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.04);
   font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
 }
@@ -4894,7 +4899,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 0;
+  gap: 14px;
+  min-height: 34px;
+  padding: 7px 0;
   border-bottom: 1px solid rgba(0, 0, 0, 0.03);
 }
 
@@ -4903,21 +4910,21 @@ body {
 }
 
 .c-pkg-row-highlight {
-  background: #fafafa;
-  margin: 0 -24px;
-  padding: 12px 24px;
+  background: #fbfaf7;
+  margin: 0 -16px;
+  padding: 9px 16px;
   border-radius: 0;
 }
 
 .c-pkg-field-label {
-  font-size: 13px;
+  font-size: 12px;
   color: #6b7280;
   font-weight: 500;
   font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
 }
 
 .c-pkg-field-value {
-  font-size: 14px;
+  font-size: 13px;
   color: #111827;
   font-weight: 500;
   font-family: 'IBM Plex Mono', 'SF Mono', monospace;
@@ -4932,14 +4939,271 @@ body {
 }
 
 .c-pkg-field-primary {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   font-family: 'SF Pro Display', 'Inter', -apple-system, sans-serif;
 }
 
 .c-pkg-field-primary small {
   font-size: 13px;
+}
+
+.c-package-brief {
+  max-width: 960px;
+  margin: 14px auto 0;
+  padding: 14px;
+  border: 1px solid rgba(74, 63, 45, 0.12);
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 1px 2px rgba(74, 63, 45, 0.05);
+}
+
+.c-package-brief-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(74, 63, 45, 0.1);
+}
+
+.c-package-title {
+  min-width: 0;
+}
+
+.c-package-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.c-package-kicker {
+  display: inline-flex;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9a8f7c;
+}
+
+.c-package-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 21px;
+  padding: 0 8px;
+  border: 1px solid rgba(122, 133, 102, 0.22);
+  border-radius: 999px;
+  background: rgba(122, 133, 102, 0.08);
+  color: #5f694f;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.c-package-title h2 {
+  margin: 0;
+  color: #17130f;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: 0;
+  line-height: 1.12;
+}
+
+.c-package-title p {
+  margin: 5px 0 0;
+  color: #6f675a;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.c-package-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.c-package-actions .c-margin-action-primary,
+.c-package-actions .c-margin-action-secondary {
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+.c-package-brief-grid {
+  display: grid;
+  grid-template-columns: minmax(230px, 288px) minmax(0, 1fr);
+  gap: 12px;
+  padding-top: 14px;
+}
+
+.c-package-pay-box {
+  padding: 13px;
+  border: 1px solid rgba(74, 63, 45, 0.1);
+  border-radius: 6px;
+  background: linear-gradient(180deg, #f8f4ea 0%, #fffaf0 100%);
+}
+
+.c-package-pay-label,
+.c-package-fact span,
+.c-package-internal-grid span {
+  display: block;
+  margin-bottom: 6px;
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9a8f7c;
+}
+
+.c-package-pay-box > strong {
+  display: block;
+  color: #17130f;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.c-package-pay-box > strong small {
+  margin-left: 3px;
+  color: #9a8f7c;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.c-package-pay-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.c-package-pay-metrics span {
+  color: #756c5f;
+  font-size: 12px;
+}
+
+.c-package-pay-metrics b {
+  display: block;
+  margin-top: 2px;
+  color: #17130f;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.c-package-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.c-package-fact {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid rgba(74, 63, 45, 0.09);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.c-package-fact strong,
+.c-package-internal-grid strong {
+  color: #17130f;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.c-package-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  color: #7f7566;
+  font-size: 11px;
+}
+
+.c-package-distance {
+  margin-top: 8px;
+  color: #756c5f;
+  font-size: 12px;
+}
+
+.c-package-compose-spacer {
+  flex: 1 1 auto;
+  min-height: 220px;
+}
+
+.c-package-internal-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.c-package-internal-grid div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(74, 63, 45, 0.08);
+  border-radius: 6px;
+  background: #fff;
+}
+
+@media (max-width: 760px) {
+  .c-margin-premium-card {
+    margin: 10px 12px;
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .c-margin-actions {
+    flex-wrap: wrap;
+  }
+
+  .c-margin-action-primary,
+  .c-margin-action-secondary {
+    height: 32px;
+  }
+
+  .c-pkg-row {
+    align-items: flex-start;
+    min-height: 0;
+  }
+
+  .c-pkg-field-value {
+    max-width: 62%;
+    overflow-wrap: anywhere;
+  }
+
+  .c-package-brief {
+    margin: 10px 12px 0;
+    padding: 12px;
+  }
+
+  .c-package-brief-head,
+  .c-package-actions {
+    flex-wrap: wrap;
+  }
+
+  .c-package-brief-grid,
+  .c-package-fact-grid,
+  .c-package-internal-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .c-workspace-profile-link-wrap {

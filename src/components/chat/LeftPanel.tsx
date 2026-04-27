@@ -25,6 +25,7 @@ export // --- Left Panel ---
     onRefreshData,
     marginSubTab,
     onMarginSubTabChange,
+    getAuthToken,
     chatLoading,
     mobileOpen,
     onMobileClose,
@@ -42,6 +43,7 @@ export // --- Left Panel ---
     onRefreshData: () => void;
     marginSubTab: "jobs" | "margins";
     onMarginSubTabChange: (tab: "jobs" | "margins") => void;
+    getAuthToken?: () => Promise<string | null>;
     chatLoading: boolean;
     mobileOpen: boolean;
     onMobileClose: () => void;
@@ -79,8 +81,10 @@ export // --- Left Panel ---
         item.facilityState,
         item.state,
         item.jobId,
+        item.payPackageId,
         item.marginId,
         item.marginObjectId,
+        item.objectType,
       ];
       return searchable.some((value) => String(value || "").toLowerCase().includes(normalizedFilter));
     })
@@ -140,7 +144,7 @@ export // --- Left Panel ---
     ayaops: { keys: ["candidates", "facilities", "active", "submittals"], labels: ["Travelers", "Facilities", "Active", "In Pipeline"] },
     facility: { keys: ["facilities", "active", "pipeline", "tracked"], labels: ["Facilities", "Active", "Pipeline", "Tracked"] },
     margins: marginSubTab === "jobs"
-      ? { keys: ["total_jobs", "specialties", "facilities"], labels: ["Jobs", "Specialties", "Facilities"] }
+      ? { keys: ["total_pay_packages", "specialties", "facilities"], labels: ["Packages", "Specialties", "Facilities"] }
       : { keys: ["avg_margin_pct"], labels: ["Avg Margin"] },
     agent: { keys: ["tasks", "passed", "failed"], labels: ["Tasks", "Passed", "Failed"] },
     clicks: { keys: ["recent_clicks", "matched", "tracked"], labels: ["Last 24h", "Matched", "Listed"] },
@@ -284,10 +288,10 @@ export // --- Left Panel ---
             <div className="aya-ops-group-items">
               <button
                 type="button"
-                className={`aya-ops-link-chip ${statusFilter === "all" ? "active" : ""}`}
-                onClick={() => setStatusFilter("all")}
+                className={`aya-ops-link-chip ${statusFilter === "prospect" ? "active" : ""}`}
+                onClick={() => setStatusFilter("prospect")}
               >
-                Live List
+                Prospects
               </button>
               <button
                 type="button"
@@ -308,7 +312,7 @@ export // --- Left Panel ---
                 className="aya-ops-link-chip"
                 onClick={() => onModeSwitch("margins")}
               >
-                Margins
+                Packages
               </button>
             </div>
           </div>
@@ -509,7 +513,7 @@ export // --- Left Panel ---
                   className={`margin-sub-tab ${marginSubTab === "jobs" ? "active" : ""}`}
                   onClick={() => onMarginSubTabChange("jobs")}
                 >
-                  Jobs
+                  Pay Packages
                 </button>
                 <button
                   className={`margin-sub-tab ${marginSubTab === "margins" ? "active" : ""}`}
@@ -533,7 +537,7 @@ export // --- Left Panel ---
                   className={`margin-sub-tab ${marginSubTab === "jobs" ? "active" : ""}`}
                   onClick={() => onMarginSubTabChange("jobs")}
                 >
-                  Jobs
+                  Pay Packages
                 </button>
                 <button
                   className={`margin-sub-tab ${marginSubTab === "margins" ? "active" : ""}`}
@@ -543,13 +547,13 @@ export // --- Left Panel ---
                 </button>
               </div>
             )}
-            <div className="lp-items-empty">
+              <div className="lp-items-empty">
               {filter
                 ? "No matches"
                 : mode === "margins"
                   ? marginSubTab === "jobs"
-                    ? "No open jobs yet. Upload job data to populate this board."
-                    : "No saved margins yet. Attach candidates to jobs to create margins."
+                    ? "No pay packages yet. Upload facility job package data to populate this board."
+                    : "No margins yet. Create an offer from a pay package to generate one."
                   : mode === "facility"
                     ? "No facility records available."
                     : "No data yet"}
@@ -1024,27 +1028,30 @@ export // --- Left Panel ---
                 onMarginSubTabChange(tab);
               };
 
-              const handleAttach = async (jobObjectId: string) => {
+              const handleCreateOffer = async (payPackageId: string) => {
                 if (!attachName.trim()) return;
                 setAttachLoading(true);
                 try {
-                  const res = await fetch("/api/ayaops/jobs/attach", {
+                  const token = getAuthToken ? await getAuthToken() : null;
+                  const headers: Record<string, string> = { "Content-Type": "application/json" };
+                  if (token) headers.Authorization = `Bearer ${token}`;
+                  const res = await fetch("/api/ayaops/offers/create", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers,
                     body: JSON.stringify({
-                      margin_object_id: jobObjectId,
+                      margin_object_id: payPackageId,
+                      pay_package_id: payPackageId,
                       candidate_name: attachName.trim(),
                     }),
                   });
                   if (!res.ok) {
                     const err = await res.json();
-                    alert(err.error || "Failed to attach");
+                    alert(err.error || "Failed to create offer");
                     return;
                   }
                   setAttachJobId(null);
                   setAttachName("");
-                  // Re-fetch to refresh the list
-                  handleSubTabChange(marginSubTab);
+                  handleSubTabChange("margins");
                 } catch {
                   alert("Network error");
                 } finally {
@@ -1054,13 +1061,13 @@ export // --- Left Panel ---
 
               return (
                 <>
-                  {/* Jobs / Margins tab toggle */}
+                  {/* Pay package / approval tab toggle */}
                   <div className="margin-sub-tabs">
                     <button
                       className={`margin-sub-tab ${marginSubTab === "jobs" ? "active" : ""}`}
                       onClick={() => handleSubTabChange("jobs")}
                     >
-                      Jobs
+                      Pay Packages
                     </button>
                     <button
                       className={`margin-sub-tab ${marginSubTab === "margins" ? "active" : ""}`}
@@ -1070,7 +1077,7 @@ export // --- Left Panel ---
                     </button>
                   </div>
 
-                  {/* Job cards */}
+                  {/* Pay package cards */}
                   {marginSubTab === "jobs" && filtered.map((item) => (
                     <div
                       key={item.id}
@@ -1110,18 +1117,18 @@ export // --- Left Panel ---
                           <input
                             type="text"
                             className="lp-attach-input"
-                            placeholder="Candidate name..."
+                            placeholder="Candidate name for offer..."
                             value={attachName}
                             onChange={(e) => setAttachName(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") handleAttach(item.marginObjectId || item.id); }}
+                            onKeyDown={(e) => { if (e.key === "Enter") handleCreateOffer(item.payPackageId || item.marginObjectId || item.id); }}
                             autoFocus
                           />
                           <button
                             className="lp-attach-btn"
                             disabled={attachLoading || !attachName.trim()}
-                            onClick={() => handleAttach(item.marginObjectId || item.id)}
+                            onClick={() => handleCreateOffer(item.payPackageId || item.marginObjectId || item.id)}
                           >
-                            {attachLoading ? "..." : "Attach"}
+                            {attachLoading ? "..." : "Create Offer"}
                           </button>
                           <button
                             className="lp-attach-cancel"
@@ -1135,13 +1142,13 @@ export // --- Left Panel ---
                           className="lp-attach-trigger"
                           onClick={(e) => { e.stopPropagation(); setAttachJobId(item.id); setAttachName(""); }}
                         >
-                          Attach Candidate
+                          Create Offer
                         </button>
                       )}
                     </div>
                   ))}
 
-                  {/* Margin cards (existing) */}
+                  {/* Margin approval cards */}
                   {marginSubTab === "margins" && filtered.map((item) => (
                     <button
                       type="button"

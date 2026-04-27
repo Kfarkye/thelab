@@ -72,6 +72,12 @@ export interface SelectedCandidateContextPayload {
 }
 
 export interface SelectedMarginContextPayload {
+  object_type?: "pay_package" | "margin_approval" | string | null;
+  record_phase?: "job" | "margin" | string | null;
+  pay_package_id?: string | null;
+  margin_object_id?: string | null;
+  job_id?: string | null;
+  margin_id?: string | null;
   candidate_name: string | null;
   profession: string | null;
   specialty: string | null;
@@ -148,7 +154,7 @@ export interface ModeConfig {
   placeholder: string;
 }
 
-export type ImageIntent = "add_candidate" | "margin_approval" | "analyze" | null;
+export type ImageIntent = "add_candidate" | "pay_package" | "margin_approval" | "analyze" | null;
 
 export interface ChatState {
   messages: Message[];
@@ -294,6 +300,9 @@ export interface PanelItem {
   pipelineAssignments?: number | null;
   totalAssignments?: number | null;
   // Margins mode fields
+  objectType?: "pay_package" | "margin_approval" | string | null;
+  recordPhase?: "job" | "margin" | string | null;
+  payPackageId?: string | null;
   marginObjectId?: string | null;
   marginId?: string | null;
   jobId?: string | null;

@@ -64,6 +64,11 @@ const NON_WRITE_ADD_PATTERNS = [
   /\b(can|could|able)\s+you\s+add\b[\s\w]{0,40}\b(detail|details|context|insight|insights|information|info)\b/i,
 ];
 
+const NON_CANDIDATE_PACKAGE_SAVE_PATTERNS = [
+  /\b(save|store|log|persist)\b[\s\w]{0,40}\b(pay\s*package|package details|package|rate details|assignment details)\b/i,
+  /\b(pay\s*package|package details|package|rate details|assignment details)\b[\s\w]{0,40}\b(save|store|log|persist)\b/i,
+];
+
 const SIMULATED_TOOL_PATTERNS = [
   /\bconceptual representation\b/i,
   /\bi would emit\b/i,
@@ -85,6 +90,9 @@ export function classifyToolRequirement({ prompt, availableToolNames = [], mode 
     WRITE_INTENT_VERBS.find((verb) => new RegExp(`\\b${verb}\\b`, "i").test(normalizedPrompt)) || null;
   const statusIntent = STATUS_INTENT_PATTERNS.some((pattern) => pattern.test(normalizedPrompt));
   const nonWriteAddIntent = matchedVerb === "add" && NON_WRITE_ADD_PATTERNS.some((pattern) => pattern.test(normalizedPrompt));
+  const nonCandidatePackageSaveIntent = NON_CANDIDATE_PACKAGE_SAVE_PATTERNS.some((pattern) =>
+    pattern.test(normalizedPrompt),
+  );
   const explicitDraftPersistIntent = EXPLICIT_DRAFT_PERSIST_PATTERNS.some((pattern) =>
     pattern.test(normalizedPrompt),
   );
@@ -94,7 +102,9 @@ export function classifyToolRequirement({ prompt, availableToolNames = [], mode 
     !statusIntent;
   const writeIntent = copyOnlyDraftIntent
     ? false
-    : Boolean(((matchedVerb || statusIntent) && !nonWriteAddIntent) || explicitDraftPersistIntent);
+    : nonCandidatePackageSaveIntent
+      ? false
+      : Boolean(((matchedVerb || statusIntent) && !nonWriteAddIntent) || explicitDraftPersistIntent);
   const readIntentVerb = READ_INTENT_VERBS.some((verb) => new RegExp(`\\b${verb}\\b`, "i").test(normalizedPrompt));
   const readEntityMention = READ_ENTITY_PATTERN.test(normalizedPrompt);
   const readQualifierMention = READ_LIST_QUALIFIER_PATTERN.test(normalizedPrompt);

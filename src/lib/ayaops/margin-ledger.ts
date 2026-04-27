@@ -1707,7 +1707,7 @@ export async function queryMarginLedger(input: MarginLedgerQueryInput) {
   return response;
 }
 
-// ─── Job Board: Query unattached jobs ────────────────────────────────
+// ─── Pay Package Board: Query facility-owned package inventory ───────
 export async function queryJobBoard(input: { limit?: number }) {
   const limit = normalizeLimit(input.limit, 100, 1, 500);
 
@@ -1730,9 +1730,10 @@ export async function queryJobBoard(input: { limit?: number }) {
   };
 }
 
-// ─── Attach Candidate to Job (versioned promotion) ──────────────────
+// ─── Create Offer From Pay Package (versioned margin promotion) ──────
 export interface AttachCandidateInput {
   margin_object_id: string;
+  pay_package_id?: string | null;
   candidate_id?: string | null;
   candidate_name?: string | null;
   candidate_email?: string | null;
@@ -1761,7 +1762,7 @@ export async function attachCandidateToJob(input: AttachCandidateInput) {
   const now = new Date();
 
   const result = await recruitingDb.runTransactionAsync(async (tx: any) => {
-    // 1. Fetch the existing job record
+    // 1. Fetch the existing facility-owned pay package record.
     const [existingRows] = await tx.run({
       sql: `SELECT margin_object_id, record_phase, candidate_id, candidate_name, candidate_email, nova_profile_url,
                    job_id, margin_id, facility_name, profession, specialty, shift_type, shift_start_hhmm, shift_end_hhmm, weekly_hours,
@@ -1777,14 +1778,14 @@ export async function attachCandidateToJob(input: AttachCandidateInput) {
 
     const existing = asRecord(existingRows[0]?.toJSON());
     if (!existing) {
-      throw new Error(`Job record not found: ${marginObjectId}`);
+      throw new Error(`Pay package not found: ${marginObjectId}`);
     }
 
     if (readString(existing.record_phase) === "margin") {
-      throw new Error(`Record is already a margin (already has candidate attached): ${marginObjectId}`);
+      throw new Error(`Record is already a margin approval (already has an offer/candidate attached): ${marginObjectId}`);
     }
 
-    // 2. Mark the old job row as non-current (preserves history)
+    // 2. Mark the pay package row as non-current after it is selected for an offer.
     await tx.runUpdate({
       sql: `UPDATE margin_objects
             SET current_flag = FALSE,
@@ -1794,7 +1795,7 @@ export async function attachCandidateToJob(input: AttachCandidateInput) {
       types: { objectId: { type: "string" } },
     });
 
-    // 3. Build new margin identity with candidate context
+    // 3. Build new margin approval identity with candidate/offer context.
     const jobId = normalizeNullableString(existing.job_id) || null;
     const marginId = normalizeNullableString(existing.margin_id) || null;
     const facilityName = normalizeNullableString(existing.facility_name) || null;
@@ -1811,7 +1812,8 @@ export async function attachCandidateToJob(input: AttachCandidateInput) {
       recordPhase: "margin",
     });
 
-    // 4. Insert new margin row (versioned promotion)
+    // 4. Insert the margin approval row. The pay package values are copied from
+    // the selected package; margin remains internal approval math.
     await tx.runUpdate({
       sql: `INSERT INTO margin_objects (
               margin_object_id, record_phase, candidate_id, candidate_name, candidate_email, nova_profile_url,
@@ -1890,7 +1892,12 @@ export async function attachCandidateToJob(input: AttachCandidateInput) {
 
     return {
       previous_object_id: marginObjectId,
+      pay_package_id: marginObjectId,
+      offer_status: "created" as const,
+      selected_pay_package_id: marginObjectId,
+      margin_object_id: identity.objectId,
       new_object_id: identity.objectId,
+      object_type: "margin_approval" as const,
       record_phase: "margin" as const,
       candidate_id: candidateId,
       candidate_name: candidateName,

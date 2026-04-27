@@ -79,17 +79,15 @@ export function TemplateViewClient({ template }: { template: TemplateViewModel }
 
   return (
     <main className={styles.page}>
-      <section className={styles.hero}>
-        <div className={styles.heroText}>
-          <div className={styles.kickerRow}>
-            <span className={styles.kicker}>{template.category}</span>
-            <span className={styles.kicker}>{template.messageType}</span>
-            {template.internalOnly && <span className={styles.kicker}>Internal</span>}
-          </div>
-          <h1>{template.name}</h1>
-          <p>{template.id}</p>
+      <header className={styles.topbar}>
+        <div className={styles.crumb} aria-label="Template location">
+          <span className={styles.crumbLabel}>AyaOps</span>
+          <span className={styles.crumbSep}>/</span>
+          <span className={styles.crumbLabel}>Templates</span>
+          <span className={styles.crumbSep}>/</span>
+          <span className={styles.crumbCurrent}>{template.id}</span>
         </div>
-        <div className={styles.heroActions} aria-label="Template actions">
+        <div className={styles.topbarActions} aria-label="Template actions">
           <CopyButton
             value={fullDraft}
             label="Copy Draft"
@@ -101,6 +99,31 @@ export function TemplateViewClient({ template }: { template: TemplateViewModel }
             <ExternalLink size={15} />
             <span>Open API</span>
           </a>
+        </div>
+      </header>
+
+      <section className={styles.summary} aria-label="Template summary">
+        <div className={styles.summaryTitle}>
+          <div className={styles.kickerRow}>
+            <span className={styles.kicker}>{template.category}</span>
+            <span className={styles.kicker}>{template.messageType}</span>
+            {template.internalOnly && <span className={styles.kicker}>Internal</span>}
+          </div>
+          <h1>{template.name}</h1>
+        </div>
+        <div className={styles.statusStrip}>
+          <div>
+            <span>Source</span>
+            <code>{template.source}</code>
+          </div>
+          <div>
+            <span>Version</span>
+            <code>v{template.version}</code>
+          </div>
+          <div>
+            <span>Fields</span>
+            <code>{template.requiredFields.length}</code>
+          </div>
         </div>
       </section>
 

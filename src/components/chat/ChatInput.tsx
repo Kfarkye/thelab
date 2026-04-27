@@ -41,6 +41,11 @@ export function ChatInput({
   uploadingImage,
   CapabilityDropdown,
 }: ChatInputProps) {
+  const imageIntents =
+    state.mode === "margins"
+      ? IMAGE_INTENTS.filter((intent) => intent.value === "pay_package" || intent.value === "margin_approval" || intent.value === "analyze")
+      : IMAGE_INTENTS.filter((intent) => intent.value !== "pay_package");
+
   return (
         <div className="c-dock">
           {pendingSavedImage && (
@@ -53,7 +58,7 @@ export function ChatInput({
               </div>
               {(state.mode === "ayaops" || state.mode === "facility" || state.mode === "margins") && (
                 <div className="c-intent-picker">
-                  {IMAGE_INTENTS.map((intent) => (
+                  {imageIntents.map((intent) => (
                     <button
                       key={intent.value}
                       type="button"
@@ -78,7 +83,7 @@ export function ChatInput({
               </div>
               {(state.mode === "ayaops" || state.mode === "facility" || state.mode === "margins") && (
                 <div className="c-intent-picker">
-                  {IMAGE_INTENTS.map((intent) => (
+                  {imageIntents.map((intent) => (
                     <button
                       key={intent.value}
                       type="button"

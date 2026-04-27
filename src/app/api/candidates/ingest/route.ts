@@ -28,6 +28,35 @@ function normalizeString(value: unknown, maxLength: number): string | null {
   return normalized.slice(0, maxLength);
 }
 
+function stripFieldLabel(value: unknown, maxLength: number): string | null {
+  const normalized = normalizeString(value, maxLength + 40)
+    ?.replace(/^(?:[-•]\s*)?(?:name|candidate|candidate name|display name|full name|profile)\s*:\s*/i, "")
+    .trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function normalizeNamePart(value: unknown): string | null {
+  const normalized = stripFieldLabel(value, 100)
+    ?.replace(/[^\p{L}\p{M} .'`-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || /^(unknown|n\/a|none)$/i.test(normalized)) return null;
+  return normalized.slice(0, 100);
+}
+
+function normalizeCity(value: unknown): string | null {
+  const normalized = normalizeString(value, 140)
+    ?.replace(/^(?:[-•]\s*)?(?:home address|address|location|city\/state|city|home city)\s*:\s*/i, "")
+    .replace(/\s+[A-Z]{2}\s*$/, "")
+    .replace(/\s*,\s*[A-Z]{2}\s*$/, "")
+    .replace(/[^\p{L}\p{M} .'`-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || /^(unknown|n\/a|none)$/i.test(normalized)) return null;
+  if (normalized.length > 60) return null;
+  return normalized;
+}
+
 function normalizeEmail(value: unknown): string | null {
   const normalized = normalizeString(value, 320);
   return normalized ? normalized.toLowerCase() : null;
@@ -52,13 +81,13 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as IngestCandidateBody;
     const sanitized = {
-      first_name: normalizeString(body.first_name, 100),
-      last_name: normalizeString(body.last_name, 100),
+      first_name: normalizeNamePart(body.first_name),
+      last_name: normalizeNamePart(body.last_name),
       email: normalizeEmail(body.email),
       phone: normalizeString(body.phone, 40),
       profession: normalizeString(body.profession, 100),
       specialty: normalizeString(body.specialty, 100),
-      current_city: normalizeString(body.current_city, 100),
+      current_city: normalizeCity(body.current_city),
       current_state: normalizeState(body.current_state),
       employment_type: normalizeString(body.employment_type, 60),
       nova_id: normalizeString(body.nova_id, 32),

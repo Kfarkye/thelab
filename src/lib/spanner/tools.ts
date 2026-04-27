@@ -1020,14 +1020,31 @@ function asString(value: unknown, maxLen: number): string | null {
   return normalized.slice(0, maxLen);
 }
 
+function stripCandidateLabel(value: string | null): string | null {
+  const normalized = String(value || "")
+    .replace(/^(?:[-•]\s*)?(?:name|candidate|candidate name|display name|full name|profile)\s*:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || null;
+}
+
+function normalizeNamePart(value: unknown, maxLen: number): string | null {
+  const normalized = stripCandidateLabel(asString(value, maxLen + 40))
+    ?.replace(/[^\p{L}\p{M} .'`-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || /^(unknown|n\/a|none)$/i.test(normalized)) return null;
+  return normalized.slice(0, maxLen);
+}
+
 function splitDisplayName(raw: string | null): { firstName: string | null; lastName: string | null } {
-  const value = String(raw || "").trim();
+  const value = stripCandidateLabel(raw);
   if (!value) return { firstName: null, lastName: null };
   const parts = value.split(/\s+/);
-  if (parts.length === 1) return { firstName: parts[0].slice(0, 100), lastName: null };
+  if (parts.length === 1) return { firstName: normalizeNamePart(parts[0], 100), lastName: null };
   return {
-    firstName: parts[0].slice(0, 100),
-    lastName: parts.slice(1).join(" ").slice(0, 100),
+    firstName: normalizeNamePart(parts[0], 100),
+    lastName: normalizeNamePart(parts.slice(1).join(" "), 100),
   };
 }
 
@@ -1115,10 +1132,12 @@ async function ingestNovaProfile(input: {
     throw new Error("ingest_nova_profile requires candidate_id or nova_id");
   }
 
-  const displayNameRaw = asString(payload.display_name, 250) || asString(payload.legal_name, 250);
+  const displayNameRaw =
+    stripCandidateLabel(asString(payload.display_name, 250)) ||
+    stripCandidateLabel(asString(payload.legal_name, 250));
   const displayNameParts = splitDisplayName(displayNameRaw);
-  const firstName = asString(payload.first_name, 100) || displayNameParts.firstName;
-  const lastName = asString(payload.last_name, 100) || displayNameParts.lastName;
+  const firstName = normalizeNamePart(payload.first_name, 100) || displayNameParts.firstName;
+  const lastName = normalizeNamePart(payload.last_name, 100) || displayNameParts.lastName;
 
   const contact = asRecord(payload.contact);
   const address = asRecord(contact?.address);
