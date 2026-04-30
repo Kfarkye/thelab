@@ -47,6 +47,11 @@ export interface Message {
   modelId?: string;
   writeResult?: WriteResultMeta;
   toolStatuses?: ToolStatus[];
+  groundingData?: {
+    mode: "grounded";
+    backend?: "candidate_search" | "outreach" | "approvals";
+    data: any;
+  };
 }
 
 export interface SavedImage {
@@ -145,7 +150,7 @@ export type ConsoleMode =
   | "agent"
   | "deals";
 
-export type ModelOverride = "auto" | "sonnet" | "opus" | "flash" | "pro";
+export type ModelOverride = "auto" | "flash" | "pro";
 
 export interface ModeConfig {
   id: ConsoleMode;
@@ -190,6 +195,7 @@ export type ChatAction =
   | { type: "SET_MODE"; payload: ConsoleMode }
   | { type: "SET_SELECTED_CANDIDATE"; payload: ChatState["selectedCandidate"] }
   | { type: "UPSERT_TOOL_STATUS"; payload: { id: string; status: ToolStatus } }
+  | { type: "SET_ASSISTANT_GROUNDING_DATA"; payload: { id: string; groundingData: Message["groundingData"] } }
   | { type: "HYDRATE"; payload: Message[] };
 
 // --- Summary types ---
@@ -311,6 +317,9 @@ export interface PanelItem {
   basePayRate?: number | null;
   weeklyStipends?: number | null;
   grossWeeklyPayComputed?: number | null;
+  jobDescription?: string | null;
+  jobRequirements?: string | null;
+  jobNotes?: string | null;
   shiftType?: string | null;
   shiftStart?: string | null;
   shiftEnd?: string | null;

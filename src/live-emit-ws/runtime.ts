@@ -226,6 +226,7 @@ export async function startLiveEmitWsRuntime(options: WsRuntimeOptions = {}) {
       }
     }
   }, heartbeatMs);
+  heartbeatTimer.unref?.();
 
   server.on("upgrade", (request, socket, head) => {
     const reqUrl = new URL(request.url || "/", "http://localhost");
@@ -475,6 +476,16 @@ export async function startLiveEmitWsRuntime(options: WsRuntimeOptions = {}) {
           // ignore
         }
       }
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("ws_server_pool_close_timeout"));
+        }, 5_000);
+        wss.close((err?: Error) => {
+          clearTimeout(timeout);
+          if (err) reject(err);
+          else resolve();
+        });
+      });
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("ws_server_close_timeout"));

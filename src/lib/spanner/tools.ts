@@ -8,6 +8,7 @@ import { mapCandidateRow } from "@/lib/mappers/candidate";
 import type { CandidateRecord } from "@/lib/types/candidate";
 import { normalizeUSHomeState } from "@/lib/spanner/state-normalization";
 import { getRecruitingDb } from "@/lib/spanner-pool";
+import { geocodeCityState } from "@/lib/recruiting/geocode";
 
 const db = getRecruitingDb();
 
@@ -1056,6 +1057,19 @@ function extractNovaIdFromProfileUrl(profileUrl: string | null): string | null {
   return match[1].slice(0, 20);
 }
 
+function extractCityFromAddress(value: unknown): string | null {
+  const text = asString(value, 250);
+  if (!text) return null;
+  const parts = text.split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const candidate = parts[parts.length - 2]
+      .replace(/\b(?:apt|unit|ste|suite)\b.*$/i, "")
+      .trim();
+    return candidate || null;
+  }
+  return null;
+}
+
 function resolveProfilePayload(input: {
   candidateProfile: Record<string, unknown> | null;
   payloadJson: string | null;
@@ -1156,6 +1170,11 @@ async function ingestNovaProfile(input: {
     normalizeUSHomeState(payload.home_state) ||
     normalizeUSHomeState(address?.current) ||
     normalizeUSHomeState(address?.home);
+  const homeCity =
+    asString(payload.home_city, 100) ||
+    asString(address?.city, 100) ||
+    extractCityFromAddress(address?.current) ||
+    extractCityFromAddress(address?.home);
   const source = "nova";
 
   let existingIdentity = await resolveCandidateIdentityOptional(uuidInput);
@@ -1164,6 +1183,32 @@ async function ingestNovaProfile(input: {
   }
 
   const candidateId = existingIdentity?.id || randomUUID();
+  let geocode: { latitude: number; longitude: number } | null = null;
+  if (homeCity && homeState) {
+    try {
+      geocode = await geocodeCityState(homeCity, homeState);
+    } catch (error) {
+      console.info(JSON.stringify({
+        severity: "INFO",
+        component: "hc_candidate_ingest",
+        event: "geocode_skipped",
+        candidate_id: candidateId,
+        candidate_input: rawCandidateId || novaId,
+        address: `${homeCity}, ${homeState}`,
+        reason: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  } else {
+    console.info(JSON.stringify({
+      severity: "INFO",
+      component: "hc_candidate_ingest",
+      event: "geocode_skipped",
+      candidate_id: candidateId,
+      candidate_input: rawCandidateId || novaId,
+      address: homeCity || homeState ? `${homeCity || ""}, ${homeState || ""}` : null,
+      reason: "missing_home_city_or_state",
+    }));
+  }
   const writeDate = new Date();
   const writeTimestamp = writeDate.toISOString();
   let rowsUpdated = 0;
@@ -1179,9 +1224,13 @@ async function ingestNovaProfile(input: {
                   phone = COALESCE(@phone, phone),
                   specialty = COALESCE(@specialty, specialty),
                   profession = COALESCE(@profession, profession),
+                  home_city = COALESCE(@homeCity, home_city),
                   home_state = COALESCE(@homeState, home_state),
+                  latitude = COALESCE(@latitude, latitude),
+                  longitude = COALESCE(@longitude, longitude),
                   source = COALESCE(@source, source),
-                  updated_at = @updatedAt
+                  updated_by = @updatedBy,
+                  updated_at = PENDING_COMMIT_TIMESTAMP()
               WHERE id = @candidateId`,
         params: {
           candidateId,
@@ -1192,9 +1241,12 @@ async function ingestNovaProfile(input: {
           phone,
           specialty,
           profession,
+          homeCity,
           homeState,
+          latitude: geocode?.latitude ?? null,
+          longitude: geocode?.longitude ?? null,
           source,
-          updatedAt: writeDate,
+          updatedBy: "system",
         },
         types: {
           candidateId: { type: "string" },
@@ -1205,18 +1257,24 @@ async function ingestNovaProfile(input: {
           phone: { type: "string" },
           specialty: { type: "string" },
           profession: { type: "string" },
+          homeCity: { type: "string" },
           homeState: { type: "string" },
+          latitude: { type: "float64" },
+          longitude: { type: "float64" },
           source: { type: "string" },
-          updatedAt: { type: "timestamp" },
+          updatedBy: { type: "string" },
         },
       });
       rowsUpdated = Number(count);
     } else {
       const [count] = await tx.runUpdate({
         sql: `INSERT INTO hc_candidates (
-                id, nova_id, first_name, last_name, email, phone, specialty, profession, home_state, source, created_at, updated_at
+                id, nova_id, first_name, last_name, email, phone, specialty, profession,
+                home_city, home_state, latitude, longitude, source, created_by, updated_by, created_at, updated_at
               ) VALUES (
-                @candidateId, @novaId, @firstName, @lastName, @email, @phone, @specialty, @profession, @homeState, @source, @createdAt, @updatedAt
+                @candidateId, @novaId, @firstName, @lastName, @email, @phone, @specialty, @profession,
+                @homeCity, @homeState, @latitude, @longitude, @source, @createdBy, @updatedBy,
+                PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP()
               )`,
         params: {
           candidateId,
@@ -1227,10 +1285,13 @@ async function ingestNovaProfile(input: {
           phone,
           specialty,
           profession,
+          homeCity,
           homeState,
+          latitude: geocode?.latitude ?? null,
+          longitude: geocode?.longitude ?? null,
           source,
-          createdAt: writeDate,
-          updatedAt: writeDate,
+          createdBy: "system",
+          updatedBy: "system",
         },
         types: {
           candidateId: { type: "string" },
@@ -1241,10 +1302,13 @@ async function ingestNovaProfile(input: {
           phone: { type: "string" },
           specialty: { type: "string" },
           profession: { type: "string" },
+          homeCity: { type: "string" },
           homeState: { type: "string" },
+          latitude: { type: "float64" },
+          longitude: { type: "float64" },
           source: { type: "string" },
-          createdAt: { type: "timestamp" },
-          updatedAt: { type: "timestamp" },
+          createdBy: { type: "string" },
+          updatedBy: { type: "string" },
         },
       });
       rowsUpdated = Number(count);

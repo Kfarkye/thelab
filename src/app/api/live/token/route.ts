@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { GOOGLE_CLOUD_PROJECT } from "@/lib/env";
+import { GEMINI_PRO_MODEL } from "@/lib/ai/gemini-config";
 
 const PROJECT_ID = GOOGLE_CLOUD_PROJECT;
 const LOCATION = "global";
@@ -27,7 +28,7 @@ export async function GET(request: NextRequest) {
       JSON.stringify({
         project: PROJECT_ID,
         location: LOCATION,
-        model: "gemini-3.1-pro-preview",
+        model: GEMINI_PRO_MODEL,
         systemInstruction: LIVE_PROMPTS[mode] || LIVE_PROMPTS.code,
         thinkingParameter: "thinking_level",
         allowedThinkingLevels: ["LOW", "MEDIUM", "HIGH"],

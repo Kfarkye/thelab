@@ -1,0 +1,54 @@
+{
+  "policy_id": "GOV.GOOGLE_GENAI_SDK.LOCKED.V1",
+  "status": "active",
+  "required_package": "@google/genai",
+  "banned_packages": [
+    "@google-cloud/vertexai",
+    "@google-cloud/aiplatform",
+    "@google/generative-ai"
+  ],
+  "initialization": {
+    "import": "import { GoogleGenAI } from \"@google/genai\";",
+    "vertex_mode": true,
+    "project_env": "GOOGLE_CLOUD_PROJECT",
+    "location_env": "GOOGLE_CLOUD_LOCATION",
+    "default_location": "us-central1"
+  },
+  "allowed_call_shapes": {
+    "one_shot": "ai.models.generateContent(...)",
+    "streaming": "ai.models.generateContentStream(...)",
+    "chat": "ai.chats.create({...})",
+    "chat_send": "chatSession.sendMessage({ message })",
+    "chat_stream": "chatSession.sendMessageStream({ message })",
+    "token_counting": "ai.models.countTokens(...)"
+  },
+  "grounding": {
+    "vertex_ai_search": "config.tools[{ retrieval: { vertexAiSearch: { datastore } } }]",
+    "google_search": "config.tools[{ googleSearch: {} }]"
+  },
+  "function_calling": {
+    "location": "config.tools[].functionDeclarations",
+    "rule": "Function calling is an action boundary capability, not the primary product surface."
+  },
+  "structured_output": {
+    "responseMimeType": "application/json",
+    "responseSchema": "Use Type from @google/genai"
+  },
+  "critical_rules": [
+    "Never use ai.getGenerativeModel(...)",
+    "Never use model.startChat(...)",
+    "Never suppress SDK errors with @ts-ignore",
+    "Never suppress SDK errors with @ts-expect-error",
+    "If TypeScript complains, fix the SDK call shape",
+    "All model methods live on ai.models.*",
+    "All chat methods live on ai.chats.*",
+    "Config belongs in config",
+    "Tools belong in config.tools"
+  ],
+  "auth": {
+    "cloud_run": "Application Default Credentials through metadata server",
+    "local": "gcloud auth application-default login",
+    "no_service_account_key_files": true,
+    "no_api_key_mode_for_vertex": true
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "policy_id": "AYA.ARTIFACT_LANES.V1",
+  "status": "active",
+  "lanes": [
+    {
+      "lane": "artifact_text_preview_v1",
+      "purpose": "Stream generated React component code visibly as text for review.",
+      "executes_code": false,
+      "persists_code": false,
+      "deploys_code": false,
+      "risk": "low",
+      "status": "active"
+    },
+    {
+      "lane": "ledgered_artifact",
+      "purpose": "Save generated artifacts with actor, ruleset, content hash, validation results, and approval status.",
+      "executes_code": false,
+      "persists_code": true,
+      "deploys_code": false,
+      "risk": "medium",
+      "status": "next"
+    },
+    {
+      "lane": "live_execution_preview",
+      "purpose": "Run generated React in Sandpack or isolated iframe.",
+      "executes_code": true,
+      "persists_code": false,
+      "deploys_code": false,
+      "risk": "high",
+      "status": "defer"
+    }
+  ],
+  "merge_rule": "The preview endpoint must not execute, persist, or deploy generated code."
+}

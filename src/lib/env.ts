@@ -5,13 +5,19 @@
 export function requireEnv(key: string): string {
   const val = process.env[key];
   if (!val) {
-    if (process.env.npm_lifecycle_event === "build") {
+    const isBuild = process.env.npm_lifecycle_event === "build";
+    const isTest =
+      process.env.NODE_ENV === "test" ||
+      process.argv.includes("--test") ||
+      process.argv.some((arg) => /scripts\/tests\//.test(arg));
+
+    if (isBuild || isTest) {
       console.warn(JSON.stringify({
         severity: "WARNING",
         module: "env",
-        event: "build_stub_generated",
+        event: isBuild ? "build_stub_generated" : "test_stub_generated",
         missing_key: key,
-        message: `Missing ${key} during build phase; using stub.`
+        message: `Missing ${key} during ${isBuild ? "build" : "test"} phase; using stub.`
       }));
       return `BUILD_STUB_${key}`;
     }

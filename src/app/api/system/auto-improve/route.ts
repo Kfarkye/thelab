@@ -4,9 +4,8 @@
 // to read repo files and propose changes via GitHub PR.
 
 import { NextRequest } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { requireAuth } from "@/lib/middleware/auth";
-import { requireEnv } from "@/lib/env";
+import { createVertexGenAI, GEMINI_PRO_MODEL, GEMINI_THINKING_HIGH } from "@/lib/ai/gemini-config";
 import { AUTO_IMPROVE_TOOLS } from "@/lib/ai/verter-tools";
 import {
   readRepoFileByPath,
@@ -15,7 +14,7 @@ import {
   type ProcessCodeChangeParams,
 } from "@/lib/github/tools";
 
-const GEMINI_MODEL = "gemini-3-flash-preview";
+const GEMINI_MODEL = GEMINI_PRO_MODEL;
 const MAX_TOOL_ROUNDS = 6;
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -68,11 +67,7 @@ export async function POST(request: NextRequest) {
     : [];
 
   try {
-    const ai = new GoogleGenAI({
-      vertexai: true,
-      project: requireEnv("GOOGLE_CLOUD_PROJECT"),
-      location: "global",
-    });
+    const ai = createVertexGenAI();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tools: any = [
@@ -116,6 +111,7 @@ Your job is to:
         contents,
         config: {
           tools,
+          thinkingConfig: GEMINI_THINKING_HIGH,
           temperature: 0.2,
           systemInstruction: systemPrompt,
         },

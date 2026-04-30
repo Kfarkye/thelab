@@ -59,10 +59,8 @@ const MODE_CONTEXT_HINTS: Record<ConsoleMode, string> = {
 
 const CAPABILITY_OPTIONS: { value: ModelOverride; label: string; hint: string }[] = [
   { value: "auto", label: "Auto", hint: "routes for you" },
-  { value: "flash", label: "Quick", hint: "fast lookups" },
-  { value: "sonnet", label: "Standard", hint: "everyday" },
-  { value: "opus", label: "Deep", hint: "heavy analysis" },
-  { value: "pro", label: "Extended", hint: "long research" },
+  { value: "pro", label: "Gemini 3.1 Pro", hint: "deep reasoning" },
+  { value: "flash", label: "Flash-Lite", hint: "fast extraction" },
 ];
 
 const IMAGE_INTENTS: { value: ImageIntent; icon: React.ReactNode; label: string }[] = [
@@ -1064,7 +1062,7 @@ function CapabilityDropdown({
       {open && (
         <div className="cap-menu">
           {CAPABILITY_OPTIONS.map((option) => {
-            const locked = isOpsWorkspace && (option.value === "sonnet" || option.value === "opus");
+            const locked = false;
             return (
               <button
                 key={option.value}

@@ -1,0 +1,27 @@
+{
+  "policy_id": "AYA.BANNED_PATTERNS.V1",
+  "status": "active",
+  "sdk_banned_imports": [
+    "@google-cloud/vertexai",
+    "@google-cloud/aiplatform",
+    "@google/generative-ai"
+  ],
+  "sdk_banned_calls": [
+    "getGenerativeModel",
+    "startChat"
+  ],
+  "typescript_banned_suppressions": [
+    "@ts-ignore",
+    "@ts-expect-error"
+  ],
+  "artifact_banned_code_patterns": [
+    "dangerouslySetInnerHTML",
+    "eval(",
+    "new Function(",
+    "localStorage",
+    "sessionStorage",
+    "fetch(",
+    "<script",
+    "process.env"
+  ]
+}

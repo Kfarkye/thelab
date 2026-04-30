@@ -1,0 +1,152 @@
+[
+  {
+    "input": "dietitians within 50 miles of Sacramento",
+    "expected_intent": "specialty/location",
+    "notes": "Map dietitians to Dietitian, Sacramento to coordinates, include SEARCH(search_tokens, @searchQuery), active status, distance ORDER BY, radius filter."
+  },
+  {
+    "input": "dietitians near San Francisco",
+    "expected_intent": "specialty/location",
+    "notes": "Map San Francisco to coordinates and Dietitian specialty; order by relevance and distance."
+  },
+  {
+    "input": "active dietitians within 30 miles of San Francisco with weekly gross over 2500",
+    "expected_intent": "multi",
+    "notes": "Should recognize Dietitian, active status, San Francisco radius, and ideally package/pay context. Current candidates table has no pay fields, so flag likely."
+  },
+  {
+    "input": "dietitan near Sacramento",
+    "expected_intent": "specialty/location",
+    "notes": "Misspelling should still map dietitan to Dietitian."
+  },
+  {
+    "input": "any dieticians in SF",
+    "expected_intent": "specialty/location",
+    "notes": "Common misspelling dieticians should map to Dietitian; SF should map to San Francisco."
+  },
+  {
+    "input": "RNs available before May 15",
+    "expected_intent": "specialty/availability",
+    "notes": "Map RNs to RN. Availability fields are not in candidates, so good translation should at least preserve RN active candidate search and flag availability limitation."
+  },
+  {
+    "input": "registered nurses near Sacramento",
+    "expected_intent": "specialty/location",
+    "notes": "Map registered nurses to RN and Sacramento to coordinates."
+  },
+  {
+    "input": "RN within 100 miles of Sacramento",
+    "expected_intent": "specialty/location",
+    "notes": "Map RN and radius. Should include Haversine and radius filter."
+  },
+  {
+    "input": "RNs not currently on assignment",
+    "expected_intent": "specialty/availability",
+    "notes": "Negation and assignment status require assignment data not present in candidates. Expected to flag until context adds assignment joins."
+  },
+  {
+    "input": "nurses available next month near LA",
+    "expected_intent": "specialty/availability/location",
+    "notes": "Informal nurses should map to RN and LA to Los Angeles. Availability may flag."
+  },
+  {
+    "input": "Med Surg nurses with active status near LA",
+    "expected_intent": "multi",
+    "notes": "Map Med Surg nurses to Med Surg RN, active status, LA coordinates."
+  },
+  {
+    "input": "anyone good for Med Surg in LA",
+    "expected_intent": "specialty/location",
+    "notes": "Informal phrasing should map Med Surg to Med Surg RN and LA coordinates."
+  },
+  {
+    "input": "medsurg RN close to Los Angeles",
+    "expected_intent": "specialty/location",
+    "notes": "medsurg abbreviation should map to Med Surg RN and Los Angeles coordinates."
+  },
+  {
+    "input": "active med surg nurses within 25 miles of LA",
+    "expected_intent": "specialty/location",
+    "notes": "Map Med Surg RN, active status, radius, and LA coordinates."
+  },
+  {
+    "input": "PT available next month",
+    "expected_intent": "specialty/availability",
+    "notes": "Map PT to Physical Therapist/PT. Current data likely lacks PT candidates, so flag as zero-result or value coverage gap."
+  },
+  {
+    "input": "physical therapists near Sacramento",
+    "expected_intent": "specialty/location",
+    "notes": "Map physical therapists to PT. Current data likely zero until PT candidates loaded."
+  },
+  {
+    "input": "OT near San Francisco",
+    "expected_intent": "specialty/location",
+    "notes": "Map OT to Occupational Therapist/OT. Current data likely zero."
+  },
+  {
+    "input": "occupational therapist active candidates",
+    "expected_intent": "specialty",
+    "notes": "Map occupational therapist to OT and active status."
+  },
+  {
+    "input": "RT respiratory therapist within 100 miles of Sacramento",
+    "expected_intent": "specialty/location",
+    "notes": "Map RT/respiratory therapist to RT or Respiratory Therapy. Current data likely zero."
+  },
+  {
+    "input": "respiratory therapy candidates near the bay",
+    "expected_intent": "specialty/location",
+    "notes": "Geographic ambiguity: bay should resolve to Bay Area/San Francisco with low confidence or ask clarification."
+  },
+  {
+    "input": "candidates wrapping up in the next 3 weeks",
+    "expected_intent": "availability",
+    "notes": "Time-relative and assignment-end query requires assignment history not in candidates. Expected to flag until assignment joins are available."
+  },
+  {
+    "input": "who is close to Sacramento and active",
+    "expected_intent": "location",
+    "notes": "No specialty mentioned. Good query should use active status and distance ordering without forcing Dietitian."
+  },
+  {
+    "input": "active candidates near the bay",
+    "expected_intent": "location",
+    "notes": "Geographic ambiguity should map or flag the bay phrase; should not invent a specialty."
+  },
+  {
+    "input": "near San Francisco",
+    "expected_intent": "location",
+    "notes": "No specialty. Should return active candidates ordered by distance, not default specialty if QueryData understands pure location."
+  },
+  {
+    "input": "Dietitian candidates with active status",
+    "expected_intent": "specialty",
+    "notes": "Simple specialty and status query. Should include SEARCH(search_tokens, @searchQuery)."
+  },
+  {
+    "input": "RN candidates with active status",
+    "expected_intent": "specialty",
+    "notes": "Simple RN active query. Should include SEARCH(search_tokens, @searchQuery)."
+  },
+  {
+    "input": "Med Surg active candidates",
+    "expected_intent": "specialty",
+    "notes": "Simple Med Surg active query. Should include SEARCH(search_tokens, @searchQuery)."
+  },
+  {
+    "input": "dietitians near the bay",
+    "expected_intent": "specialty/location",
+    "notes": "Bay Area ambiguity with a supported specialty. Should map to San Francisco/Oakland area or ask clarification."
+  },
+  {
+    "input": "RNs within 500 miles of San Francisco",
+    "expected_intent": "specialty/location",
+    "notes": "Large radius should include RN candidates if coordinates exist."
+  },
+  {
+    "input": "Med Surg nurses within 500 miles of Sacramento",
+    "expected_intent": "specialty/location",
+    "notes": "Large radius should include Med Surg candidates if coordinates exist."
+  }
+]

@@ -77,7 +77,7 @@ export const MODES: Record<ConsoleMode, ModeConfig> = {
     id: "margins",
     label: "Packages",
     suggestions: [
-      "Create outreach copy from the selected package",
+      "Save this pay package screenshot",
       "Create an offer from the selected package",
       "Review the selected margin",
     ],

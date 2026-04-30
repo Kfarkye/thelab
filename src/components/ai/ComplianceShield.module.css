@@ -1,0 +1,54 @@
+.shield {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: #5f574d;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.pending {
+  color: #9a6a12;
+}
+
+.pending .dot::after {
+  position: absolute;
+  inset: -7px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(202, 138, 4, 0.22), rgba(202, 138, 4, 0));
+  content: "";
+  animation: auditPulse 1.4s ease-out infinite;
+}
+
+.verified {
+  color: #38613c;
+}
+
+.failed {
+  color: #9f2f1f;
+}
+
+@keyframes auditPulse {
+  from {
+    opacity: 0.9;
+    transform: scale(0.65);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}

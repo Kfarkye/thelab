@@ -1,0 +1,12 @@
+{
+  "eval_id": "EVAL.SDK.GOOGLE_GENAI_LOCK.V1",
+  "policy": "GOV.GOOGLE_GENAI_SDK.LOCKED.V1",
+  "must_pass": [
+    "package.json depends on @google/genai",
+    "package.json does not depend on deprecated Google generative SDK packages",
+    "src code does not call getGenerativeModel",
+    "src code does not call startChat",
+    "src code does not contain TypeScript suppression comments"
+  ]
+}
+

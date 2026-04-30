@@ -9,7 +9,7 @@
 import { getAuth } from "firebase-admin/auth";
 import { getApps, initializeApp, cert } from "firebase-admin/app";
 import { OAuth2Client } from "google-auth-library";
-import { requireEnv } from "@/lib/env";
+import { requireEnv, optionalEnv } from "@/lib/env";
 
 // ── Firebase Admin init — idempotent across hot reloads ──────────
 
@@ -70,6 +70,15 @@ export async function requireAuth(request: Request): Promise<AuthResult> {
     }
   }
 
+  // 0. Static System Secret Check (for smoke tests and internal tools)
+  const systemSecret = process.env.CRON_SECRET;
+  if (systemSecret && token === systemSecret) {
+    return {
+      user: { uid: "system-cron", email: "system@thelab.internal" },
+      response: null,
+    };
+  }
+
   if (!token) {
     return {
       user: null,
@@ -95,28 +104,45 @@ export async function requireAuth(request: Request): Promise<AuthResult> {
     };
   } catch (err) {
     // Attempt fallback for Google Service Account OIDC tokens
+    let oidcErr: unknown = null;
     try {
       const oAuth2Client = new OAuth2Client();
-      const expectedAudience = requireEnv("CRON_OIDC_AUDIENCE");
-      
+      const rawAudience = optionalEnv("CRON_OIDC_AUDIENCE", "");
+      const audiences = rawAudience.split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+
+      // Auto-include current host context as valid audience
+      const host = request.headers.get("host") || request.headers.get("x-forwarded-host");
+      if (host) {
+        const proto = request.headers.get("x-forwarded-proto") || "https";
+        audiences.push(`${proto}://${host}`);
+        audiences.push(host);
+      }
+      if (process.env.NEXT_PUBLIC_BASE_URL) audiences.push(process.env.NEXT_PUBLIC_BASE_URL);
+
       const loginTicket = await oAuth2Client.verifyIdToken({
         idToken: token,
-        audience: expectedAudience,
+        audience: audiences.length > 0 ? audiences : undefined,
       });
       const payload = loginTicket.getPayload();
       
-      // HARD GATE: Only accept legitimate GCP service account identities.
+      const allowedEmails = (process.env.ALLOWED_EMAILS || "")
+        .split(/[,;]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      // HARD GATE: Only accept legitimate GCP service account identities or whitelisted emails.
       if (
         payload && 
         payload.email && 
-        payload.email.endsWith(".gserviceaccount.com")
+        (payload.email.endsWith(".gserviceaccount.com") || allowedEmails.includes(payload.email))
       ) {
         return {
           user: { uid: payload.sub, email: payload.email },
           response: null,
         };
       }
-    } catch (oidcErr) {
+    } catch (e) {
+      oidcErr = e;
       // Ignore OIDC error and fall back to original logging
     }
 
@@ -125,7 +151,8 @@ export async function requireAuth(request: Request): Promise<AuthResult> {
         severity: "WARNING",
         component: "auth_middleware",
         event: "token_rejected",
-        error: err instanceof Error ? err.message : String(err),
+        firebase_error: err instanceof Error ? err.message : String(err),
+        oidc_error: oidcErr instanceof Error ? oidcErr.message : String(oidcErr),
         timestamp: new Date().toISOString(),
       }),
     );

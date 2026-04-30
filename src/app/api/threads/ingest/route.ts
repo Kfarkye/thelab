@@ -5,19 +5,55 @@ import { resolveCandidate, normalizePhone } from '@/lib/ingest/matcher';
 import { IngestPayloadSchema } from '@/lib/ingest/schema';
 import { Spanner } from '@google-cloud/spanner';
 
-export async function POST(req: Request) {
-  const { user, response } = await requireAuth(req);
-  if (response) return response;
+function jsonResponse(payload: Record<string, unknown>, status: number): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
 
-  const parseResult = IngestPayloadSchema.safeParse(await req.json());
-  if (!parseResult.success) {
-    return new Response(JSON.stringify({ error: parseResult.error }), { status: 400 });
-  }
-  
-  const payload = parseResult.data;
-  const db = getDb('recruitingdb');
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorStack(error: unknown): string | undefined {
+  return error instanceof Error ? error.stack : undefined;
+}
+
+export async function POST(req: Request): Promise<Response> {
+  let actorId = 'UNAUTHENTICATED';
+  let threadCount = 0;
 
   try {
+    const { user, response } = await requireAuth(req);
+    if (response) return response;
+    actorId = user.uid;
+
+    const body: unknown = await req.json();
+    if (
+      body &&
+      typeof body === 'object' &&
+      Array.isArray((body as { threads?: unknown }).threads)
+    ) {
+      threadCount = (body as { threads: unknown[] }).threads.length;
+    }
+
+    const parseResult = IngestPayloadSchema.safeParse(body);
+    if (!parseResult.success) {
+      return jsonResponse(
+        {
+          error: 'INVALID_INGEST_PAYLOAD',
+          message: 'Invalid thread ingest payload.',
+          issues: parseResult.error.issues,
+        },
+        400,
+      );
+    }
+
+    const payload = parseResult.data;
+    threadCount = payload.threads.length;
+    const db = getDb('recruitingdb');
+
     const resolvedThreads = await Promise.all(
       payload.threads.map(async (t) => ({
         thread: t,
@@ -89,10 +125,24 @@ export async function POST(req: Request) {
       transaction.insert('ThreadCandidateMatchEvents', auditMutations);
     }); 
 
-    return new Response(JSON.stringify({ ok: true, summary: { total: results.length }, threads: results }), { status: 200 });
+    return jsonResponse({ ok: true, summary: { total: results.length }, threads: results }, 200);
 
-  } catch (error) {
-    console.error(JSON.stringify({ severity: 'ERROR', error }));
-    return new Response('Ingestion failed', { status: 500 });
+  } catch (error: unknown) {
+    console.error(JSON.stringify({
+      severity: 'ERROR',
+      message: errorStack(error) || errorMessage(error),
+      '@type': 'type.googleapis.com/google.devtools.clouderrorreporting.v1beta1.ReportedErrorEvent',
+      route: '/api/threads/ingest',
+      actor_id: actorId,
+      thread_count: threadCount,
+      timestamp: new Date().toISOString(),
+    }));
+    return jsonResponse(
+      {
+        error: 'INGEST_FAILED',
+        message: 'Failed to process ingest request. The error has been logged.',
+      },
+      500,
+    );
   }
 }

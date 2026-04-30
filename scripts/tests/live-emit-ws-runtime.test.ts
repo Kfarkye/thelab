@@ -1,8 +1,9 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import WebSocket from "ws";
 import type { RawData } from "ws";
 import { startLiveEmitWsRuntime } from "@/live-emit-ws/runtime";
+import { closeAllDbs } from "@/lib/spanner-pool";
 import {
   INITIAL_LIVE_EMIT_STATE,
   mergeLiveEmitPacket,
@@ -15,6 +16,18 @@ type StreamCall = {
   lastAckSequence?: number;
   signal?: AbortSignal;
 };
+
+const openSockets = new Set<WebSocket>();
+
+after(async () => {
+  for (const ws of openSockets) {
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.terminate();
+    }
+  }
+  openSockets.clear();
+  await closeAllDbs();
+});
 
 function withTimeout<T>(promise: Promise<T>, label: string, ms = 4000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -35,6 +48,8 @@ function connectSocket(url: string): Promise<WebSocket> {
   return withTimeout(
     new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
+      openSockets.add(ws);
+      ws.once("close", () => openSockets.delete(ws));
       ws.once("open", () => resolve(ws));
       ws.once("error", reject);
     }),

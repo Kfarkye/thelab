@@ -76,6 +76,7 @@ interface MarginObjectRecord {
   gross_weekly_pay_computed_usd: string | null;
   is_local: boolean | null;
   is_compact: boolean | null;
+  source_raw_json: string | null;
   source_of_truth: string;
   current: boolean;
   effective_at: string | null;
@@ -899,6 +900,7 @@ function mapMarginObjectRecord(row: Record<string, unknown>): MarginObjectRecord
     gross_weekly_pay_computed_usd: toSpannerNumeric(readNumber(row.gross_weekly_pay_computed_usd)),
     is_local: readBoolean(row.is_local),
     is_compact: readBoolean(row.is_compact),
+    source_raw_json: normalizeNullableString(row.source_raw_json),
     source_of_truth: readString(row.source_of_truth) || "browser_capture",
     current: Boolean(row.current_flag ?? row.current),
     effective_at: toIsoTimestamp(row.effective_at),
@@ -1716,7 +1718,15 @@ export async function queryJobBoard(input: { limit?: number }) {
                  job_id, margin_id, facility_name, profession, specialty, shift_type, shift_start_hhmm, shift_end_hhmm, weekly_hours,
                  start_date, end_date, target_margin_pct, actual_margin_pct, base_pay_rate_usd,
                  weekly_stipends_usd, gross_weekly_pay_usd, gross_weekly_pay_computed_usd, is_local,
-                 is_compact, source_of_truth, current_flag, effective_at, last_seen_at, created_at, updated_at
+                 is_compact,
+                 (
+                   SELECT TO_JSON_STRING(l.raw_json)
+                   FROM margin_capture_links l
+                   WHERE l.margin_object_id = margin_objects.margin_object_id
+                   ORDER BY l.captured_at DESC
+                   LIMIT 1
+                 ) AS source_raw_json,
+                 source_of_truth, current_flag, effective_at, last_seen_at, created_at, updated_at
           FROM margin_objects
           WHERE record_phase = 'job' AND current_flag = TRUE
           ORDER BY created_at DESC

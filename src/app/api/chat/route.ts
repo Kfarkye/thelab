@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { formatCandidateContext } from "@/lib/formatters/candidate-context";
 import type { CandidateRecord, RetrievalPolicy, InternalContext } from "@/lib/types/candidate";
 import { routeRequest, MODEL_META, type ModelId } from "@/lib/router/model-router";
-import { callClaude } from "@/lib/providers/claude";
+import { createVertexGenAI, GEMINI_FAST_MODEL, GEMINI_PRO_MODEL, GEMINI_THINKING_HIGH } from "@/lib/ai/gemini-config";
+import { buildChatWorkspaceContext, type ActiveObject } from "@/lib/context/build-chat-context";
 import { DB_TOOL_DECLARATIONS, executeDbTool } from "@/lib/spanner/tools";
 import { resolve as resolveHub } from "@/lib/resolver";
 import { getCachedConstitution } from "@/lib/git-governance/engine";
@@ -34,23 +34,22 @@ import {
   isLikelyRingCentralThreadPayload,
 } from "@/lib/ayaops/ringcentral-ledger";
 
-import { GOOGLE_CLOUD_PROJECT, VERTEX_AI_AYAOPS_URL_DATASTORE } from "@/lib/env";
+import { VERTEX_AI_AYAOPS_URL_DATASTORE } from "@/lib/env";
 
-const PROJECT_ID = GOOGLE_CLOUD_PROJECT;
 const LOCATION = "global";
 const RAG_CORPUS = process.env.RAG_CORPUS_NAME || "";
 
 // Gemini model IDs
 const GEMINI_MODELS = {
-  flash: "gemini-3-flash-preview",
-  pro: "gemini-3.1-pro-preview",
+  flash: GEMINI_FAST_MODEL,
+  pro: GEMINI_PRO_MODEL,
 } as const;
 
-const ai = new GoogleGenAI({
-  vertexai: true,
-  project: PROJECT_ID,
-  location: LOCATION,
-});
+function resolveGeminiModelId(model: ModelId): string {
+  return model === "pro" ? GEMINI_MODELS.pro : GEMINI_MODELS.flash;
+}
+
+const ai = createVertexGenAI(LOCATION);
 
 const AYAOPS_WRITE_TOOL_NAMES = new Set([
   "update_candidate_status",
@@ -856,6 +855,56 @@ function readString(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
   return "";
+}
+
+function truncateTextByLines(value: unknown, maxChars: number): string | undefined {
+  const text = readString(value);
+  if (!text) return undefined;
+
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  let total = 0;
+
+  for (const line of lines) {
+    const nextTotal = total + line.length + 1;
+    if (nextTotal > maxChars) break;
+    kept.push(line);
+    total = nextTotal;
+  }
+
+  const output = kept.join("\n").trim();
+  return output || undefined;
+}
+
+function stringifyWorkspaceContextValue(value: unknown, maxChars: number): string | undefined {
+  const direct = truncateTextByLines(value, maxChars);
+  if (direct) return direct;
+
+  if (!value || typeof value !== "object") return undefined;
+
+  try {
+    return truncateTextByLines(JSON.stringify(value, null, 2), maxChars);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeActiveObject(value: unknown): ActiveObject | undefined {
+  const record = asJsonRecord(value);
+  if (!record) return undefined;
+
+  const activeObject: ActiveObject = {};
+  const objectType = readString(record.object_type || record.objectType || record.type);
+  const objectId = readString(record.object_id || record.objectId || record.id);
+  const displayName = readString(record.display_name || record.displayName || record.name);
+
+  if (objectType) activeObject.object_type = objectType;
+  if (objectId) activeObject.object_id = objectId;
+  if (displayName) activeObject.display_name = displayName;
+
+  return activeObject.object_type || activeObject.object_id || activeObject.display_name
+    ? activeObject
+    : undefined;
 }
 
 function deriveAyaopsReadFallbackHubPath(
@@ -2020,7 +2069,7 @@ function toSandboxChunk(
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt, history, image, imageRecordId, imageIntent, mode, retrievalPolicy, internalContext, selectedCandidateContext, selectedMarginContext, modelOverride, uiContext } = await request.json() as {
+    const requestBody = await request.json() as {
       prompt: string;
       history?: { role: string; text: string }[];
       image?: string;
@@ -2032,6 +2081,10 @@ export async function POST(request: NextRequest) {
       selectedMarginContext?: Record<string, unknown>;
       modelOverride?: ModelId;
       imageIntent?: string;
+      globalPreferences?: unknown;
+      rosterDigest?: unknown;
+      activeObject?: unknown;
+      localContext?: unknown;
       uiContext?: {
         threadId?: string;
         candidateId?: string;
@@ -2040,6 +2093,24 @@ export async function POST(request: NextRequest) {
         rosterDigest?: Record<string, unknown> | null;
       };
     };
+    const {
+      prompt,
+      history,
+      image,
+      imageRecordId,
+      imageIntent,
+      mode,
+      retrievalPolicy,
+      internalContext,
+      selectedCandidateContext,
+      selectedMarginContext,
+      modelOverride,
+      uiContext,
+      globalPreferences,
+      rosterDigest,
+      activeObject,
+      localContext,
+    } = requestBody;
 
     if (!prompt || typeof prompt !== "string") {
       return new Response(JSON.stringify({ error: "prompt is required" }), { status: 400 });
@@ -2124,6 +2195,21 @@ MODE OVERRIDE:
 - Candidate-specific identity, status, and write actions MUST remain grounded to internal DB tools.
 - Never fabricate internal data. Keep external claims source-cited.`;
     }
+
+    const workspaceContext = buildChatWorkspaceContext({
+      globalPreferences: stringifyWorkspaceContextValue(globalPreferences, 4_000),
+      rosterDigest: stringifyWorkspaceContextValue(rosterDigest ?? uiContext?.rosterDigest, 12_000),
+      selectedCandidateContext: stringifyWorkspaceContextValue(selectedCandidateContext, 6_000),
+      selectedMarginContext: stringifyWorkspaceContextValue(selectedMarginContext, 6_000),
+      activeObject: normalizeActiveObject(activeObject),
+      localContext: stringifyWorkspaceContextValue(localContext, 6_000),
+    });
+
+    systemPrompt = `${systemPrompt}
+
+[System note: GOVERNANCE & WORKSPACE CONTEXT]
+${workspaceContext}`;
+
     // ── Build user prompt with optional candidate grounding ─────
     let fullPrompt = prompt;
     let hasPrefetchedAyaopsObservation = false;
@@ -2579,7 +2665,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Model-Provider": route.provider,
-          "X-Model-Id": route.model,
+          "X-Model-Id": resolveGeminiModelId(route.model),
           "X-Route-Reason": "selected_candidate_offer_intent_direct_write",
         },
       });
@@ -2624,7 +2710,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
               "Nothing new was written from that message. To use it, create an offer from the selected package or tell me the candidate name to attach it to.",
           },
         ],
-        { provider: route.provider, model: route.model, reason: "selected_pay_package_already_saved" },
+        { provider: route.provider, model: resolveGeminiModelId(route.model), reason: "selected_pay_package_already_saved" },
       );
     }
 
@@ -2670,7 +2756,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Model-Provider": route.provider,
-          "X-Model-Id": route.model,
+          "X-Model-Id": resolveGeminiModelId(route.model),
           "X-Route-Reason": route.reason,
         },
       });
@@ -2718,7 +2804,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Model-Provider": route.provider,
-          "X-Model-Id": route.model,
+          "X-Model-Id": resolveGeminiModelId(route.model),
           "X-Route-Reason": route.reason,
         },
       });
@@ -2771,7 +2857,7 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Model-Provider": route.provider,
-          "X-Model-Id": route.model,
+          "X-Model-Id": resolveGeminiModelId(route.model),
           "X-Route-Reason": route.reason,
         },
       });
@@ -2859,7 +2945,7 @@ Return only operational summary: save status, link status, and next best action.
             "Cache-Control": "no-cache, no-transform",
             Connection: "keep-alive",
             "X-Model-Provider": route.provider,
-            "X-Model-Id": route.model,
+            "X-Model-Id": resolveGeminiModelId(route.model),
             "X-Route-Reason": route.reason,
           },
         });
@@ -2919,7 +3005,7 @@ Return only operational summary: save status, link status, and next best action.
             buildWriteResultEvent(preIngestWriteEvent),
             { type: "text", text },
           ],
-          { provider: route.provider, model: route.model, reason: "margin_payload_deterministic_ingest" },
+          { provider: route.provider, model: resolveGeminiModelId(route.model), reason: "margin_payload_deterministic_ingest" },
         );
       } catch (marginErr) {
         const marginMessage = marginErr instanceof Error ? marginErr.message : String(marginErr);
@@ -2965,7 +3051,7 @@ Return only operational summary: save status, link status, and next best action.
             "Cache-Control": "no-cache, no-transform",
             Connection: "keep-alive",
             "X-Model-Provider": route.provider,
-            "X-Model-Id": route.model,
+            "X-Model-Id": resolveGeminiModelId(route.model),
             "X-Route-Reason": route.reason,
           },
         });
@@ -3021,7 +3107,7 @@ Return only operational summary: save status, link status, and next best action.
             "Cache-Control": "no-cache, no-transform",
             Connection: "keep-alive",
             "X-Model-Provider": route.provider,
-            "X-Model-Id": route.model,
+            "X-Model-Id": resolveGeminiModelId(route.model),
             "X-Route-Reason": route.reason,
           },
         });
@@ -3097,49 +3183,9 @@ Return only operational summary: save status, link status, and next best action.
     }
 
     // ══════════════════════════════════════════════════════════════
-    // CLAUDE PATH (with silent fallback to Gemini)
-    // ══════════════════════════════════════════════════════════════
-    if (route.provider === "claude") {
-      try {
-        const claudeMessages: { role: "user" | "assistant"; content: string }[] = [];
-
-        if (history && Array.isArray(history)) {
-          for (const msg of history) {
-            claudeMessages.push({
-              role: msg.role === "user" ? "user" : "assistant",
-              content: msg.text,
-            });
-          }
-        }
-        claudeMessages.push({ role: "user", content: fullPrompt });
-
-        const claudeModel = route.model === "opus" ? "opus" : "sonnet";
-        const stream = await callClaude({
-          model: claudeModel,
-          systemPrompt,
-          messages: claudeMessages,
-        });
-
-        return new Response(stream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache, no-transform",
-            Connection: "keep-alive",
-            "X-Model-Provider": route.provider,
-            "X-Model-Id": route.model,
-            "X-Route-Reason": route.reason,
-          },
-        });
-      } catch (claudeErr) {
-        console.warn(`[router] Claude ${route.model} failed, falling back to Gemini flash:`, claudeErr);
-        route = { model: "flash", provider: "gemini", reason: "claude_fallback" };
-      }
-    }
-
-    // ══════════════════════════════════════════════════════════════
     // GEMINI PATH
     // ══════════════════════════════════════════════════════════════
-    const geminiModel = route.model === "pro" ? GEMINI_MODELS.pro : GEMINI_MODELS.flash;
+    const geminiModel = resolveGeminiModelId(route.model);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contents: any[] = [];
@@ -3291,7 +3337,7 @@ Return only operational summary: save status, link status, and next best action.
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Model-Provider": route.provider,
-          "X-Model-Id": route.model,
+          "X-Model-Id": geminiModel,
           "X-Route-Reason": route.reason,
         },
       });
@@ -3306,9 +3352,10 @@ Return only operational summary: save status, link status, and next best action.
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const proThinkingConfig = route.model === "pro" ? { thinkingConfig: GEMINI_THINKING_HIGH } : {};
     const config: any = cachedContentName
       ? { cachedContent: cachedContentName, temperature: 1.0 }
-      : { tools, temperature: 1.0, systemInstruction: systemPrompt };
+      : { tools, temperature: 1.0, systemInstruction: systemPrompt, ...proThinkingConfig };
 
     const responseStream = await ai.models.generateContentStream({
       model: geminiModel,
@@ -3700,10 +3747,18 @@ Return only operational summary: save status, link status, and next best action.
 
                   if (toolResult.error) {
                     executionOutcomes.push({ ok: false, name, error: toolResult.error });
+                    if (name === "access_hub") {
+                      console.error(`[access_hub] Grounding failed:`, toolResult.error);
+                    }
                   } else {
                     executionOutcomes.push({ ok: true, name });
                     if (name === "access_hub" && toolResult.result && typeof toolResult.result === "object") {
                       lastHubReadResult = toolResult.result as Record<string, unknown>;
+                      console.log(`[access_hub] Grounding success:`, {
+                        id: lastHubReadResult.id,
+                        type: lastHubReadResult.type,
+                        novaUrl: lastHubReadResult.novaUrl
+                      });
                     }
 
                     if (name === "get_internal_grounding_context" && toolResult.result && typeof toolResult.result === "object") {
@@ -3780,7 +3835,7 @@ Return only operational summary: save status, link status, and next best action.
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const followupConfig: any = cachedContentName
                   ? { cachedContent: cachedContentName, temperature: 1.0 }
-                  : { tools, temperature: 1.0, systemInstruction: systemPrompt };
+                  : { tools, temperature: 1.0, systemInstruction: systemPrompt, ...proThinkingConfig };
 
                 roundStream = await ai.models.generateContentStream({
                   model: geminiModel,
@@ -3805,6 +3860,7 @@ Return only operational summary: save status, link status, and next best action.
                   tools,
                   temperature: 0.2,
                   systemInstruction: `${systemPrompt}\n\n${STRICT_TOOL_CALL_SYSTEM_MESSAGE}`,
+                  ...proThinkingConfig,
                 };
 
                 roundStream = await ai.models.generateContentStream({
@@ -3919,7 +3975,7 @@ Return only operational summary: save status, link status, and next best action.
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const fallbackConfig: any = cachedContentName
                       ? { cachedContent: cachedContentName, temperature: 1.0 }
-                      : { tools, temperature: 1.0, systemInstruction: systemPrompt };
+                      : { tools, temperature: 1.0, systemInstruction: systemPrompt, ...proThinkingConfig };
 
                     roundStream = await ai.models.generateContentStream({
                       model: geminiModel,
@@ -4086,7 +4142,7 @@ Return only operational summary: save status, link status, and next best action.
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
         "X-Model-Provider": route.provider,
-        "X-Model-Id": route.model,
+        "X-Model-Id": geminiModel,
         "X-Route-Reason": route.reason,
       },
     });

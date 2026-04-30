@@ -1,0 +1,56 @@
+.glassCard {
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 24px;
+  padding: 16px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.novaLink {
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: #6f4d08;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.novaLink:hover {
+  border-bottom-color: #6f4d08;
+}
+
+.microLabel {
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: #717171;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.serifTitle {
+  font-family: "Source Serif 4", "Newsreader", serif;
+  font-size: 1.2rem;
+  color: #191612;
+  margin: 8px 0;
+}
+
+.score {
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  color: #191612;
+}
+
+.reasonList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.reason {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 28px;
+  color: #5f574d;
+  font-size: 11px;
+  padding: 4px 8px;
+}

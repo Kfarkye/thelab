@@ -2,8 +2,9 @@ import { NextRequest } from "next/server";
 import { getLiveEmitSystemInstruction } from "@/lib/live-emit/system-instruction";
 import { createLiveEmitSession, getMaxLiveEmitRuntimeMs } from "@/lib/live-emit/session-store";
 import type { LiveEmitSessionConfig } from "@/lib/live-emit/types";
+import { GEMINI_PRO_MODEL } from "@/lib/ai/gemini-config";
 
-const DEFAULT_MODEL = process.env.GEMINI_LIVE_EMIT_MODEL || "gemini-3.1-pro-preview";
+const DEFAULT_MODEL = GEMINI_PRO_MODEL;
 const LIVE_EMIT_WS_URL = (process.env.LIVE_EMIT_WS_URL || "").trim();
 
 export async function GET(request: NextRequest) {

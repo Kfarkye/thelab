@@ -10,6 +10,36 @@ import {
 import { MODES } from "@/lib/chat-modes";
 import { isLivePayloadStale, normalizeMLBStatusCode } from "@/lib/sports/status";
 
+type IntakePackage = {
+  facility_name: string | null;
+  profession: string | null;
+  specialty: string | null;
+  title: string | null;
+  city: string | null;
+  state: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  shift_label: string | null;
+  shift_start: string | null;
+  shift_end: string | null;
+  weekly_hours: number | null;
+  schedule: string | null;
+  weekly_gross: number | null;
+  taxable_hourly_rate: number | null;
+  weekly_stipends: number | null;
+  meals_stipend: number | null;
+  housing_stipend: number | null;
+  job_description: string | null;
+  requirements: string[];
+  notes: string[];
+};
+
+type IntakeParseResult = {
+  extracted_package: IntakePackage;
+  missing_fields: string[];
+  needs_review: boolean;
+};
+
 export // --- Left Panel ---
   function LeftPanel({
     mode,
@@ -65,7 +95,118 @@ export // --- Left Panel ---
   const [attachName, setAttachName] = useState("");
   const [attachLoading, setAttachLoading] = useState(false);
   const [copiedHcUrl, setCopiedHcUrl] = useState<string | null>(null);
+  const packageFileRef = useRef<HTMLInputElement>(null);
+  const [intakeText, setIntakeText] = useState("");
+  const [intakeUrl, setIntakeUrl] = useState("");
+  const [intakeImageDataUrl, setIntakeImageDataUrl] = useState<string | null>(null);
+  const [intakeImageName, setIntakeImageName] = useState<string | null>(null);
+  const [intakeParsed, setIntakeParsed] = useState<IntakeParseResult | null>(null);
+  const [intakeLoading, setIntakeLoading] = useState(false);
+  const [intakeSaving, setIntakeSaving] = useState(false);
+  const [intakeError, setIntakeError] = useState<string | null>(null);
+  const [intakeSaved, setIntakeSaved] = useState(false);
   const topProfessions = summary?.topProfessions || [];
+
+  const updateIntakePackage = useCallback((patch: Partial<IntakePackage>) => {
+    setIntakeParsed((current) => current
+      ? {
+        ...current,
+        extracted_package: {
+          ...current.extracted_package,
+          ...patch,
+        },
+        needs_review: true,
+      }
+      : current);
+  }, []);
+
+  const handlePackageImageSelect = useCallback((file: File | null) => {
+    setIntakeSaved(false);
+    setIntakeError(null);
+    if (!file) {
+      setIntakeImageDataUrl(null);
+      setIntakeImageName(null);
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setIntakeError("Upload a screenshot image.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setIntakeImageDataUrl(typeof reader.result === "string" ? reader.result : null);
+      setIntakeImageName(file.name);
+    };
+    reader.onerror = () => setIntakeError("Could not read screenshot.");
+    reader.readAsDataURL(file);
+  }, []);
+
+  const handleParsePackage = useCallback(async () => {
+    if (!intakeText.trim() && !intakeImageDataUrl && !intakeUrl.trim()) {
+      setIntakeError("Paste package text, add a URL, or upload a screenshot first.");
+      return;
+    }
+    setIntakeLoading(true);
+    setIntakeError(null);
+    setIntakeSaved(false);
+    try {
+      const token = getAuthToken ? await getAuthToken() : null;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch("/api/ayaops/packages/parse", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          sourceType: intakeImageDataUrl ? "image_upload" : intakeUrl.trim() ? "manual" : "pasted_text",
+          text: intakeText,
+          sourceUrl: intakeUrl,
+          imageDataUrl: intakeImageDataUrl,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setIntakeError(data.error || "Package parse failed.");
+        return;
+      }
+      setIntakeParsed(data.result as IntakeParseResult);
+    } catch {
+      setIntakeError("Network error while parsing package.");
+    } finally {
+      setIntakeLoading(false);
+    }
+  }, [getAuthToken, intakeImageDataUrl, intakeText, intakeUrl]);
+
+  const handleSavePackage = useCallback(async () => {
+    if (!intakeParsed) return;
+    setIntakeSaving(true);
+    setIntakeError(null);
+    try {
+      const token = getAuthToken ? await getAuthToken() : null;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch("/api/ayaops/packages/save", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          sourceType: intakeImageDataUrl ? "image_upload" : intakeUrl.trim() ? "manual" : "pasted_text",
+          sourceRawText: intakeText,
+          sourceImageUrl: intakeUrl,
+          parsedPackage: intakeParsed.extracted_package,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setIntakeError(data.error || "Package save failed.");
+        return;
+      }
+      setIntakeSaved(true);
+      onRefreshData();
+    } catch {
+      setIntakeError("Network error while saving package.");
+    } finally {
+      setIntakeSaving(false);
+    }
+  }, [getAuthToken, intakeImageDataUrl, intakeParsed, intakeText, intakeUrl, onRefreshData]);
 
   const normalizedFilter = filter.trim().toLowerCase();
   const filtered = normalizedFilter
@@ -1076,6 +1217,195 @@ export // --- Left Panel ---
                       Margins
                     </button>
                   </div>
+
+                  {marginSubTab === "jobs" && (
+                    <div className="lp-package-intake">
+                      <div className="lp-intake-head">
+                        <div>
+                          <p className="lp-intake-kicker">Add Pay Package</p>
+                          <strong>Parse, review, then save</strong>
+                        </div>
+                        {intakeSaved && <span className="lp-intake-saved">Saved</span>}
+                      </div>
+                      <div className="lp-intake-actions">
+                        <input
+                          ref={packageFileRef}
+                          type="file"
+                          accept="image/*"
+                          hidden
+                          onChange={(e) => handlePackageImageSelect(e.target.files?.[0] || null)}
+                        />
+                        <button
+                          type="button"
+                          className="lp-intake-secondary"
+                          onClick={() => packageFileRef.current?.click()}
+                        >
+                          <Paperclip size={13} />
+                          Upload Screenshot
+                        </button>
+                        <button
+                          type="button"
+                          className="lp-intake-primary"
+                          disabled={intakeLoading || (!intakeText.trim() && !intakeImageDataUrl && !intakeUrl.trim())}
+                          onClick={handleParsePackage}
+                        >
+                          {intakeLoading ? <Loader2 size={13} className="spin" /> : <FileText size={13} />}
+                          Parse Package
+                        </button>
+                      </div>
+                      {intakeImageName && (
+                        <div className="lp-intake-file">
+                          <span>{intakeImageName}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIntakeImageDataUrl(null);
+                              setIntakeImageName(null);
+                              if (packageFileRef.current) packageFileRef.current.value = "";
+                            }}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      )}
+                      <input
+                        className="lp-intake-url"
+                        value={intakeUrl}
+                        onChange={(e) => {
+                          setIntakeUrl(e.target.value);
+                          setIntakeSaved(false);
+                        }}
+                        placeholder="Paste Nova profile or package source URL..."
+                      />
+                      <textarea
+                        className="lp-intake-textarea"
+                        rows={4}
+                        value={intakeText}
+                        onChange={(e) => {
+                          setIntakeText(e.target.value);
+                          setIntakeSaved(false);
+                        }}
+                        placeholder="Paste package, margin screenshot text, or job details here..."
+                      />
+                      {intakeError && <p className="lp-intake-error">{intakeError}</p>}
+                      {intakeParsed && (
+                        <div className="lp-intake-preview">
+                          <div className="lp-intake-preview-head">
+                            <div>
+                              <p className="lp-intake-kicker">Parsed Package Preview</p>
+                              <strong>{intakeParsed.extracted_package.specialty || intakeParsed.extracted_package.title || "Pay Package"}</strong>
+                            </div>
+                            <button
+                              type="button"
+                              className="lp-intake-primary"
+                              disabled={intakeSaving}
+                              onClick={handleSavePackage}
+                            >
+                              {intakeSaving ? <Loader2 size={13} className="spin" /> : <Check size={13} />}
+                              Save Package
+                            </button>
+                          </div>
+                          <div className="lp-intake-fields">
+                            <label>
+                              <span>Facility</span>
+                              <input
+                                value={intakeParsed.extracted_package.facility_name || ""}
+                                onChange={(e) => updateIntakePackage({ facility_name: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Specialty</span>
+                              <input
+                                value={intakeParsed.extracted_package.specialty || ""}
+                                onChange={(e) => updateIntakePackage({ specialty: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Start</span>
+                              <input
+                                type="date"
+                                value={intakeParsed.extracted_package.start_date || ""}
+                                onChange={(e) => updateIntakePackage({ start_date: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>End</span>
+                              <input
+                                type="date"
+                                value={intakeParsed.extracted_package.end_date || ""}
+                                onChange={(e) => updateIntakePackage({ end_date: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Gross</span>
+                              <input
+                                inputMode="decimal"
+                                value={intakeParsed.extracted_package.weekly_gross ?? ""}
+                                onChange={(e) => updateIntakePackage({ weekly_gross: e.target.value ? Number(e.target.value) : null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Base</span>
+                              <input
+                                inputMode="decimal"
+                                value={intakeParsed.extracted_package.taxable_hourly_rate ?? ""}
+                                onChange={(e) => updateIntakePackage({ taxable_hourly_rate: e.target.value ? Number(e.target.value) : null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Stipends</span>
+                              <input
+                                inputMode="decimal"
+                                value={intakeParsed.extracted_package.weekly_stipends ?? ""}
+                                onChange={(e) => updateIntakePackage({ weekly_stipends: e.target.value ? Number(e.target.value) : null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Schedule</span>
+                              <input
+                                value={intakeParsed.extracted_package.schedule || ""}
+                                onChange={(e) => updateIntakePackage({ schedule: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Shift</span>
+                              <input
+                                value={intakeParsed.extracted_package.shift_label || ""}
+                                onChange={(e) => updateIntakePackage({ shift_label: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Start Time</span>
+                              <input
+                                value={intakeParsed.extracted_package.shift_start || ""}
+                                onChange={(e) => updateIntakePackage({ shift_start: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>End Time</span>
+                              <input
+                                value={intakeParsed.extracted_package.shift_end || ""}
+                                onChange={(e) => updateIntakePackage({ shift_end: e.target.value || null })}
+                              />
+                            </label>
+                            <label>
+                              <span>Hours</span>
+                              <input
+                                inputMode="decimal"
+                                value={intakeParsed.extracted_package.weekly_hours ?? ""}
+                                onChange={(e) => updateIntakePackage({ weekly_hours: e.target.value ? Number(e.target.value) : null })}
+                              />
+                            </label>
+                          </div>
+                          {intakeParsed.missing_fields.length > 0 && (
+                            <p className="lp-intake-missing">
+                              Review missing: {intakeParsed.missing_fields.slice(0, 5).join(", ")}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Pay package cards */}
                   {marginSubTab === "jobs" && filtered.map((item) => (

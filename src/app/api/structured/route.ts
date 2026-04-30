@@ -1,16 +1,9 @@
 import { NextRequest } from "next/server";
-import { GoogleGenAI } from "@google/genai";
-import { GOOGLE_CLOUD_PROJECT } from "@/lib/env";
+import { createVertexGenAI, GEMINI_FAST_MODEL } from "@/lib/ai/gemini-config";
 
-const PROJECT_ID = GOOGLE_CLOUD_PROJECT;
-const LOCATION = "global";
-const MODEL = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
+const MODEL = GEMINI_FAST_MODEL;
 
-const ai = new GoogleGenAI({
-  vertexai: true,
-  project: PROJECT_ID,
-  location: LOCATION,
-});
+const ai = createVertexGenAI();
 
 /**
  * POST /api/structured

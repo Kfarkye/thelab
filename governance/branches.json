@@ -1,0 +1,9 @@
+{
+  "policy_id": "AYA.REPO_REINDEX_BRANCHES.V1",
+  "status": "active",
+  "allowed_branches": [
+    "main",
+    "master",
+    "codex/*"
+  ]
+}

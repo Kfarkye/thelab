@@ -1,27 +1,17 @@
 import { NextRequest } from "next/server";
+import { GoogleGenAI, Type } from "@google/genai";
+import { createVertexGenAI, GEMINI_FAST_MODEL } from "@/lib/ai/gemini-config";
 import { getEvidenceInlineData, markSavedImageUsed } from "@/lib/evidence/store";
 
 export const runtime = "nodejs";
 
-const VERTEX_PROJECT = process.env.GOOGLE_CLOUD_PROJECT || "workflowos-a0fbf";
-const VERTEX_LOCATION = process.env.VERTEX_LOCATION || "us-central1";
+const ai: GoogleGenAI = createVertexGenAI();
 
-interface TokenResponse {
-  access_token: string;
-}
-
-async function getVertexToken(): Promise<string> {
-  const url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+function parseCredentialJson(raw: string): unknown {
   try {
-    const res = await fetch(url, { headers: { "Metadata-Flavor": "Google" }, next: { revalidate: 300 } });
-    if (!res.ok) throw new Error("Metadata token fetch failed");
-    const data = (await res.json()) as TokenResponse;
-    return data.access_token;
-  } catch (err) {
-    if (process.env.DEBUG_FALLBACK_TOKEN) {
-      return process.env.DEBUG_FALLBACK_TOKEN;
-    }
-    throw err;
+    return JSON.parse(raw);
+  } catch {
+    return {};
   }
 }
 
@@ -33,22 +23,10 @@ export async function POST(req: NextRequest) {
 
     const evidence = await getEvidenceInlineData(imageId);
 
-    // Prompt Gemini Vision to OCR and extract credential
-    const prompt = `Analyze this healthcare credential (e.g. BLS, ACLS, RN License). Extract:
-1. type (BLS, ACLS, State License, etc)
-2. provider_name (the person's name)
-3. credential_number (if applicable)
-4. state (if a state license)
-5. issue_date (YYYY-MM-DD if available)
-6. expiration_date (YYYY-MM-DD)
-7. valid (true/false)
+    const prompt = "Analyze this healthcare credential. Extract visible credential facts only. Use null for missing values.";
 
-Return EXACTLY a JSON block enclosed in \`\`\`json ... \`\`\`.`;
-
-    const token = await getVertexToken();
-    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/gemini-3.0-pro:generateContent`;
-
-    const payload = {
+    const result = await ai.models.generateContent({
+      model: GEMINI_FAST_MODEL,
       contents: [
         {
           role: "user",
@@ -63,41 +41,28 @@ Return EXACTLY a JSON block enclosed in \`\`\`json ... \`\`\`.`;
           ],
         },
       ],
-      generationConfig: {
+      config: {
+        systemInstruction:
+          "You are a precise healthcare credential parser. Return strict JSON only and do not invent values.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            type: { type: Type.STRING, nullable: true },
+            provider_name: { type: Type.STRING, nullable: true },
+            credential_number: { type: Type.STRING, nullable: true },
+            state: { type: Type.STRING, nullable: true },
+            issue_date: { type: Type.STRING, nullable: true },
+            expiration_date: { type: Type.STRING, nullable: true },
+            valid: { type: Type.BOOLEAN, nullable: true },
+          },
+          required: ["type", "provider_name", "credential_number", "state", "issue_date", "expiration_date", "valid"],
+        },
         temperature: 0.1,
       },
-    };
-
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Vertex API returned ${res.status}: ${errText}`);
-    }
-
-    const aiData = await res.json();
-    const rawText = aiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const jsonMatch = rawText.match(/```json\n([\s\S]*?)\n```/);
-    let extracted = {};
-    if (jsonMatch) {
-      try {
-        extracted = JSON.parse(jsonMatch[1]);
-      } catch (e) {
-        // Parse error
-      }
-    } else {
-      // Try parsing the raw text directly
-      try {
-        extracted = JSON.parse(rawText);
-      } catch (e) {}
-    }
+    const extracted = parseCredentialJson(result.text || "{}");
 
     await markSavedImageUsed(imageId);
 

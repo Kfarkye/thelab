@@ -1,0 +1,49 @@
+{
+  "templates": [
+    {
+      "nl_query": "dietitians within 50 miles of Sacramento",
+      "sql": "SELECT c.id AS candidate_id, TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) AS candidate_name, CASE WHEN c.nova_id IS NULL THEN '' ELSE CONCAT('https://nova.ayahealthcare.com/#/recruiting/candidates/', c.nova_id, '/new-profile/about') END AS nova_url, SCORE(c.search_tokens, 'Dietitian') AS relevance, CASE WHEN c.latitude IS NULL OR c.longitude IS NULL THEN NULL ELSE (2 * 3958.7613 * ASIN(SQRT(POW(SIN((c.latitude - @lat) * 3.141592653589793 / 360), 2) + COS(c.latitude * 3.141592653589793 / 180) * COS(@lat * 3.141592653589793 / 180) * POW(SIN((c.longitude - @lng) * 3.141592653589793 / 360), 2)))) END AS miles FROM hc_candidates@{FORCE_INDEX=hc_CandidatesSearchIndex} AS c WHERE SEARCH(c.search_tokens, 'Dietitian') AND c.status = 'ACTIVE' AND (c.latitude IS NULL OR c.longitude IS NULL OR (2 * 3958.7613 * ASIN(SQRT(POW(SIN((c.latitude - @lat) * 3.141592653589793 / 360), 2) + COS(c.latitude * 3.141592653589793 / 180) * COS(@lat * 3.141592653589793 / 180) * POW(SIN((c.longitude - @lng) * 3.141592653589793 / 360), 2)))) <= @radiusMiles) ORDER BY CASE WHEN miles IS NULL THEN 1 ELSE 0 END ASC, miles ASC, candidate_name ASC LIMIT 10",
+      "intent": "Find active candidates by specialty within a geographic radius around a named place.",
+      "manifest": "Find active candidates in a specialty near a given city. Coordinates are optional: return NULL miles for ungeocoded candidates, keep them eligible, and sort known distances before NULL distances.",
+      "parameterized": {
+        "parameterized_intent": "Find active $1 candidates near $3 with optional $2-mile radius filtering for rows that have coordinates",
+        "parameterized_sql": "SELECT c.id AS candidate_id, TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) AS candidate_name, CASE WHEN c.nova_id IS NULL THEN '' ELSE CONCAT('https://nova.ayahealthcare.com/#/recruiting/candidates/', c.nova_id, '/new-profile/about') END AS nova_url, SCORE(c.search_tokens, $1) AS relevance, CASE WHEN c.latitude IS NULL OR c.longitude IS NULL THEN NULL ELSE (2 * 3958.7613 * ASIN(SQRT(POW(SIN((c.latitude - $3) * 3.141592653589793 / 360), 2) + COS(c.latitude * 3.141592653589793 / 180) * COS($3 * 3.141592653589793 / 180) * POW(SIN((c.longitude - $4) * 3.141592653589793 / 360), 2)))) END AS miles FROM hc_candidates@{FORCE_INDEX=hc_CandidatesSearchIndex} AS c WHERE SEARCH(c.search_tokens, $1) AND c.status = 'ACTIVE' AND (c.latitude IS NULL OR c.longitude IS NULL OR (2 * 3958.7613 * ASIN(SQRT(POW(SIN((c.latitude - $3) * 3.141592653589793 / 360), 2) + COS(c.latitude * 3.141592653589793 / 180) * COS($3 * 3.141592653589793 / 180) * POW(SIN((c.longitude - $4) * 3.141592653589793 / 360), 2)))) <= $2) ORDER BY CASE WHEN miles IS NULL THEN 1 ELSE 0 END ASC, miles ASC, candidate_name ASC LIMIT 10"
+      }
+    },
+    {
+      "nl_query": "Med Surg nurses with active status near LA",
+      "sql": "SELECT c.id AS candidate_id, TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) AS candidate_name, CASE WHEN c.nova_id IS NULL THEN '' ELSE CONCAT('https://nova.ayahealthcare.com/#/recruiting/candidates/', c.nova_id, '/new-profile/about') END AS nova_url, SCORE(c.search_tokens, 'MS RN') AS relevance, CASE WHEN c.latitude IS NULL OR c.longitude IS NULL THEN NULL ELSE (2 * 3958.7613 * ASIN(SQRT(POW(SIN((c.latitude - @lat) * 3.141592653589793 / 360), 2) + COS(c.latitude * 3.141592653589793 / 180) * COS(@lat * 3.141592653589793 / 180) * POW(SIN((c.longitude - @lng) * 3.141592653589793 / 360), 2)))) END AS miles FROM hc_candidates@{FORCE_INDEX=hc_CandidatesSearchIndex} AS c WHERE SEARCH(c.search_tokens, 'MS RN') AND c.status = 'ACTIVE' ORDER BY CASE WHEN miles IS NULL THEN 1 ELSE 0 END ASC, miles ASC, candidate_name ASC LIMIT 10",
+      "intent": "Find active nurses by normalized specialty phrase near a common city alias.",
+      "manifest": "Find active candidates matching a specialty phrase near a named city."
+    }
+  ],
+  "facets": [
+    {
+      "sql_snippet": "c.status = 'ACTIVE'",
+      "intent": "Only active candidates",
+      "manifest": "Only include candidates whose status is ACTIVE"
+    },
+    {
+      "sql_snippet": "p.package_id = @packageId",
+      "intent": "Compare candidates to a selected package location",
+      "manifest": "Join against Packages when a package id is supplied"
+    }
+  ],
+  "value_searches": [
+    {
+      "query": "SELECT $value AS value, 'hc_candidates.specialty,hc_candidates.sub_specialty,hc_candidates.profession,hc_candidates.search_tokens' AS columns, 'Specialty' AS concept_type, 0 AS distance, '{}' AS context FROM hc_candidates AS c WHERE LOWER(c.specialty) = LOWER($value) OR LOWER(c.sub_specialty) = LOWER($value) OR LOWER(c.profession) = LOWER($value) LIMIT 10",
+      "concept_type": "Specialty",
+      "description": "Exact specialty/profession match against canonical hc_candidates. Required value searches: Dietitian, DIET, DietSrv, RN, Registered Nurse, MS, MS/Tele, ER, ICU Nurse, RESP, RRT, Respiratory Therapy, Respiratory Therapist, CT Tech, X-Ray Tech, Pharmacy Tech Inpatient, PHM, Surgical Services, Sterile Processing Tech (SPT), CNA, LAB."
+    },
+    {
+      "query": "SELECT $value AS value, 'hc_candidates.status' AS columns, 'Candidate Status' AS concept_type, 0 AS distance, '{}' AS context FROM hc_candidates AS c WHERE LOWER(c.status) = LOWER($value) LIMIT 10",
+      "concept_type": "Candidate Status",
+      "description": "Candidate status values on hc_candidates. The active recruiter-facing value is ACTIVE."
+    },
+    {
+      "query": "SELECT $value AS value, 'Packages.specialty,Packages.profession' AS columns, 'Package Specialty' AS concept_type, 0 AS distance, '{}' AS context FROM Packages AS p WHERE LOWER(p.specialty) = LOWER($value) OR LOWER(p.profession) = LOWER($value) LIMIT 10",
+      "concept_type": "Package Specialty",
+      "description": "Package specialty and profession values used when a natural language request references a job or package."
+    }
+  ]
+}

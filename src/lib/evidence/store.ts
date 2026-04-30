@@ -27,6 +27,7 @@ export interface SavedImageRecord {
   tags: string[];
   lastUsedAt: string | null;
   previewUrl: string;
+  suggestions?: { candidateId: string; candidateName: string } | null;
 }
 
 export interface SaveImageInput {

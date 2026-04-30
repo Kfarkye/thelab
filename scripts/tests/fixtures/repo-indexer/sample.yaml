@@ -1,0 +1,4 @@
+alpha:
+  enabled: true
+beta:
+  count: 2

@@ -30,7 +30,7 @@ if [[ -z "${ALLOWED_ORIGINS}" ]]; then
   ALLOWED_ORIGINS="${APP_BASE_URL}"
 fi
 
-MODEL="${GEMINI_LIVE_EMIT_MODEL:-gemini-3.1-pro-preview}"
+MODEL="gemini-3.1-pro-preview"
 DEPLOYED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 VERSION="${LIVE_EMIT_WS_VERSION:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 MIN_INSTANCES="${LIVE_EMIT_WS_MIN_INSTANCES:-0}"

@@ -1,0 +1,8 @@
+{
+  "policy_id": "TEST.JSON",
+  "status": "active",
+  "rules": [
+    "one",
+    "two"
+  ]
+}

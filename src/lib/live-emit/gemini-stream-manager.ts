@@ -1,22 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { GoogleGenAI } from "@google/genai";
 import { buildLiveEmitUserPrompt, getLiveEmitSystemInstruction } from "@/lib/live-emit/system-instruction";
 import {
   type LiveEmitPacket,
   type LiveEmitStartRequest,
   type ThinkingLevel,
 } from "@/lib/live-emit/types";
-import { GOOGLE_CLOUD_PROJECT } from "@/lib/env";
+import { createVertexGenAI, GEMINI_PRO_MODEL } from "@/lib/ai/gemini-config";
 
-const PROJECT_ID = GOOGLE_CLOUD_PROJECT;
 const LOCATION = "global";
-const MODEL = process.env.GEMINI_LIVE_EMIT_MODEL || "gemini-3.1-pro-preview";
+const MODEL = GEMINI_PRO_MODEL;
 
-const ai = new GoogleGenAI({
-  vertexai: true,
-  project: PROJECT_ID,
-  location: LOCATION,
-});
+const ai = createVertexGenAI(LOCATION);
 
 function extractTextFromChunk(chunk: unknown): string {
   const row = chunk as Record<string, unknown> | null;

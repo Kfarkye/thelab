@@ -1,0 +1,29 @@
+kind: source
+name: recruiting-gda-source
+type: cloud-gemini-data-analytics
+projectId: workflowos-a0fbf
+---
+kind: tool
+name: recruiting_candidates_querydata
+type: cloud-gemini-data-analytics-query
+source: recruiting-gda-source
+description: "Natural language candidate matching over candidates and Packages. Returns generated SQL, query results, and explanation."
+location: us-central1
+context:
+  datasourceReferences:
+    spannerReference:
+      databaseReference:
+        engine: "GOOGLE_SQL"
+        projectId: "workflowos-a0fbf"
+        instanceId: "game-data"
+        databaseId: "recruitingdb"
+        tableIds:
+          - candidates
+          - Packages
+      agentContextReference:
+        contextSetId: "${RECRUITING_QUERYDATA_CONTEXT_SET_ID}"
+generationOptions:
+  generateQueryResult: true
+  generateNaturalLanguageAnswer: false
+  generateExplanation: true
+  generateDisambiguationQuestion: true

@@ -1,0 +1,119 @@
+.wrap {
+  width: min(100%, 920px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 24px;
+  background: #ffffff;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.05);
+  color: #191612;
+  padding: 24px;
+}
+
+.top {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.label {
+  color: #717171;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.count {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 28px;
+  background: #fcfaf7;
+  color: #4f473f;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 10px;
+  padding: 4px 8px;
+}
+
+.summary {
+  color: #191612;
+  font-family: "Source Serif 4", "Newsreader", serif;
+  font-size: 22px;
+  line-height: 1.16;
+  margin: 0 0 24px;
+}
+
+.list {
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  position: relative;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 24px;
+  background: #fcfaf7;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.05);
+  padding: 16px;
+}
+
+.cardTop {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.name {
+  color: #191612;
+  font-family: "Source Serif 4", "Newsreader", serif;
+  font-size: 22px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.meta {
+  color: #5f574d;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-family: "DM Sans", "Newsreader", sans-serif;
+  font-size: 13px;
+  line-height: 1.35;
+  margin-top: 6px;
+}
+
+.number {
+  color: #191612;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+}
+
+.status {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 28px;
+  color: #5f574d;
+  flex: 0 0 auto;
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 5px 8px;
+  text-transform: uppercase;
+}
+
+.link {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.empty {
+  border: 1px dashed rgba(0, 0, 0, 0.14);
+  border-radius: 24px;
+  color: #5f574d;
+  font-family: "DM Sans", "Newsreader", sans-serif;
+  font-size: 14px;
+  padding: 32px;
+  text-align: center;
+}

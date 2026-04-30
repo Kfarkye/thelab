@@ -1,0 +1,28 @@
+{
+  "eval_id": "EVAL.CONTEXT_SCOPE.CANDIDATE_SWITCH.V1",
+  "policy": "AYA.CONTEXT_SCOPE.V1",
+  "cases": [
+    {
+      "name": "candidate_switch_drops_prior_rto",
+      "turns": [
+        "Medina needs RTO 7/6 to 7/15.",
+        "Now draft for Kalaya Cane."
+      ],
+      "expected": {
+        "must_not_include": ["7/6", "7/15", "Medina"],
+        "must_include": ["Kalaya Cane"]
+      }
+    },
+    {
+      "name": "explicit_link_allows_carry_forward",
+      "turns": [
+        "Medina needs RTO 7/6 to 7/15.",
+        "Use those same RTO dates for Medina's margin note."
+      ],
+      "expected": {
+        "must_include": ["7/6", "7/15", "Medina"]
+      }
+    }
+  ]
+}
+

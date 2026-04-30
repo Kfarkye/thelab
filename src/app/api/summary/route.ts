@@ -1241,30 +1241,63 @@ async function jobsSummary() {
     }
     return parsed.toISOString().slice(0, 10);
   };
+  const parseSourceJson = (value: unknown): Record<string, unknown> => {
+    if (typeof value !== "string" || !value.trim()) return {};
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  };
+  const readSourceText = (source: Record<string, unknown>, key: string): string | null => {
+    const value = source[key];
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  };
+  const readSourceList = (source: Record<string, unknown>, key: string): string | null => {
+    const value = source[key];
+    if (Array.isArray(value)) {
+      const items = value
+        .map((entry) => typeof entry === "string" ? entry.trim() : "")
+        .filter(Boolean);
+      return items.length ? items.join("\n") : null;
+    }
+    return readSourceText(source, key);
+  };
 
-  const items = result.objects.map((obj: any) => ({
-    id: obj.margin_object_id,
-    objectType: "pay_package",
-    payPackageId: obj.margin_object_id,
-    marginObjectId: obj.margin_object_id,
-    recordPhase: obj.record_phase,
-    label: obj.facility_name || obj.job_id || obj.margin_object_id,
-    facilityName: obj.facility_name,
-    profession: obj.profession,
-    specialty: obj.specialty,
-    jobId: obj.job_id,
-    assignmentStart: toIsoDate(obj.start_date),
-    assignmentEnd: toIsoDate(obj.end_date),
-    shiftType: obj.shift_type,
-    shiftStart: obj.shift_start_hhmm,
-    shiftEnd: obj.shift_end_hhmm,
-    weeklyHours: toNumeric(obj.weekly_hours),
-    weeklyGross: toNumeric(obj.gross_weekly_pay_usd),
-    weeklyStipends: toNumeric(obj.weekly_stipends_usd),
-    basePayRate: toNumeric(obj.base_pay_rate_usd),
-    isLocal: obj.is_local,
-    isCompact: obj.is_compact,
-  }));
+  const items = result.objects.map((obj: any) => {
+    const source = parseSourceJson(obj.source_raw_json);
+    return {
+      id: obj.margin_object_id,
+      objectType: "pay_package",
+      payPackageId: obj.margin_object_id,
+      marginObjectId: obj.margin_object_id,
+      recordPhase: obj.record_phase,
+      label: obj.facility_name || obj.job_id || obj.margin_object_id,
+      facilityName: obj.facility_name,
+      profession: obj.profession,
+      specialty: obj.specialty,
+      jobId: obj.job_id,
+      assignmentStart: toIsoDate(obj.start_date),
+      assignmentEnd: toIsoDate(obj.end_date),
+      shiftType: obj.shift_type,
+      shiftStart: obj.shift_start_hhmm,
+      shiftEnd: obj.shift_end_hhmm,
+      weeklyHours: toNumeric(obj.weekly_hours),
+      weeklyGross: toNumeric(obj.gross_weekly_pay_usd),
+      weeklyStipends: toNumeric(obj.weekly_stipends_usd),
+      basePayRate: toNumeric(obj.base_pay_rate_usd),
+      jobDescription: readSourceText(source, "job_description"),
+      jobRequirements: readSourceList(source, "requirements"),
+      jobNotes: readSourceList(source, "notes"),
+      isLocal: obj.is_local,
+      isCompact: obj.is_compact,
+    };
+  });
 
   // Specialty counts
   const specCounts: Record<string, number> = {};

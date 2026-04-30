@@ -1,0 +1,51 @@
+{
+  "policy_id": "AYA.CONTEXT_SCOPE.V1",
+  "status": "active",
+  "description": "Controls how global preferences and local task variables are carried across chat turns.",
+  "global_preferences_persist": [
+    "tone",
+    "formatting",
+    "email_style",
+    "signature_rules",
+    "product_rules",
+    "output_structure"
+  ],
+  "local_variables_reset_on_shift": [
+    "candidate_name",
+    "candidate_id",
+    "facility",
+    "job_id",
+    "assignment_id",
+    "pay_package",
+    "rto",
+    "start_date",
+    "license_state",
+    "screenshot_contents",
+    "recipient_specific_details",
+    "task_specific_constraints"
+  ],
+  "scope_shift_triggers": [
+    "active_object_id_changed",
+    "active_object_type_changed",
+    "task_type_changed",
+    "new_uploaded_image",
+    "new_candidate_name_without_explicit_link",
+    "new_job_or_facility_without_explicit_link"
+  ],
+  "carry_forward_requires_explicit_user_link": [
+    "facility",
+    "pay_package",
+    "rto",
+    "license_state",
+    "start_date",
+    "candidate_notes",
+    "screenshot_contents"
+  ],
+  "failure_behavior": {
+    "ambiguous_scope": "omit_prior_local_context",
+    "missing_active_object": "use_global_preferences_only",
+    "conflicting_local_context": "prefer_current_active_object",
+    "candidate_identity_unclear": "do_not_use_candidate_specific_details"
+  },
+  "model_instruction": "Global preferences persist. Local variables belong only to the active object and task scope. If the active object, route, task type, or recipient changes, prior local variables are inactive unless the user explicitly connects them. Prefer omission over cross-contamination."
+}

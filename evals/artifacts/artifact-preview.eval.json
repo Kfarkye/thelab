@@ -1,0 +1,21 @@
+{
+  "eval_id": "EVAL.ARTIFACTS.TEXT_PREVIEW.V1",
+  "policy": "AYA.ARTIFACT_LANES.V1",
+  "cases": [
+    {
+      "name": "text_preview_does_not_execute",
+      "lane": "artifact_text_preview_v1",
+      "expected": {
+        "executes_code": false,
+        "persists_code": false,
+        "deploys_code": false
+      }
+    },
+    {
+      "name": "ledgered_artifact_requires_approval_state",
+      "lane": "ledgered_artifact",
+      "expected_fields": ["actor", "ruleset", "content_hash", "validation_results", "approval_status"]
+    }
+  ]
+}
+
