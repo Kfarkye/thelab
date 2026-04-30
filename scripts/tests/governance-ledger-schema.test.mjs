@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const LEDGER_DIR = path.resolve(process.cwd(), "docs/ledger");
+const ACTIVE_RULES_PATH = path.join(LEDGER_DIR, "active_rules.json");
 const ALLOWED_STATUSES = new Set(["accepted"]);
 
 test("docs/ledger JSON files follow governance schema", async () => {
@@ -55,4 +56,20 @@ test("docs/ledger JSON files follow governance schema", async () => {
       seenVerdicts.add(entry.verdict);
     });
   }
+});
+
+test("active governance entrypoint exists and exposes runtime-safe accepted rules", async () => {
+  const raw = await fs.readFile(ACTIVE_RULES_PATH, "utf8");
+  const parsed = JSON.parse(raw);
+
+  assert.ok(Array.isArray(parsed), "active_rules.json must be a JSON array");
+  assert.ok(parsed.length > 0, "active_rules.json must contain at least one active rule");
+
+  parsed.forEach((entry, index) => {
+    assert.equal(typeof entry.verdict, "string", `active_rules.json[${index}].verdict must be a string`);
+    assert.notEqual(entry.verdict.trim(), "", `active_rules.json[${index}].verdict must not be empty`);
+    assert.equal(typeof entry.details, "string", `active_rules.json[${index}].details must be a string`);
+    assert.notEqual(entry.details.trim(), "", `active_rules.json[${index}].details must not be empty`);
+    assert.equal(entry.status, "accepted", `active_rules.json[${index}].status must be accepted`);
+  });
 });

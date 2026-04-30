@@ -1,0 +1,26 @@
+[
+  {
+    "id": "GITHUB_LEDGER_RUNTIME_SOURCE",
+    "verdict": "GitHub Ledger Is Runtime Source Of Truth",
+    "details": "Runtime governance is loaded from committed, pushed, allowlisted GitHub ledger files. Local files inside a dirty deployed container do not govern behavior unless committed, pushed, allowlisted, and loaded.",
+    "status": "accepted"
+  },
+  {
+    "id": "ACTIVE_RULES_RUNTIME_ENTRYPOINT",
+    "verdict": "Active Rules Runtime Entrypoint",
+    "details": "docs/ledger/active_rules.json is the compact cross-mode runtime governance entrypoint for rules that must be active now.",
+    "status": "accepted"
+  },
+  {
+    "id": "GOVERNANCE_STATUS_OBSERVABLE",
+    "verdict": "Governance Status Must Be Observable",
+    "details": "The runtime must expose compact internal metadata proving ledger path, version, blob SHA when available, fetch time, rule count, and active verdict names.",
+    "status": "accepted"
+  },
+  {
+    "id": "PRIMARY_DOC_CITATIONS",
+    "verdict": "Primary Documentation Citations",
+    "details": "When implementation relies on current platform, SDK, SQL, framework, or cloud syntax, cite primary documentation in the delivery note. Prefer official vendor docs over memory or secondary sources, especially for temporally unstable APIs.",
+    "status": "accepted"
+  }
+]

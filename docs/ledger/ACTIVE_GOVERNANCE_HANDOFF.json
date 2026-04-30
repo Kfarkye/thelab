@@ -1,0 +1,139 @@
+{
+  "handoff_id": "THELAB.HANDOFF.GAC.ACTIVE_RUNTIME_PROOF.2026-04-30",
+  "schema_version": "1.0.0",
+  "status": "patch_applied_not_runtime_verified",
+  "repo": {
+    "full_name": "Kfarkye/thelab",
+    "branch": "codex-handoff-v50",
+    "cloud_run_service": "gemini3-chat",
+    "cloud_run_region": "us-central1",
+    "live_url": "https://gemini3-chat-1049576459547.us-central1.run.app/chat"
+  },
+  "mission": "Move Git-as-Governance from deployed scaffolding to active, GitHub-backed, runtime-visible governance proof.",
+  "source_of_truth": {
+    "runtime_governance": "Committed, pushed, allowlisted GitHub ledger files loaded through src/lib/git-governance/engine.ts.",
+    "not_authoritative": [
+      "Dirty local files inside a deployed Cloud Run container",
+      "Uncommitted governance/*.json scaffolding",
+      "Any governance file not committed, pushed, allowlisted, and loaded"
+    ],
+    "active_entrypoint": "docs/ledger/active_rules.json",
+    "status_endpoint": "/api/governance/status"
+  },
+  "patch_summary": {
+    "files_changed": [
+      {
+        "path": "docs/ledger/active_rules.json",
+        "purpose": "Compact accepted runtime governance rules."
+      },
+      {
+        "path": "src/lib/git-governance/engine.ts",
+        "purpose": "Allowlist active_rules.json and return metadata: source, ledgerPath, version, ledgerBlobSha, fetchedAt, ruleCount, ruleVerdicts."
+      },
+      {
+        "path": "src/app/api/governance/status/route.ts",
+        "purpose": "Internal JSON endpoint proving which GitHub-backed active ledger is loaded."
+      },
+      {
+        "path": "scripts/tests/governance-ledger-schema.test.mjs",
+        "purpose": "Validate active_rules.json exists, is an array, and contains accepted runtime-safe rules."
+      },
+      {
+        "path": "package.json",
+        "purpose": "Wire check:governance to run the governance ledger test and existing governance scanner."
+      },
+      {
+        "path": "docs/ledger/ACTIVE_GOVERNANCE.md",
+        "purpose": "Short operator doc explaining GitHub-backed runtime governance proof."
+      }
+    ],
+    "active_rule_verdicts": [
+      "GitHub Ledger Is Runtime Source Of Truth",
+      "Active Rules Runtime Entrypoint",
+      "Governance Status Must Be Observable",
+      "Primary Documentation Citations"
+    ]
+  },
+  "command_results": [
+    {
+      "command": "test -f docs/ledger/active_rules.json",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run check:governance",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run test:ci",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "result": "NOT_PASS",
+      "notes": "Local Next build emitted no error text but hung for roughly 3 minutes and was killed. This matches the existing local build/tsc hang behavior."
+    }
+  ],
+  "runtime_status": {
+    "current_live_revision_before_this_patch": "gemini3-chat-00463-zjz",
+    "current_live_health_before_this_patch": {
+      "buildFingerprint": "740fe83-dirty-20260430050110",
+      "toolsEnabled": false,
+      "runtime": "cloud-run"
+    },
+    "active_governance_patch_deployed": false,
+    "active_governance_patch_committed": false,
+    "active_governance_patch_pushed": false,
+    "why_not_runtime_verified": "The governance engine fetches GitHub branch codex-handoff-v50. Dirty local files do not govern until committed, pushed, allowlisted, deployed, and verified through /api/governance/status."
+  },
+  "required_next_steps": [
+    {
+      "step": 1,
+      "action": "Commit the active governance patch files."
+    },
+    {
+      "step": 2,
+      "action": "Push branch codex-handoff-v50 to GitHub."
+    },
+    {
+      "step": 3,
+      "action": "Deploy the current local source to Cloud Run service gemini3-chat."
+    },
+    {
+      "step": 4,
+      "action": "Verify GET https://gemini3-chat-1049576459547.us-central1.run.app/api/governance/status."
+    }
+  ],
+  "expected_status_response": {
+    "ok": true,
+    "source": "github",
+    "ledgerPath": "docs/ledger/active_rules.json",
+    "version": "github_branch_sha",
+    "ledgerBlobSha": "github_blob_sha_or_null",
+    "fetchedAt": "iso_timestamp",
+    "ruleCount": 4,
+    "ruleVerdicts": [
+      "GitHub Ledger Is Runtime Source Of Truth",
+      "Active Rules Runtime Entrypoint",
+      "Governance Status Must Be Observable",
+      "Primary Documentation Citations"
+    ]
+  },
+  "rollback": {
+    "revision": "gemini3-chat-00463-zjz",
+    "command": "gcloud run services update-traffic gemini3-chat --region us-central1 --to-revisions gemini3-chat-00463-zjz=100"
+  },
+  "constraints": [
+    "Do not make local governance/*.json files authoritative at runtime.",
+    "Do not read arbitrary local governance files.",
+    "Do not weaken ALLOWED_PATHS or STRICT_BLOCKLIST.",
+    "Do not expose full rule details, secrets, stack traces, or raw error objects from /api/governance/status.",
+    "Production must fail hard if GitHub-backed active governance cannot load.",
+    "Do not add repo indexing, UI panels, model routing changes, or broad retries in this patch."
+  ],
+  "risks": [
+    "DEFAULT_REF is currently fixed to codex-handoff-v50.",
+    "Local development fallback exists for GitHub fetch failures, but production throws.",
+    "Runtime proof is not complete until the patch is committed, pushed, deployed, and /api/governance/status returns ok true.",
+    "Local npm run build still hangs without an emitted error."
+  ]
+}
