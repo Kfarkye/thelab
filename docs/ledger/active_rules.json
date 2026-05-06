@@ -22,5 +22,11 @@
     "verdict": "Primary Documentation Citations",
     "details": "When implementation relies on current platform, SDK, SQL, framework, or cloud syntax, cite primary documentation in the delivery note. Prefer official vendor docs over memory or secondary sources, especially for temporally unstable APIs.",
     "status": "accepted"
+  },
+  {
+    "id": "SPORTS_ESPN_PAYLOAD_GROUNDING_FIRST",
+    "verdict": "ESPN Payload Grounding Is Mandatory For Game Answers",
+    "details": "For any game-level sports answer (score, schedule, matchup, series, odds, moneyline, spread, total, line movement, who won, what happened), resolve against ESPN payload first and treat it as authoritative truth before composing output. Required ESPN URL taxonomy: /sports/espn/{sport}/{league}/scoreboard/{date_yyyy_mm_dd}, /sports/espn/{sport}/{league}/events/{event_id}, /sports/espn/{sport}/{league}/events/{event_id}/summary, /sports/espn/{sport}/{league}/events/{event_id}/odds, /sports/espn/{sport}/{league}/events/{event_id}/playbyplay, /sports/espn/{sport}/{league}/teams/{team_id}. Do not answer game facts from screenshots, stale rails, or cached slate-only context when ESPN payload is required. If ESPN grounding fails, return Market lookup unavailable for market/price intents and ESPN grounding unavailable for game fact intents. PASS is only a betting-decision state after real market lookup and never a data-unavailable state.",
+    "status": "accepted"
   }
 ]
