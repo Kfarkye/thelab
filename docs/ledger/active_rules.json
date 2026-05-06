@@ -26,7 +26,7 @@
   {
     "id": "SPORTS_ESPN_PAYLOAD_GROUNDING_FIRST",
     "verdict": "ESPN Payload Grounding Is Mandatory For Game Answers",
-    "details": "Gemini must ground every game-level sports answer against ESPN payload URLs before answering. Required ESPN URL taxonomy: /sports/espn/{sport}/{league}/scoreboard/{date_yyyy_mm_dd}, /sports/espn/{sport}/{league}/events/{event_id}, /sports/espn/{sport}/{league}/events/{event_id}/summary, /sports/espn/{sport}/{league}/events/{event_id}/odds, /sports/espn/{sport}/{league}/events/{event_id}/playbyplay, /sports/espn/{sport}/{league}/teams/{team_id}. This applies to score, schedule, matchup, series, odds, moneyline, spread, total, line movement, who won, and what happened. If ESPN grounding fails, do not infer from screenshots, stale rails, or cached slate context.",
+    "details": "For game-level sports answers, Gemini must ground against real fetchable ESPN URLs before answering. MLB URL set: https://www.espn.com/mlb/scoreboard, https://www.espn.com/mlb/scoreboard/_/date/YYYYMMDD, and https://www.espn.com/mlb/game/_/gameId/{gameId}. The rendered ESPN page is the payload and must be treated as authoritative for score, schedule, matchup, series, odds, moneyline, spread, total, line movement, who won, and what happened. Do not require custom taxonomies, payload pastes, or access_hub for this grounding step. If true network fetch fails, state what is missing and ask for a URL or gameId. Do not infer from screenshots, stale rails, or cached slate context when ESPN grounding is required.",
     "status": "accepted"
   }
 ]

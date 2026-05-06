@@ -211,7 +211,11 @@ Be precise about dates, deadlines, and regulatory requirements. Use markdown for
   sports: `You are a sports intelligence analyst with access to Google Search.
 The user is in Pacific Time (PT / America/Los_Angeles). Always reference times in PT, not UTC or ET unless comparing.
 Your expertise: injury reports, lineup changes, late scratches, betting market implications, DFS pricing, playoff scenarios, trade rumors, and game-day intel.
-When the user references a specific game from workspace context, call access_hub({ path: "games/{id}" }) first to ground canonical game URLs and structured game data.
+For game-level facts, ground against real ESPN URLs directly before answering:
+- https://www.espn.com/mlb/scoreboard
+- https://www.espn.com/mlb/scoreboard/_/date/YYYYMMDD
+- https://www.espn.com/mlb/game/_/gameId/{gameId}
+The rendered ESPN page is the payload.
 When the user asks for picks, output normalized pick contracts using canonical enums:
 - market_type: SPREAD | TOTAL | MONEYLINE | PLAYER_PROP
 - side: HOME | AWAY | OVER | UNDER
@@ -3183,6 +3187,11 @@ export async function POST(request: NextRequest) {
     const isSportsMarketLookupIntent =
       tabMode === "sports" && sportsRouteDecision?.route === "market_lookup";
     const sportsOutputAllowsBullets = shouldAllowSportsBullets(prompt);
+    const isEspnGameFactIntent =
+      tabMode === "sports" &&
+      (sportsRouteDecision?.route === "answer_from_loaded_record" ||
+        sportsRouteDecision?.route === "game_context_lookup" ||
+        sportsRouteDecision?.route === "live_state_lookup");
     let activeMode = tabMode;
     if (!hasImage && !diagnosticToolsRequested && tabMode === "sports") {
       if (
@@ -3959,9 +3968,7 @@ export async function POST(request: NextRequest) {
       !diagnosticToolsRequested &&
       (goGetterDecision.mode === "loaded_record_qa" ||
         (goGetterDecision.mode === "sports_intelligence" &&
-          (goGetterDecision.route === "answer_from_loaded_record" ||
-            goGetterDecision.route === "game_context_lookup" ||
-            goGetterDecision.route === "live_state_lookup")))
+          goGetterDecision.route === "answer_from_loaded_record"))
     ) {
       addGoGetterSourceAttempt({
         sourceName: "sports_envelope_primary",
@@ -4190,6 +4197,16 @@ ${workspaceContext}`;
 - This is a market lookup request. Use live grounded market/web data first.
 - Do NOT answer from screenshots, workspace slate, schedule rail, or stale cached sports context.
 - If live grounding fails, return exactly "Market lookup unavailable".`;
+      }
+      if (isEspnGameFactIntent) {
+        systemPrompt = `${systemPrompt}
+- This is a game-fact request. Ground directly against real ESPN URLs first:
+  - https://www.espn.com/mlb/scoreboard
+  - https://www.espn.com/mlb/scoreboard/_/date/YYYYMMDD
+  - https://www.espn.com/mlb/game/_/gameId/{gameId}
+- Treat the rendered ESPN page as the payload.
+- Do NOT require payload pastes, custom taxonomies, or access_hub to complete this step.
+- If true network fetch fails, state what is missing and ask for URL or gameId.`;
       }
       if (sportsCodeExecutionRequested) {
         systemPrompt = `${systemPrompt}

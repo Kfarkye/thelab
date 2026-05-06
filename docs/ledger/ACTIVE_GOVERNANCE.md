@@ -4,7 +4,7 @@ GitHub ledger files govern runtime behavior. The deployed container can contain 
 
 `docs/ledger/active_rules.json` is the current runtime rule entrypoint for active governance status checks.
 
-Active sports rule: Gemini must ground game-level sports responses against ESPN payload first using the ESPN URL taxonomy before outputting facts.
+Active sports rule: Gemini must ground game-level sports responses against real ESPN URLs (scoreboard/date/game page) before outputting facts.
 
 `GET /api/governance/status` loads `docs/ledger/active_rules.json` through the GitHub-backed governance engine and returns metadata only: source, ledger path, branch version, blob SHA, fetch time, rule count, and verdict names.
 
