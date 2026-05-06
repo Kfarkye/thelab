@@ -1,8 +1,10 @@
 import { NextRequest } from "next/server";
+import { Spanner } from "@google-cloud/spanner";
 import { formatCandidateContext } from "@/lib/formatters/candidate-context";
 import type { CandidateRecord, RetrievalPolicy, InternalContext } from "@/lib/types/candidate";
 import { routeRequest, MODEL_META, type ModelId } from "@/lib/router/model-router";
-import { createVertexGenAI, GEMINI_FAST_MODEL, GEMINI_PRO_MODEL, GEMINI_THINKING_HIGH } from "@/lib/ai/gemini-config";
+import { createVertexGenAI, GEMINI_FAST_MODEL, GEMINI_PRO_MODEL, GEMINI_THINKING_HIGH, ENTERPRISE_SAFETY_SETTINGS, GROUNDING_WITH_GOOGLE_SEARCH, GROUNDING_WITH_ENTERPRISE_KNOWLEDGE, ENTERPRISE_SYSTEM_INSTRUCTION_PREFIX, STRICT_JSON_CONFIG, STANDARD_TEXT_CONFIG, EMAIL_DRAFT_CONFIG, CANDIDATE_INGEST_CONFIG, HUB_SUMMARY_CONFIG } from "@/lib/ai/gemini-config";
+import { CANDIDATE_INGEST_SCHEMA, HUB_RESOLUTION_SUMMARY_SCHEMA, EMAIL_DRAFT_SCHEMA } from "@/lib/ai/response-schemes";
 import { buildChatWorkspaceContext, type ActiveObject } from "@/lib/context/build-chat-context";
 import { DB_TOOL_DECLARATIONS, executeDbTool } from "@/lib/spanner/tools";
 import { resolve as resolveHub } from "@/lib/resolver";
@@ -16,6 +18,7 @@ import {
   evaluateToolRequiredTurn,
   summarizeToolExecution,
 } from "@/lib/agent/tool-policy";
+import { logComplianceAudit, logToolExecution } from "@/lib/ai/audit";
 import {
   OPS_REASSIGNMENT_RECIPIENT,
   resolveEmailTemplateId,
@@ -33,11 +36,31 @@ import {
   ingestRingCentralThreadCapture,
   isLikelyRingCentralThreadPayload,
 } from "@/lib/ayaops/ringcentral-ledger";
+import { validateArtifactDestination } from "@/lib/artifacts/governance";
+import { getDb } from "@/lib/spanner-pool";
+import { requireAuth } from "@/lib/middleware/auth";
+import { streamPrimaryRecruiterAssistant } from "@/lib/ai/recruiter-assistant";
+import { streamPrimarySportsAssistant } from "@/lib/ai/sports-assistant";
+import { runInSandbox } from "@/lib/sandbox/client";
+import { sanitizeProductResponseText, validateResponsePolicy } from "@/lib/ai/response-policy";
+import { classifyGlobalIntent } from "@/lib/intent/global-router";
+import { createSourceAttemptLedger, evaluateLedgerResult, recordSourceAttempt } from "@/lib/intent/source-attempt-ledger";
+import type { SourceAttempt, SourceAttemptLedger } from "@/lib/intent/types";
+import { classifySportsIntent, isSportsCodeExecutionIntent } from "@/lib/sports/sports-router";
+import { normalizeSportsEvent, type SportsEvent } from "@/lib/sports/schema";
+import { enforceSportsBoardTruth } from "@/lib/sports/board-truth";
+import {
+  canUseSlateDateFromAutoSelection,
+  dateKeyInTimeZone,
+  isIsoDateKey,
+  type SportsRailSelectionSource,
+} from "@/lib/sports/rail-state";
 
 import { VERTEX_AI_AYAOPS_URL_DATASTORE } from "@/lib/env";
 
 const LOCATION = "global";
 const RAG_CORPUS = process.env.RAG_CORPUS_NAME || "";
+const ACTIVE_RULES_LEDGER_PATH = "docs/ledger/active_rules.json";
 
 // Gemini model IDs
 const GEMINI_MODELS = {
@@ -50,6 +73,11 @@ function resolveGeminiModelId(model: ModelId): string {
 }
 
 const ai = createVertexGenAI(LOCATION);
+
+type ModelOutputType = "json" | "text" | "email_draft" | "candidate_ingest" | "hub_summary";
+type GroundingType = "google_search" | "enterprise_knowledge" | "none";
+
+// ── Enterprise Model Factory ────────────────────────────────────
 
 const AYAOPS_WRITE_TOOL_NAMES = new Set([
   "update_candidate_status",
@@ -193,7 +221,15 @@ When the user asks for picks, output normalized pick contracts using canonical e
 Use display_text for canonical pick wording.
 Rationale length rule: FEATURED can use up to 280 chars. STANDARD and WATCH must stay at 140 chars or less.
 For consumer settlement phrasing, keep it direct and bet-facing: "covered/hit/missed/lost" plus units. Avoid product-internal phrasing like "added to your track record."
-Do not emit bracketed citation numbers. Fold source attribution into prose when useful, and let the Sources panel carry verification links. Be concise, factual, and direct. Prioritize recency, the freshest data wins. Use markdown formatting.`,
+Do not emit bracketed citation numbers. Fold source attribution into prose when useful, and let the Sources panel carry verification links.
+Quality contract:
+- Never include legal/compliance disclaimer lines (for example, "please gamble responsibly" or "for intelligence purposes") unless the user explicitly asks for legal disclaimer copy.
+- For "today", "recap", "sharp bets", or "board" asks, prioritize the currently loaded workspace slate and avoid unrelated events not present in that slate.
+- If the request is broad, return:
+  1) market snapshot,
+  2) top actionable positions with odds/line context,
+  3) what changed recently and why.
+Be concise, factual, and direct. Prioritize recency, the freshest data wins. Use markdown formatting.`,
 
   code: `You are a senior software engineer with access to Google Search for documentation lookup.
 The user is in Pacific Time (PT / America/Los_Angeles).
@@ -411,7 +447,156 @@ function asJsonRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function tryParseJsonRecord(value: string): Record<string, unknown> | null {
+function sanitizeGeminiTools(
+  inputTools: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const sanitized: Array<Record<string, unknown>> = [];
+
+  for (const tool of inputTools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) continue;
+
+    const hasGoogleSearch = "googleSearch" in tool;
+    const hasCodeExecution = "codeExecution" in tool;
+    const hasRetrieval = "retrieval" in tool;
+    const hasFunctionDeclarations =
+      Array.isArray(tool.functionDeclarations) && tool.functionDeclarations.length > 0;
+
+    if (!hasGoogleSearch && !hasCodeExecution && !hasRetrieval && !hasFunctionDeclarations) {
+      continue;
+    }
+
+    if (hasFunctionDeclarations) {
+      const declarations = (tool.functionDeclarations as unknown[])
+        .filter((entry) => Boolean(entry && typeof entry === "object"))
+        .map((entry) => entry as Record<string, unknown>)
+        .filter((entry) => typeof entry.name === "string" && entry.name.trim().length > 0);
+
+      if (declarations.length === 0 && !hasGoogleSearch && !hasCodeExecution && !hasRetrieval) {
+        continue;
+      }
+
+      sanitized.push({
+        ...tool,
+        functionDeclarations: declarations,
+      });
+      continue;
+    }
+
+    sanitized.push(tool);
+  }
+
+  return sanitized;
+}
+
+type InlineMediaPart = { mimeType: string; data: string };
+
+const INLINE_MEDIA_DATA_URL_RE = /^data:([a-zA-Z0-9.+/-]+);base64,([A-Za-z0-9+/=\s]+)$/;
+const SUPPORTED_INLINE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+  "application/pdf",
+]);
+const MAX_INLINE_MEDIA_ITEMS = 6;
+const MAX_INLINE_MEDIA_TOTAL_BYTES = 20 * 1024 * 1024;
+const MAX_INLINE_IMAGE_BYTES = 7 * 1024 * 1024;
+const MAX_INLINE_PDF_BYTES = 15 * 1024 * 1024;
+
+function estimateBase64Bytes(base64Value: string): number {
+  const normalized = base64Value.replace(/\s+/g, "");
+  if (!normalized) return 0;
+  const padding = normalized.endsWith("==")
+    ? 2
+    : normalized.endsWith("=")
+      ? 1
+      : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+}
+
+function parseInlineMediaDataUrl(value: string): InlineMediaPart | null {
+  const match = value.match(INLINE_MEDIA_DATA_URL_RE);
+  if (!match) return null;
+
+  const mimeType = String(match[1] || "").toLowerCase();
+  if (!SUPPORTED_INLINE_MEDIA_TYPES.has(mimeType)) return null;
+
+  const data = String(match[2] || "").replace(/\s+/g, "");
+  if (!data || /[^A-Za-z0-9+/=]/.test(data)) return null;
+
+  return { mimeType, data };
+}
+
+function collectInlineMediaInputs(
+  inlineImage: unknown,
+  inlineImages: unknown,
+): { parts: InlineMediaPart[]; hadInput: boolean; error: string | null } {
+  const candidates: string[] = [];
+  if (typeof inlineImage === "string" && inlineImage.trim().length > 0) {
+    candidates.push(inlineImage.trim());
+  }
+  if (Array.isArray(inlineImages)) {
+    for (const entry of inlineImages) {
+      if (typeof entry === "string" && entry.trim().length > 0) {
+        candidates.push(entry.trim());
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { parts: [], hadInput: false, error: null };
+  }
+
+  if (candidates.length > MAX_INLINE_MEDIA_ITEMS) {
+    return {
+      parts: [],
+      hadInput: true,
+      error: `Too many inline files. Limit is ${MAX_INLINE_MEDIA_ITEMS} attachments per message.`,
+    };
+  }
+
+  const parsedParts: InlineMediaPart[] = [];
+  let totalBytes = 0;
+  for (const candidate of candidates) {
+    const parsed = parseInlineMediaDataUrl(candidate);
+    if (!parsed) {
+      return {
+        parts: [],
+        hadInput: true,
+        error:
+          "Unsupported file format. Re-upload as PNG, JPEG, WEBP, HEIC, HEIF, or PDF.",
+      };
+    }
+
+    const bytes = estimateBase64Bytes(parsed.data);
+    const maxBytes =
+      parsed.mimeType === "application/pdf" ? MAX_INLINE_PDF_BYTES : MAX_INLINE_IMAGE_BYTES;
+    if (bytes > maxBytes) {
+      const limitMb = Math.round(maxBytes / (1024 * 1024));
+      return {
+        parts: [],
+        hadInput: true,
+        error: `${parsed.mimeType} file exceeds ${limitMb}MB inline upload limit.`,
+      };
+    }
+    totalBytes += bytes;
+    if (totalBytes > MAX_INLINE_MEDIA_TOTAL_BYTES) {
+      return {
+        parts: [],
+        hadInput: true,
+        error: "Combined inline files exceed 20MB limit. Reduce image count or file size.",
+      };
+    }
+
+    parsedParts.push(parsed);
+  }
+
+  return { parts: parsedParts, hadInput: true, error: null };
+}
+
+function parseSandboxArtifactJsonRecord(value: string): Record<string, unknown> | null {
   try {
     return asJsonRecord(JSON.parse(value));
   } catch {
@@ -455,13 +640,13 @@ const TOOL_LABELS: Record<string, string> = {
   create_com_draft_email: "Draft mutation",
 };
 const TOOL_LABELS_DONE: Record<string, string> = {
-  access_hub: "Record loaded",
+  access_hub: "Resolved",
   search_candidates: "Search resolved",
   get_candidate_by_id: "Candidate loaded",
   list_candidates_by_status: "Candidates listed",
   list_stale_prospects: "Prospects resolved",
   get_candidate_profile_link: "Profile link ready",
-  get_internal_grounding_context: "Context loaded",
+  get_internal_grounding_context: "Context resolved",
   ingest_nova_profile: "Profile ingested",
   update_candidate_status: "Status updated",
   update_candidate_profession: "Profession updated",
@@ -734,6 +919,11 @@ type SelectedMarginContext = {
   margin_object_id: string | null;
   job_id: string | null;
   margin_id: string | null;
+  candidate_nova_url: string | null;
+  candidate_hub_url: string | null;
+  pay_package_url: string | null;
+  margin_url: string | null;
+  job_url: string | null;
   candidate_name: string | null;
   profession: string | null;
   specialty: string | null;
@@ -791,6 +981,11 @@ function normalizeSelectedMarginContext(value: unknown): SelectedMarginContext |
     margin_object_id: readString(input.margin_object_id || input.marginObjectId) || null,
     job_id: readString(input.job_id || input.jobId) || null,
     margin_id: readString(input.margin_id || input.marginId) || null,
+    candidate_nova_url: readString(input.candidate_nova_url || input.candidateNovaUrl || input.novaUrl) || null,
+    candidate_hub_url: readString(input.candidate_hub_url || input.candidateHubUrl) || null,
+    pay_package_url: readString(input.pay_package_url || input.payPackageUrl) || null,
+    margin_url: readString(input.margin_url || input.marginUrl) || null,
+    job_url: readString(input.job_url || input.jobUrl) || null,
     candidate_name: readString(input.candidate_name || input.candidateName) || null,
     profession: readString(input.profession) || null,
     specialty: readString(input.specialty) || null,
@@ -811,6 +1006,162 @@ function normalizeSelectedMarginContext(value: unknown): SelectedMarginContext |
   };
   if (!context.candidate_name && !context.facility_name) return null;
   return context;
+}
+
+function normalizePercentPoints(value: number | null): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const points = Math.abs(value) <= 1 ? value * 100 : value;
+  return Number(points.toFixed(2));
+}
+
+function isMarginApprovalDraftIntent(prompt: string): boolean {
+  const normalized = String(prompt || "").toLowerCase();
+  if (!normalized) return false;
+
+  const hasMargin = /\bmargin\b/.test(normalized);
+  const hasApproval = /\bapproval\b/.test(normalized);
+  const hasDraftCue =
+    /\b(draft|email|template|compose|write|fill|filled|format|approval request)\b/.test(normalized);
+
+  return hasMargin && hasApproval && hasDraftCue;
+}
+
+function inferMarginPlacementType(prompt: string): string {
+  const normalized = String(prompt || "").toLowerCase();
+  if (/\b(change of contract|coc)\b/.test(normalized)) return "Change of Contract";
+  if (/\b(extension|extend|ext)\b/.test(normalized)) return "Extension";
+  return "New Placement";
+}
+
+function buildMarginApprovalReason(selectedMargin: SelectedMarginContext): string {
+  const candidateName = selectedMargin.candidate_name || "the clinician";
+  const facility = selectedMargin.facility_name || "the selected facility";
+  const role = selectedMargin.specialty || selectedMargin.profession || "the selected role";
+  const actualMargin = normalizePercentPoints(selectedMargin.actual_margin_pct);
+  const targetMargin = normalizePercentPoints(selectedMargin.target_margin_pct);
+  const weeklyGross = formatCurrency(selectedMargin.weekly_gross);
+  const assignmentRange = [selectedMargin.assignment_start, selectedMargin.assignment_end]
+    .filter(Boolean)
+    .map((value) => formatHumanDate(String(value)))
+    .join(" to ");
+
+  const marginText =
+    actualMargin != null && targetMargin != null
+      ? `Actual margin is ${actualMargin}% versus target ${targetMargin}%.`
+      : actualMargin != null
+        ? `Actual margin is ${actualMargin}%.`
+        : "Actual margin is pending confirmation.";
+
+  const payText = weeklyGross ? `Weekly gross is ${weeklyGross}.` : "";
+  const assignmentText = assignmentRange ? `Assignment window is ${assignmentRange}.` : "";
+
+  return [
+    `Requesting margin approval for ${candidateName}, ${role} at ${facility}.`,
+    marginText,
+    payText,
+    assignmentText,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function renderMarginApprovalDraftFromSelectedContext(
+  selectedMargin: SelectedMarginContext,
+  prompt: string,
+): { to: string; cc: string; subject: string; body: string } | null {
+  const template = OPS_EMAIL_TEMPLATES.find((entry) => String(entry.id) === "margin_approval");
+  if (!template) return null;
+
+  const actualMargin = normalizePercentPoints(selectedMargin.actual_margin_pct);
+  const targetMargin = normalizePercentPoints(selectedMargin.target_margin_pct);
+  const candidateName =
+    selectedMargin.candidate_name || selectedMargin.specialty || selectedMargin.profession || "Candidate";
+
+  const offerData: TemplateCatalogOfferData = {
+    name: candidateName,
+    email: "",
+    facility: selectedMargin.facility_name || "",
+    city: selectedMargin.facility_city || "",
+    state: selectedMargin.facility_state || "",
+    shiftType: selectedMargin.shift_type || "",
+    weeklyHours: selectedMargin.weekly_hours || 0,
+    startDate: selectedMargin.assignment_start || null,
+    endDate: selectedMargin.assignment_end || null,
+    taxableRate: selectedMargin.base_pay_rate || 0,
+    weeklyStipend: selectedMargin.weekly_stipends || 0,
+    grossWeeklyPay: selectedMargin.weekly_gross || 0,
+    specialty: selectedMargin.specialty || selectedMargin.profession || "",
+    jobId: null,
+    candidateId: null,
+    actualMargin,
+  };
+
+  const rendered = template.generateContent(offerData);
+  const placementType = inferMarginPlacementType(prompt);
+  const reasonText = buildMarginApprovalReason(selectedMargin);
+  const premiumNeeded =
+    actualMargin != null && targetMargin != null && actualMargin < targetMargin
+      ? `Yes, margin is below target by ${(targetMargin - actualMargin).toFixed(2)} points.`
+      : "No, premium exception is not expected.";
+
+  const tmValue = targetMargin != null ? `${targetMargin}%` : "[TM %]";
+  const initialReason =
+    actualMargin != null && targetMargin != null && actualMargin < targetMargin
+      ? "Market bill-rate pressure and package competitiveness reduced initial margin."
+      : "[Reason]";
+  const reviewVariance =
+    actualMargin != null && targetMargin != null && actualMargin < targetMargin ? "Yes" : "No";
+  const packageUrl =
+    selectedMargin.pay_package_url ||
+    selectedMargin.margin_url ||
+    (selectedMargin.margin_object_id
+      ? `/api/ayaops/margins/query?margin_object_id=${encodeURIComponent(selectedMargin.margin_object_id)}`
+      : null);
+  const marginUrl =
+    selectedMargin.margin_url ||
+    (selectedMargin.margin_id
+      ? `/api/ayaops/margins/query?margin_id=${encodeURIComponent(selectedMargin.margin_id)}`
+      : null);
+  const jobUrl =
+    selectedMargin.job_url ||
+    (selectedMargin.job_id ? `/api/hub/jobs/${encodeURIComponent(selectedMargin.job_id)}` : null);
+  const candidateUrl = selectedMargin.candidate_nova_url || selectedMargin.candidate_hub_url || null;
+  const dealsUrl = packageUrl || marginUrl || jobUrl || candidateUrl;
+  const packageLink = dealsUrl || "Link pending: open Packages tab and copy the selected record URL.";
+
+  const linkbackEntries = [
+    { label: "Deals tab", href: dealsUrl },
+    { label: "Package record", href: packageUrl },
+    { label: "Margin record", href: marginUrl },
+    { label: "Job record", href: jobUrl },
+    { label: "Candidate profile", href: candidateUrl },
+  ].filter((entry): entry is { label: string; href: string } => Boolean(entry.href));
+  const dedupedLinkbackEntries = linkbackEntries.filter(
+    (entry, index, all) => all.findIndex((candidate) => candidate.href === entry.href) === index,
+  );
+  const linkbackBlock =
+    dedupedLinkbackEntries.length > 0
+      ? `\n\nReference links:\n${dedupedLinkbackEntries.map((entry) => `- ${entry.label}: ${entry.href}`).join("\n")}`
+      : "";
+
+  const body = String(rendered.body || "")
+    .replace("[Insert reason here]", reasonText)
+    .replace("[New Placement / Extension / COC]", placementType)
+    .replace("[Yes/No - Reason]", premiumNeeded)
+    .replace("[Y/N]", "N")
+    .replace("[Distro response here]", "Pending comp distribution review.")
+    .replace("[TM %]", tmValue)
+    .replace("[Yes/No]", reviewVariance)
+    .replace("[Reason]", initialReason)
+    .replace("[Link here]", packageLink)
+    .concat(linkbackBlock);
+
+  return {
+    to: readString(rendered.to) || "team.managers.approval@ayahealthcare.com",
+    cc: readString(rendered.cc),
+    subject: readString(rendered.subject),
+    body,
+  };
 }
 
 function isOfferStatusIntent(prompt: string): boolean {
@@ -1185,6 +1536,676 @@ function normalizeAyaopsRosterDigest(input: unknown): AyaopsRosterDigest | null 
   }
 
   return { total, statuses, specialties };
+}
+
+type SportsBoardItem = {
+  game_id: string;
+  date_key: string | null;
+  home: string;
+  away: string;
+  league: string;
+  status: string;
+  start_time: string | null;
+  venue: string | null;
+  home_score: number | null;
+  away_score: number | null;
+  spread: number | null;
+  total: number | null;
+};
+
+type SportsRailContext = {
+  activeDateKey: string | null;
+  activeLeague: string | null;
+  dateSelectionSource: SportsRailSelectionSource;
+  visibleGames: Array<Record<string, unknown>>;
+};
+
+function normalizeSportsRailSelectionSource(value: unknown): SportsRailSelectionSource {
+  return String(value || "").toLowerCase() === "user" ? "user" : "auto";
+}
+
+function normalizeSportsRailContext(input: unknown): SportsRailContext | null {
+  const record = asJsonRecord(input);
+  if (!record) return null;
+  const activeDateKeyRaw = readString(record.activeDateKey);
+  const activeDateKey = isIsoDateKey(activeDateKeyRaw) ? activeDateKeyRaw : null;
+  const activeLeague = readString(record.activeLeague) || null;
+  const visibleGames = Array.isArray(record.visibleGames)
+    ? record.visibleGames
+        .map((entry) => asJsonRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  return {
+    activeDateKey,
+    activeLeague,
+    dateSelectionSource: normalizeSportsRailSelectionSource(record.dateSelectionSource),
+    visibleGames,
+  };
+}
+
+function scrubSportsDisclaimerText(value: string): string {
+  const lines = String(value || "").split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const normalized = line.toLowerCase();
+    if (normalized.includes("please gamble responsibly")) return false;
+    if (normalized.includes("betting information is provided")) return false;
+    if (normalized.includes("for intelligence purposes")) return false;
+    return true;
+  });
+  return filtered.join("\n");
+}
+
+function scrubSportsChunkText(value: string): string {
+  return String(value || "")
+    .replace(/please gamble responsibly/gi, "")
+    .replace(/betting information is provided/gi, "")
+    .replace(/for intelligence purposes/gi, "")
+    .replace(/for informational purposes only/gi, "");
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return asJsonRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function extractFirstJsonObjectText(value: string): string {
+  const input = String(value || "");
+  if (!input) return "";
+
+  const fencedMatch = input.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim();
+  }
+
+  const start = input.indexOf("{");
+  if (start < 0) return "";
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return input.slice(start, i + 1);
+    }
+  }
+
+  return "";
+}
+
+function parseLiveArtifactFromCodeOutput(output: string): Record<string, unknown> | null {
+  const sourceText = String(output || "").trim();
+  if (!sourceText) return null;
+
+  const candidates = [
+    sourceText,
+    extractFirstJsonObjectText(sourceText),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const record = parseSandboxArtifactJsonRecord(candidate);
+    if (!record) continue;
+
+    const normalizedEvent = normalizeSportsEvent(record);
+    if (!normalizedEvent) continue;
+    const artifactId = readString(record.artifact_id || record.id) || "";
+    const source = readString(record.source) || "python";
+    const title = readString(record.title) || "Live Score";
+
+    return {
+      ...(artifactId ? { artifact_id: artifactId } : {}),
+      artifact_type: "live_score_card",
+      kind: "live_score_card",
+      title,
+      source,
+      created_at: new Date().toISOString(),
+      data: normalizedEvent,
+    };
+  }
+
+  return null;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildLiveScoreArtifactModule(params: {
+  artifactId: string;
+  title: string;
+  source: string;
+  data: SportsEvent;
+}): string {
+  const payload = {
+    artifact_id: params.artifactId,
+    artifact_type: "live_score_card",
+    kind: "live_score_card",
+    title: params.title || "Live Score",
+    source: params.source || "python",
+    created_at: new Date().toISOString(),
+    data: params.data,
+  };
+
+  return [
+    "/**",
+    " * Auto-generated from the AI -> Python live artifact stream.",
+    " * Apply writes a portable artifact module for deterministic playback.",
+    " */",
+    `export const LIVE_SCORE_ARTIFACT = ${JSON.stringify(payload, null, 2)} as const;`,
+    "",
+    "export default LIVE_SCORE_ARTIFACT;",
+    "",
+  ].join("\n");
+}
+
+function formatLiveScoreValue(score: number | null): string {
+  return score == null ? "-" : String(score);
+}
+
+function describeGameState(event: SportsEvent): string {
+  const phase = event.game_state.phase;
+  if (phase === "final") return "Final";
+  if (phase === "canceled") return "Canceled";
+  if (phase === "pregame") {
+    const kickoff = formatSportsStartTimeLabel(event.start_time);
+    return kickoff ? `Pregame • ${kickoff}` : "Pregame";
+  }
+
+  const clock = readString(event.game_state.clock);
+  const period = event.game_state.period;
+  if (clock && period != null) return `Live • ${clock} • Period ${period}`;
+  if (clock) return `Live • ${clock}`;
+  if (period != null) return `Live • Period ${period}`;
+  return "Live";
+}
+
+function buildLiveScorePreviewHtml(params: {
+  title: string;
+  source: string;
+  event: SportsEvent;
+}): string {
+  const awayTeam = readString(params.event.teams.away.abbr) || "Away";
+  const homeTeam = readString(params.event.teams.home.abbr) || "Home";
+  const awayRuns = formatLiveScoreValue(params.event.teams.away.score);
+  const homeRuns = formatLiveScoreValue(params.event.teams.home.score);
+  const stateLabel = describeGameState(params.event);
+
+  return [
+    "<article>",
+    `  <h1>${escapeHtml(params.title || "Live Score")}</h1>`,
+    `  <p>${escapeHtml(params.source || "python")}</p>`,
+    `  <p>${escapeHtml(awayTeam)} ${escapeHtml(awayRuns)} @ ${escapeHtml(homeTeam)} ${escapeHtml(homeRuns)}</p>`,
+    `  <p>${escapeHtml(stateLabel)}</p>`,
+    "</article>",
+  ].join("\n");
+}
+
+async function resolveOptionalActorId(request: NextRequest): Promise<string | null> {
+  try {
+    const auth = await requireAuth(request);
+    if (auth.response) return null;
+    return auth.user.email || auth.user.uid || null;
+  } catch (error) {
+    console.warn(
+      `[live_artifact] optional auth lookup failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
+async function persistLiveScoreArtifactIfNeeded(params: {
+  artifact: Record<string, unknown>;
+  actorId: string | null;
+}): Promise<Record<string, unknown>> {
+  if (!params.actorId) return params.artifact;
+
+  const existingArtifactId = readString(params.artifact.artifact_id || params.artifact.id);
+  if (existingArtifactId) return params.artifact;
+
+  const dataRecord = asJsonRecord(params.artifact.data) || {};
+  const normalizedEvent = normalizeSportsEvent(dataRecord);
+  if (!normalizedEvent) return params.artifact;
+
+  const title = readString(params.artifact.title) || "Live Score";
+  const source = readString(params.artifact.source) || "python";
+
+  const artifactId = crypto.randomUUID();
+  const rawDestination = `src/components/generated/live-score-${artifactId}.tsx`;
+  const proposedDestination = validateArtifactDestination(rawDestination);
+  const moduleData = normalizedEvent;
+
+  const generatedCode = buildLiveScoreArtifactModule({
+    artifactId,
+    title,
+    source,
+    data: moduleData,
+  });
+  const previewHtml = buildLiveScorePreviewHtml({
+    title,
+    source,
+    event: normalizedEvent,
+  });
+
+  await getDb("recruitingdb").table("ephemeral_artifacts").insert({
+    artifact_id: artifactId,
+    actor_id: params.actorId,
+    intent_json: JSON.stringify({
+      intent: "live_score_capture",
+      source: "python_stream",
+      title,
+      generated_at: new Date().toISOString(),
+    }),
+    generated_code: generatedCode,
+    preview_html: previewHtml,
+    raw_destination: rawDestination,
+    proposed_destination: proposedDestination,
+    status: "pending",
+    violations_json: "[]",
+    created_at: Spanner.COMMIT_TIMESTAMP,
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  });
+
+  return {
+    ...params.artifact,
+    artifact_id: artifactId,
+    data: normalizedEvent,
+  };
+}
+
+function isFinalSportsStatus(status: string): boolean {
+  const normalized = normalizeSportsLookupText(status);
+  return /\b(final|ft|finished|complete|completed|closed)\b/.test(normalized);
+}
+
+function isLiveSportsStatus(status: string): boolean {
+  const normalized = normalizeSportsLookupText(status);
+  return /\b(live|in progress|inprogress|inning|quarter|period|halftime|ot|overtime)\b/.test(
+    normalized,
+  );
+}
+
+function formatSportsStartTimeLabel(startTime: string | null): string | null {
+  const raw = readString(startTime);
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(parsed);
+}
+
+function selectSportsBoardMatch(
+  prompt: string,
+  boardItems: SportsBoardItem[],
+  activeGameId?: string,
+): SportsBoardItem | null {
+  if (!boardItems.length) return null;
+
+  const selectedId = readString(activeGameId);
+  if (selectedId) {
+    const selected = boardItems.find((item) => item.game_id === selectedId);
+    if (selected) return selected;
+  }
+
+  const normalizedPrompt = ` ${normalizeSportsLookupText(prompt)} `;
+  let bestItem: SportsBoardItem | null = null;
+  let bestScore = 0;
+
+  for (const item of boardItems) {
+    const homeAliases = extractTeamAliases(item.home);
+    const awayAliases = extractTeamAliases(item.away);
+    let score = 0;
+    let homeMatched = false;
+    let awayMatched = false;
+
+    for (const alias of homeAliases) {
+      if (!alias || !normalizedPrompt.includes(` ${alias} `)) continue;
+      homeMatched = true;
+      score += alias.includes(" ") ? 8 : 4;
+    }
+    for (const alias of awayAliases) {
+      if (!alias || !normalizedPrompt.includes(` ${alias} `)) continue;
+      awayMatched = true;
+      score += alias.includes(" ") ? 8 : 4;
+    }
+
+    const leagueToken = normalizeSportsLookupText(item.league);
+    if (leagueToken && normalizedPrompt.includes(` ${leagueToken} `)) score += 1;
+    if (homeMatched && awayMatched) score += 10;
+    if (score > bestScore) {
+      bestScore = score;
+      bestItem = item;
+    }
+  }
+
+  return bestScore > 0 ? bestItem : null;
+}
+
+function buildBoardBoundSportsAnswer(item: SportsBoardItem): string {
+  const awayScore = item.away_score;
+  const homeScore = item.home_score;
+  const hasScore = typeof awayScore === "number" && typeof homeScore === "number";
+  const statusLabel = readString(item.status) || "SCHEDULED";
+
+  if (isFinalSportsStatus(statusLabel) && hasScore) {
+    if (awayScore === homeScore) {
+      return `${item.away} and ${item.home} finished ${awayScore}-${homeScore}.`;
+    }
+    const awayWon = awayScore > homeScore;
+    const winner = awayWon ? item.away : item.home;
+    const loser = awayWon ? item.home : item.away;
+    const winnerScore = awayWon ? awayScore : homeScore;
+    const loserScore = awayWon ? homeScore : awayScore;
+    return `${winner} beat ${loser} ${winnerScore}-${loserScore}.`;
+  }
+
+  if (isLiveSportsStatus(statusLabel)) {
+    if (hasScore) {
+      return `${item.away} ${awayScore}-${homeScore} ${item.home} (${statusLabel}).`;
+    }
+    return `${item.away} at ${item.home} is live (${statusLabel}).`;
+  }
+
+  if (hasScore) {
+    return `${item.away} ${awayScore}-${homeScore} ${item.home} (${statusLabel}).`;
+  }
+
+  const startLabel = formatSportsStartTimeLabel(item.start_time);
+  if (startLabel) {
+    return `${item.away} at ${item.home} starts ${startLabel}.`;
+  }
+
+  return `${item.away} at ${item.home} is ${statusLabel.toLowerCase()}.`;
+}
+
+function buildBoardScheduleAnswer(
+  boardItems: SportsBoardItem[],
+  context?: { activeDateKey?: string | null; activeLeague?: string | null },
+): string {
+  const liveItems = boardItems.filter((item) => isLiveSportsStatus(item.status));
+  const finalItems = boardItems.filter((item) => isFinalSportsStatus(item.status));
+  const scheduledItems = boardItems.filter(
+    (item) => !isLiveSportsStatus(item.status) && !isFinalSportsStatus(item.status),
+  );
+
+  const sorted = [...boardItems].sort((a, b) => {
+    const aTime = toIsoTimestampOrNull(a.start_time) || "";
+    const bTime = toIsoTimestampOrNull(b.start_time) || "";
+    return aTime.localeCompare(bTime);
+  });
+
+  const lineup = sorted.slice(0, 8).map((item) => {
+    const timeLabel = formatSportsStartTimeLabel(item.start_time);
+    const compactTime = timeLabel ? timeLabel.split(", ").slice(-1)[0] || timeLabel : null;
+    return `${item.away} at ${item.home}${compactTime ? ` ${compactTime}` : ""} (${item.status.toUpperCase()})`;
+  });
+
+  const headerParts: string[] = [];
+  const activeLeague = readString(context?.activeLeague);
+  const activeDateKey = readString(context?.activeDateKey);
+  if (activeLeague) headerParts.push(activeLeague);
+  if (activeDateKey) headerParts.push(activeDateKey);
+  const header = headerParts.length > 0 ? headerParts.join(" ") : "Loaded slate";
+
+  const sentenceOne = `${header}: ${boardItems.length} games (${liveItems.length} live, ${scheduledItems.length} scheduled, ${finalItems.length} final).`;
+  const sentenceTwo =
+    lineup.length > 0 ? lineup.join("; ") : "Schedule unavailable.";
+
+  return `${sentenceOne} ${sentenceTwo}`;
+}
+
+function slugifySportsToken(value: string): string {
+  const slug = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return slug || "unknown";
+}
+
+function deriveTeamAbbr(value: string): string {
+  const words = String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return "UNK";
+  const initials = words.map((word) => word[0]?.toUpperCase() || "").join("");
+  if (initials.length >= 2) return initials.slice(0, 4);
+  const compact = words[0].replace(/[^a-z0-9]/gi, "").toUpperCase();
+  return compact.slice(0, 4) || "UNK";
+}
+
+function inferSportFromLeague(league: string): SportsEvent["sport"] {
+  const normalized = normalizeSportsLookupText(league);
+  if (normalized.includes("nba")) return "nba";
+  if (normalized.includes("wnba")) return "wnba";
+  if (normalized.includes("nfl")) return "nfl";
+  if (normalized.includes("nhl")) return "nhl";
+  if (
+    normalized.includes("soccer") ||
+    normalized.includes("mls") ||
+    normalized.includes("liga") ||
+    normalized.includes("serie") ||
+    normalized.includes("bundes") ||
+    normalized.includes("ligue")
+  ) {
+    return "soccer";
+  }
+  return "mlb";
+}
+
+function toIsoTimestampOrNull(value: unknown): string | null {
+  const raw = readString(value);
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function buildSportsEventFromBoardItem(item: SportsBoardItem): SportsEvent | null {
+  const sport = inferSportFromLeague(item.league);
+  const rawPhase = isFinalSportsStatus(item.status)
+    ? "final"
+    : isLiveSportsStatus(item.status)
+      ? "in_progress"
+      : "pregame";
+  const dateSeed = readString(item.date_key) || dateKeyInTimeZone("America/Los_Angeles");
+  const startTime = toIsoTimestampOrNull(item.start_time) || `${dateSeed}T00:00:00.000Z`;
+  const eventId = `evt_${sport}_${slugifySportsToken(dateSeed)}_${slugifySportsToken(item.away)}_${slugifySportsToken(item.home)}`;
+
+  const raw = {
+    event_id: eventId,
+    sport,
+    start_time: startTime,
+    teams: {
+      away: {
+        id: `team_${slugifySportsToken(item.away)}`,
+        name: item.away,
+        abbr: deriveTeamAbbr(item.away),
+        score: item.away_score,
+      },
+      home: {
+        id: `team_${slugifySportsToken(item.home)}`,
+        name: item.home,
+        abbr: deriveTeamAbbr(item.home),
+        score: item.home_score,
+      },
+    },
+    game_state: {
+      phase: rawPhase,
+      period: null,
+      period_label: null,
+      clock: null,
+      possession: null,
+      mlb_state: null,
+    },
+    markets: {},
+    last_updated: new Date().toISOString(),
+  };
+
+  return normalizeSportsEvent(raw);
+}
+
+function buildSportsSandboxLiveArtifactScript(event: SportsEvent): string {
+  const payload = JSON.stringify(event);
+  return [
+    "import json",
+    `event = json.loads(${JSON.stringify(payload)})`,
+    "for side in ('away', 'home'):",
+    "    team = event.get('teams', {}).get(side, {})",
+    "    score = team.get('score')",
+    "    if isinstance(score, float) and score.is_integer():",
+    "        team['score'] = int(score)",
+    "event['last_updated'] = event.get('last_updated') or event.get('start_time')",
+    "print(json.dumps(event, separators=(',', ':')))",
+  ].join("\n");
+}
+
+function shouldAllowSportsBullets(prompt: string): boolean {
+  const normalized = String(prompt || "").toLowerCase();
+  if (!normalized) return false;
+  return /\b(bullet|bullets|bullet points|list|rank|ranked|ranking|top\s+\d+|table|json|object|array)\b/.test(
+    normalized,
+  );
+}
+
+function normalizeSportsLookupText(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTeamAliases(teamName: string): string[] {
+  const normalized = normalizeSportsLookupText(teamName);
+  if (!normalized) return [];
+  const words = normalized.split(" ").filter(Boolean);
+  const aliases = new Set<string>();
+  aliases.add(normalized);
+  if (words.length >= 2) aliases.add(words.slice(-2).join(" "));
+  aliases.add(words[words.length - 1] || "");
+  return Array.from(aliases).filter((alias) => alias.length >= 3);
+}
+
+function isBoardBoundSportsQuestion(prompt: string): boolean {
+  const text = normalizeSportsLookupText(prompt);
+  if (!text) return false;
+  // Market intent must bypass board snapshots and go to live lookup.
+  if (
+    /\b(series price|market price|futures price|current line|odds|moneyline|spread|total|line)\b/.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  return /\b(who won|who beat|won the series|wins the series|series|game 7|eliminated|swept)\b/.test(text);
+}
+
+function hasMarketPriceSignal(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return false;
+
+  return (
+    /(?:^|[\s(])(?:[+\-−]\d{2,4})(?=$|[\s),.;:])/u.test(normalized) ||
+    /\b\d+\s*\/\s*\d+\b/u.test(normalized) ||
+    /\b\d+\.\d{1,2}\b/u.test(normalized) ||
+    /\b(even|pk|pick em|pick'em)\b/u.test(normalized)
+  );
+}
+
+function normalizeSportsBoardItems(
+  input: unknown,
+  options?: {
+    activeDateKey?: string | null;
+    activeLeague?: string | null;
+  },
+): SportsBoardItem[] {
+  if (!Array.isArray(input)) return [];
+
+  const items: SportsBoardItem[] = [];
+  for (const entry of input) {
+    const record = asJsonRecord(entry);
+    if (!record) continue;
+
+    const gameId = readString(record.game_id || record.gameId || record.id);
+    const home = readString(record.home || record.homeName || record.home_team);
+    const away = readString(record.away || record.awayName || record.away_team);
+    const league = readString(record.league);
+    const status = readString(record.status);
+
+    if (!gameId && (!home || !away)) continue;
+
+    const explicitDateKey = readString(record.date_key || record.dateKey);
+    const startTime = readString(record.start_time || record.startTime) || null;
+    const derivedDateKey =
+      explicitDateKey && isIsoDateKey(explicitDateKey)
+        ? explicitDateKey
+        : startTime && isIsoDateKey(startTime.slice(0, 10))
+          ? startTime.slice(0, 10)
+          : null;
+
+    items.push({
+      game_id: gameId || `${home || "HOME"}_${away || "AWAY"}`,
+      date_key: derivedDateKey,
+      home: home || "Home",
+      away: away || "Away",
+      league: league || "Unknown",
+      status: status || "SCHEDULED",
+      start_time: startTime,
+      venue: readString(record.venue) || null,
+      home_score: readNumber(record.home_score || record.homeScore),
+      away_score: readNumber(record.away_score || record.awayScore),
+      spread: readNumber(record.spread),
+      total: readNumber(record.total),
+    });
+
+    if (items.length >= 24) break;
+  }
+
+  const activeDateKey = readString(options?.activeDateKey || null);
+  const activeLeague = readString(options?.activeLeague || null).toLowerCase();
+  if (!activeDateKey && !activeLeague) return items;
+
+  const filtered = items.filter((item) => {
+    if (activeDateKey && item.date_key !== activeDateKey) return false;
+    if (activeLeague && item.league.toLowerCase() !== activeLeague) return false;
+    return true;
+  });
+
+  return filtered;
 }
 
 function inferAyaopsCollectionHubPath(prompt: string): string {
@@ -2073,6 +3094,7 @@ export async function POST(request: NextRequest) {
       prompt: string;
       history?: { role: string; text: string }[];
       image?: string;
+      imageUrls?: string[];
       imageRecordId?: string;
       mode?: string;
       retrievalPolicy?: RetrievalPolicy;
@@ -2081,6 +3103,8 @@ export async function POST(request: NextRequest) {
       selectedMarginContext?: Record<string, unknown>;
       modelOverride?: ModelId;
       imageIntent?: string;
+      candidateId?: string;
+      diagnosticToolsRequested?: boolean;
       globalPreferences?: unknown;
       rosterDigest?: unknown;
       activeObject?: unknown;
@@ -2090,6 +3114,12 @@ export async function POST(request: NextRequest) {
         candidateId?: string;
         candidateName?: string;
         activeItems?: Array<Record<string, unknown>>;
+        sportsRail?: {
+          activeDateKey?: string | null;
+          activeLeague?: string | null;
+          dateSelectionSource?: "auto" | "user" | string;
+          visibleGames?: Array<Record<string, unknown>>;
+        };
         rosterDigest?: Record<string, unknown> | null;
       };
     };
@@ -2097,8 +3127,11 @@ export async function POST(request: NextRequest) {
       prompt,
       history,
       image,
+      imageUrls,
       imageRecordId,
       imageIntent,
+      candidateId,
+      diagnosticToolsRequested,
       mode,
       retrievalPolicy,
       internalContext,
@@ -2116,20 +3149,951 @@ export async function POST(request: NextRequest) {
       return new Response(JSON.stringify({ error: "prompt is required" }), { status: 400 });
     }
 
-    const hasInlineImage = !!(image && typeof image === "string");
+    const inlineMedia = collectInlineMediaInputs(image, imageUrls);
     const hasSavedImage = typeof imageRecordId === "string" && imageRecordId.length > 0;
+    if (inlineMedia.error && !hasSavedImage) {
+      return new Response(JSON.stringify({ error: inlineMedia.error }), { status: 400 });
+    }
+    if (inlineMedia.error && hasSavedImage) {
+      console.warn(`[chat_image] Ignoring invalid inline media because imageRecordId is present: ${inlineMedia.error}`);
+    }
+    const hasInlineImage = inlineMedia.parts.length > 0;
+    if (!hasInlineImage && inlineMedia.hadInput && !hasSavedImage) {
+      return new Response(
+        JSON.stringify({ error: "Inline media was provided but could not be processed. Re-upload and try again." }),
+        { status: 400 },
+      );
+    }
     const hasImage = hasInlineImage || hasSavedImage;
     const requestedMode = mode || "sports";
-    const activeMode =
+    const tabMode =
       requestedMode === "facility" || requestedMode === "margins"
         ? "ayaops"
         : requestedMode;
+    const globalIntentDecision = classifyGlobalIntent({
+      message: prompt,
+      activeMode: tabMode,
+    });
+    const sportsRouteDecision =
+      tabMode === "sports" ? classifySportsIntent(prompt) : null;
+    const sportsCodeExecutionRequested =
+      tabMode === "sports" && isSportsCodeExecutionIntent(prompt);
+    const hasSportsIntentSignal =
+      tabMode === "sports" && sportsRouteDecision?.intent !== "unknown";
+    const isSportsMarketLookupIntent =
+      tabMode === "sports" && sportsRouteDecision?.route === "market_lookup";
+    const sportsOutputAllowsBullets = shouldAllowSportsBullets(prompt);
+    let activeMode = tabMode;
+    if (!hasImage && !diagnosticToolsRequested && tabMode === "sports") {
+      if (
+        hasSportsIntentSignal ||
+        sportsCodeExecutionRequested ||
+        globalIntentDecision.mode === "sports_intelligence"
+      ) {
+        activeMode = "sports";
+      } else if (
+        globalIntentDecision.mode === "general_answer" ||
+        globalIntentDecision.mode === "workflow_execution"
+      ) {
+        activeMode = "code";
+      }
+    }
+    let activeRulesConstitution: Awaited<ReturnType<typeof getCachedConstitution>> | null = null;
+    if (activeMode === "sports" || activeMode === "code") {
+      activeRulesConstitution = await getCachedConstitution(
+        undefined,
+        undefined,
+        ACTIVE_RULES_LEDGER_PATH,
+      );
+    }
     // Architecture drift prevention: strict URL Hub routing only. No ad-hoc search tools.
     const allowExternalGroundingInAyaops = false;
     const isInternalRecord = retrievalPolicy?.source === "internal_candidate_record";
+    const normalizedActiveObject = normalizeActiveObject(activeObject);
+    const localContextRecord = asJsonRecord(localContext);
     const selectedContext = normalizeSelectedCandidateContext(selectedCandidateContext);
     const selectedMargin = normalizeSelectedMarginContext(selectedMarginContext);
     const historyCandidateInput = inferCandidateInputFromHistory(history);
+    const internalCandidateContext = asJsonRecord(internalContext?.candidate);
+    const recruiterCandidateId =
+      readString(candidateId) ||
+      readString(selectedContext?.candidate_id) ||
+      readString(uiContext?.candidateId) ||
+      readString(
+        internalCandidateContext?.id ||
+        internalCandidateContext?.candidate_id ||
+        internalCandidateContext?.candidateId ||
+        internalCandidateContext?.nova_id ||
+        internalCandidateContext?.novaId,
+      ) ||
+      "";
+    const recruiterPrimaryRequested = Boolean(readString(candidateId)) || isInternalRecord;
+    const sportsActiveGameId = readString(
+      (normalizedActiveObject?.object_type === "game"
+        ? normalizedActiveObject.object_id
+        : "") ||
+      localContextRecord?.game_id ||
+      localContextRecord?.gameId,
+    );
+    const sportsRailContext = normalizeSportsRailContext(uiContext?.sportsRail);
+    const sportsTodayKey = dateKeyInTimeZone("America/Los_Angeles");
+    const allowAutoSlateDate =
+      tabMode !== "sports" ||
+      canUseSlateDateFromAutoSelection(
+        sportsRailContext?.activeDateKey || null,
+        sportsRailContext?.dateSelectionSource || "auto",
+        sportsTodayKey,
+      );
+    const sportsBoardItemsSource =
+      sportsRailContext?.visibleGames && sportsRailContext.visibleGames.length > 0
+        ? sportsRailContext.visibleGames
+        : uiContext?.activeItems;
+    const sportsBoardItems = allowAutoSlateDate
+      ? normalizeSportsBoardItems(sportsBoardItemsSource, {
+          activeDateKey: sportsRailContext?.activeDateKey || null,
+          activeLeague: sportsRailContext?.activeLeague || null,
+        })
+      : [];
+    const goGetterDecision =
+      tabMode === "sports" &&
+      !hasImage &&
+      !diagnosticToolsRequested &&
+      globalIntentDecision.mode === "sports_intelligence" &&
+      sportsRouteDecision
+        ? {
+            ...globalIntentDecision,
+            route: sportsRouteDecision.route,
+            forceResearch: sportsRouteDecision.route !== "answer_from_loaded_record",
+            loadedRecordBehavior:
+              sportsRouteDecision.route === "answer_from_loaded_record"
+                ? ("boundary" as const)
+                : ("seed_only" as const),
+            reason: sportsRouteDecision.reason,
+          }
+        : globalIntentDecision;
+    const goGetterSeedContextIds = Array.from(
+      new Set(
+        [
+          readString(selectedContext?.candidate_id),
+          readString(selectedContext?.nova_id),
+          readString(recruiterCandidateId),
+          readString(sportsActiveGameId),
+          readString(selectedMargin?.margin_object_id),
+          readString(selectedMargin?.pay_package_id),
+          readString(selectedMargin?.job_id),
+          readString(selectedMargin?.margin_id),
+        ]
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+      ),
+    );
+    const goGetterRequestId = `gg_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    let goGetterLedger: SourceAttemptLedger = createSourceAttemptLedger(
+      goGetterRequestId,
+      prompt,
+      goGetterDecision,
+      goGetterSeedContextIds,
+      1,
+    );
+    const addGoGetterSourceAttempt = (attempt: Omit<SourceAttempt, "startedAt" | "endedAt">) => {
+      const now = new Date().toISOString();
+      goGetterLedger = recordSourceAttempt(goGetterLedger, {
+        ...attempt,
+        startedAt: now,
+        endedAt: now,
+      });
+    };
+    const finalizeGoGetter = (responseText: string): { ok: true } | { ok: false; reason: string } => {
+      goGetterLedger = evaluateLedgerResult(goGetterLedger);
+      const policy = validateResponsePolicy({
+        responseText,
+        ledger: goGetterLedger,
+      });
+      if (!policy.ok) {
+        console.warn(
+          `[go_getter] response policy rejected request=${goGetterRequestId} reason=${policy.reason} mode=${goGetterLedger.classifiedMode} route=${goGetterLedger.selectedRoute}`,
+        );
+      } else {
+        console.info(
+          `[go_getter] request=${goGetterRequestId} mode=${goGetterLedger.classifiedMode} route=${goGetterLedger.selectedRoute} result=${goGetterLedger.resultStatus} attempts=${goGetterLedger.attemptedSourceCount} usable=${goGetterLedger.usableSourceCount}`,
+        );
+      }
+      return policy;
+    };
+    let cachedLiveArtifactActorId: string | null | undefined;
+    const getLiveArtifactActorId = async (): Promise<string | null> => {
+      if (cachedLiveArtifactActorId !== undefined) return cachedLiveArtifactActorId;
+      cachedLiveArtifactActorId = await resolveOptionalActorId(request);
+      return cachedLiveArtifactActorId;
+    };
+
+    if (
+      activeMode === "sports" &&
+      !hasImage &&
+      !diagnosticToolsRequested &&
+      goGetterDecision.mode === "sports_intelligence" &&
+      !isSportsMarketLookupIntent &&
+      isBoardBoundSportsQuestion(prompt)
+    ) {
+      if (!allowAutoSlateDate) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_board_snapshot",
+          sourceType: "loaded_record",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "STALE_AUTO_SLATE_BLOCKED",
+          errorMessage:
+            "Active rail date is older than today and was not user-selected. Loaded slate blocked.",
+        });
+        const staleFallback = "Schedule unavailable";
+        const stalePolicy = finalizeGoGetter(staleFallback);
+        if (!stalePolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${stalePolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+
+        return buildEventStreamResponse(
+          [{ type: "text", text: staleFallback }],
+          {
+            provider: "system",
+            model: "sports_board_snapshot",
+            reason: "stale_auto_slate_blocked",
+          },
+        );
+      }
+
+      addGoGetterSourceAttempt({
+        sourceName: "sports_board_snapshot",
+        sourceType: "loaded_record",
+        status: "attempted",
+        recordsReturned: sportsBoardItems.length,
+        usable: sportsBoardItems.length > 0,
+      });
+
+      const matchedBoardItem = selectSportsBoardMatch(
+        prompt,
+        sportsBoardItems,
+        sportsActiveGameId || undefined,
+      );
+
+      if (!matchedBoardItem) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_board_match",
+          sourceType: "loaded_record",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "SPORTS_BOARD_MATCH_NOT_FOUND",
+          errorMessage: "Prompt did not map to a loaded game context.",
+        });
+        const boardFallback = sportsRouteDecision?.allowedFailure || "Game not found";
+        const boardPolicy = finalizeGoGetter(boardFallback);
+        if (!boardPolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${boardPolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+
+        return buildEventStreamResponse(
+          [{ type: "text", text: boardFallback }],
+          {
+            provider: "system",
+            model: "sports_board_snapshot",
+            reason: "sports_board_match_not_found",
+          },
+        );
+      }
+
+      addGoGetterSourceAttempt({
+        sourceName: "sports_board_match",
+        sourceType: "loaded_record",
+        status: "succeeded",
+        recordsReturned: 1,
+        usable: true,
+      });
+
+      const boardAnswer = sanitizeProductResponseText({
+        responseText: buildBoardBoundSportsAnswer(matchedBoardItem),
+        mode: "sports_intelligence",
+        maxSentences: sportsRouteDecision?.maxSentences || 2,
+        fallback: sportsRouteDecision?.allowedFailure || "Game not found",
+        allowBullets: false,
+      });
+      const boardPolicy = finalizeGoGetter(boardAnswer);
+      if (!boardPolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${boardPolicy.reason}).`,
+            },
+          ],
+          {
+            provider: "gemini",
+            model: GEMINI_PRO_MODEL,
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
+
+      return buildEventStreamResponse(
+        [{ type: "text", text: boardAnswer }],
+        {
+          provider: "system",
+          model: "sports_board_snapshot",
+          reason: "sports_board_resolution",
+        },
+      );
+    }
+
+    if (
+      activeMode === "sports" &&
+      !hasImage &&
+      !diagnosticToolsRequested &&
+      sportsRouteDecision?.intent === "schedule_lookup"
+    ) {
+      if (!allowAutoSlateDate) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_board_snapshot",
+          sourceType: "loaded_record",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "STALE_AUTO_SLATE_BLOCKED",
+          errorMessage:
+            "Active rail date is older than today and was not user-selected. Loaded slate blocked.",
+        });
+        const staleFallback = "Schedule unavailable";
+        const stalePolicy = finalizeGoGetter(staleFallback);
+        if (!stalePolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${stalePolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+        return buildEventStreamResponse(
+          [{ type: "text", text: staleFallback }],
+          {
+            provider: "system",
+            model: "sports_board_snapshot",
+            reason: "stale_auto_slate_blocked",
+          },
+        );
+      }
+
+      addGoGetterSourceAttempt({
+        sourceName: "sports_board_snapshot",
+        sourceType: "loaded_record",
+        status: "attempted",
+        recordsReturned: sportsBoardItems.length,
+        usable: sportsBoardItems.length > 0,
+      });
+
+      if (sportsBoardItems.length === 0) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_board_schedule",
+          sourceType: "loaded_record",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "SPORTS_BOARD_EMPTY",
+          errorMessage: "No visible games in active sports rail state.",
+        });
+        const emptyFallback = "Schedule unavailable";
+        const emptyPolicy = finalizeGoGetter(emptyFallback);
+        if (!emptyPolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${emptyPolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+        return buildEventStreamResponse(
+          [{ type: "text", text: emptyFallback }],
+          {
+            provider: "system",
+            model: "sports_board_snapshot",
+            reason: "sports_board_empty_schedule",
+          },
+        );
+      }
+
+      addGoGetterSourceAttempt({
+        sourceName: "sports_board_schedule",
+        sourceType: "loaded_record",
+        status: "succeeded",
+        recordsReturned: sportsBoardItems.length,
+        usable: true,
+      });
+
+      const scheduleAnswer = sanitizeProductResponseText({
+        responseText: buildBoardScheduleAnswer(sportsBoardItems, {
+          activeDateKey: sportsRailContext?.activeDateKey || null,
+          activeLeague: sportsRailContext?.activeLeague || null,
+        }),
+        mode: "sports_intelligence",
+        maxSentences: sportsRouteDecision.maxSentences || 2,
+        fallback: sportsRouteDecision.allowedFailure || "Schedule unavailable",
+        allowBullets: false,
+      });
+      const schedulePolicy = finalizeGoGetter(scheduleAnswer);
+      if (!schedulePolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${schedulePolicy.reason}).`,
+            },
+          ],
+          {
+            provider: "gemini",
+            model: GEMINI_PRO_MODEL,
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
+
+      return buildEventStreamResponse(
+        [{ type: "text", text: scheduleAnswer }],
+        {
+          provider: "system",
+          model: "sports_board_snapshot",
+          reason: "sports_schedule_snapshot",
+        },
+      );
+    }
+
+    if (activeMode === "sports" && !hasImage && !diagnosticToolsRequested && sportsCodeExecutionRequested) {
+      if (!allowAutoSlateDate) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_board_snapshot",
+          sourceType: "loaded_record",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "STALE_AUTO_SLATE_BLOCKED",
+          errorMessage:
+            "Active rail date is older than today and was not user-selected. Loaded slate blocked.",
+        });
+        const staleFallback = "Schedule unavailable";
+        const stalePolicy = finalizeGoGetter(staleFallback);
+        if (!stalePolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${stalePolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+        return buildEventStreamResponse(
+          [{ type: "text", text: staleFallback }],
+          {
+            provider: "system",
+            model: "sports_python_sandbox",
+            reason: "stale_auto_slate_blocked",
+          },
+        );
+      }
+
+      addGoGetterSourceAttempt({
+        sourceName: "sports_board_snapshot",
+        sourceType: "loaded_record",
+        status: "attempted",
+        recordsReturned: sportsBoardItems.length,
+        usable: sportsBoardItems.length > 0,
+      });
+
+      const matchedBoardItem =
+        selectSportsBoardMatch(prompt, sportsBoardItems, sportsActiveGameId || undefined) ||
+        sportsBoardItems[0] ||
+        null;
+      if (!matchedBoardItem) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_board_match",
+          sourceType: "loaded_record",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "SPORTS_BOARD_MATCH_NOT_FOUND",
+          errorMessage: "Prompt did not map to a loaded game context.",
+        });
+        const boardFallback = sportsRouteDecision?.allowedFailure || "Schedule unavailable";
+        const boardPolicy = finalizeGoGetter(boardFallback);
+        if (!boardPolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${boardPolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+        return buildEventStreamResponse(
+          [{ type: "text", text: boardFallback }],
+          {
+            provider: "system",
+            model: "sports_python_sandbox",
+            reason: "sports_board_match_not_found",
+          },
+        );
+      }
+
+      addGoGetterSourceAttempt({
+        sourceName: "sports_board_match",
+        sourceType: "loaded_record",
+        status: "succeeded",
+        recordsReturned: 1,
+        usable: true,
+      });
+
+      const sportsEvent = buildSportsEventFromBoardItem(matchedBoardItem);
+      if (!sportsEvent) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_event_normalization",
+          sourceType: "generated_artifact",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "SPORTS_EVENT_NORMALIZATION_FAILED",
+          errorMessage: "Could not normalize selected game into sports event schema.",
+        });
+        const fallbackText = "Live feed unavailable";
+        const fallbackPolicy = finalizeGoGetter(fallbackText);
+        if (!fallbackPolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${fallbackPolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+        return buildEventStreamResponse(
+          [{ type: "text", text: fallbackText }],
+          {
+            provider: "system",
+            model: "sports_python_sandbox",
+            reason: "sports_event_normalization_failed",
+          },
+        );
+      }
+
+      const pythonCode = buildSportsSandboxLiveArtifactScript(sportsEvent);
+      addGoGetterSourceAttempt({
+        sourceName: "sports_python_sandbox",
+        sourceType: "manual_tool",
+        status: "attempted",
+        recordsReturned: 0,
+        usable: false,
+      });
+
+      try {
+        const sandboxResult = await runInSandbox(pythonCode, 12_000);
+        const codeOutput = String(sandboxResult.stdout || sandboxResult.stderr || "");
+        const parsedArtifact = parseLiveArtifactFromCodeOutput(codeOutput);
+        const executionOutcome = sandboxResult.exitCode === 0 ? "OK" : "ERROR";
+
+        if (!parsedArtifact) {
+          addGoGetterSourceAttempt({
+            sourceName: "sports_python_sandbox",
+            sourceType: "manual_tool",
+            status: "failed",
+            recordsReturned: 0,
+            usable: false,
+            errorCode: "SPORTS_SANDBOX_ARTIFACT_PARSE_FAILED",
+            errorMessage: "Sandbox output did not contain a valid sports event JSON object.",
+          });
+          const fallbackText = "Live feed unavailable";
+          const fallbackPolicy = finalizeGoGetter(fallbackText);
+          if (!fallbackPolicy.ok) {
+            return buildEventStreamResponse(
+              [
+                {
+                  type: "error",
+                  code: "GO_GETTER_POLICY_BLOCK",
+                  message: `Policy gate blocked response (${fallbackPolicy.reason}).`,
+                },
+              ],
+              {
+                provider: "gemini",
+                model: GEMINI_PRO_MODEL,
+                reason: "go_getter_policy_block",
+              },
+            );
+          }
+          return buildEventStreamResponse(
+            [
+              { type: "executableCode", code: pythonCode, language: "PYTHON" },
+              { type: "codeExecutionResult", outcome: executionOutcome, output: codeOutput },
+              { type: "text", text: fallbackText },
+            ],
+            {
+              provider: "system",
+              model: "sports_python_sandbox",
+              reason: "sports_sandbox_artifact_parse_failed",
+            },
+          );
+        }
+
+        let liveArtifact = parsedArtifact;
+        try {
+          liveArtifact = await persistLiveScoreArtifactIfNeeded({
+            artifact: liveArtifact,
+            actorId: await getLiveArtifactActorId(),
+          });
+        } catch (error) {
+          console.warn(
+            `[live_artifact] persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
+        addGoGetterSourceAttempt({
+          sourceName: "sports_python_sandbox",
+          sourceType: "manual_tool",
+          status: "succeeded",
+          recordsReturned: 1,
+          usable: true,
+        });
+        const successText = "Live score artifact generated.";
+        const successPolicy = finalizeGoGetter(successText);
+        if (!successPolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${successPolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+
+        return buildEventStreamResponse(
+          [
+            { type: "executableCode", code: pythonCode, language: "PYTHON" },
+            { type: "codeExecutionResult", outcome: executionOutcome, output: codeOutput },
+            { type: "live_artifact", artifact: liveArtifact },
+            { type: "text", text: successText },
+          ],
+          {
+            provider: "system",
+            model: "sports_python_sandbox",
+            reason: "sports_python_live_artifact",
+          },
+        );
+      } catch (error) {
+        addGoGetterSourceAttempt({
+          sourceName: "sports_python_sandbox",
+          sourceType: "manual_tool",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "SPORTS_SANDBOX_EXECUTION_FAILED",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        const fallbackText = "Live feed unavailable";
+        const fallbackPolicy = finalizeGoGetter(fallbackText);
+        if (!fallbackPolicy.ok) {
+          return buildEventStreamResponse(
+            [
+              {
+                type: "error",
+                code: "GO_GETTER_POLICY_BLOCK",
+                message: `Policy gate blocked response (${fallbackPolicy.reason}).`,
+              },
+            ],
+            {
+              provider: "gemini",
+              model: GEMINI_PRO_MODEL,
+              reason: "go_getter_policy_block",
+            },
+          );
+        }
+        return buildEventStreamResponse(
+          [
+            { type: "executableCode", code: pythonCode, language: "PYTHON" },
+            {
+              type: "error",
+              code: "SPORTS_SANDBOX_EXECUTION_FAILED",
+              message: error instanceof Error ? error.message : String(error),
+            },
+            { type: "text", text: fallbackText },
+          ],
+          {
+            provider: "system",
+            model: "sports_python_sandbox",
+            reason: "sports_sandbox_execution_failed",
+          },
+        );
+      }
+    }
+
+    if (
+      activeMode === "ayaops" &&
+      !hasImage &&
+      recruiterPrimaryRequested &&
+      !diagnosticToolsRequested &&
+      recruiterCandidateId
+    ) {
+      const auth = await requireAuth(request);
+      if (auth.response) return auth.response;
+      addGoGetterSourceAttempt({
+        sourceName: "recruiter_envelope_primary",
+        sourceType: "internal_db",
+        status: "succeeded",
+        recordsReturned: 1,
+        usable: true,
+      });
+      const recruiterPolicy = finalizeGoGetter("dispatched recruiter source hunt");
+      if (!recruiterPolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${recruiterPolicy.reason}).`,
+            },
+          ],
+          {
+            provider: "gemini",
+            model: GEMINI_PRO_MODEL,
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
+
+      const recruiterStream = await streamPrimaryRecruiterAssistant(
+        prompt,
+        recruiterCandidateId,
+      );
+
+      return new Response(recruiterStream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Model-Provider": "gemini",
+          "X-Model-Id": GEMINI_PRO_MODEL,
+          "X-Route-Reason": "recruiter_envelope_primary",
+          "X-Go-Getter-Mode": goGetterLedger.classifiedMode,
+          "X-Go-Getter-Route": goGetterLedger.selectedRoute,
+          "X-Go-Getter-Status": goGetterLedger.resultStatus || "answer_ready",
+        },
+      });
+    }
+
+    if (
+      activeMode === "sports" &&
+      !hasImage &&
+      !diagnosticToolsRequested &&
+      (goGetterDecision.mode === "loaded_record_qa" ||
+        (goGetterDecision.mode === "sports_intelligence" &&
+          (goGetterDecision.route === "answer_from_loaded_record" ||
+            goGetterDecision.route === "game_context_lookup" ||
+            goGetterDecision.route === "live_state_lookup")))
+    ) {
+      addGoGetterSourceAttempt({
+        sourceName: "sports_envelope_primary",
+        sourceType: "sports_feed",
+        status: "succeeded",
+        recordsReturned: 1,
+        usable: true,
+      });
+      const sportsPolicy = finalizeGoGetter("dispatched sports source hunt");
+      if (!sportsPolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${sportsPolicy.reason}).`,
+            },
+          ],
+          {
+            provider: "gemini",
+            model: GEMINI_PRO_MODEL,
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
+      const sportsStream = await streamPrimarySportsAssistant(
+        prompt,
+        sportsActiveGameId || undefined,
+        {
+          maxSentences: sportsRouteDecision?.maxSentences || 3,
+          fallback: sportsRouteDecision?.allowedFailure || "Schedule unavailable",
+          allowBullets: sportsOutputAllowsBullets,
+          boardItems: sportsBoardItems,
+          governanceRules: activeRulesConstitution?.rules,
+          governanceVersion: activeRulesConstitution?.version,
+        },
+      );
+      return new Response(sportsStream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+          "X-Model-Provider": "gemini",
+          "X-Model-Id": GEMINI_PRO_MODEL,
+          "X-Route-Reason": "sports_envelope_primary",
+          "X-Go-Getter-Mode": goGetterLedger.classifiedMode,
+          "X-Go-Getter-Route": goGetterLedger.selectedRoute,
+          "X-Go-Getter-Status": goGetterLedger.resultStatus || "answer_ready",
+        },
+      });
+    }
+
+    if (
+      tabMode === "sports" &&
+      !hasImage &&
+      !diagnosticToolsRequested &&
+      sportsRouteDecision?.route === "picks_ledger"
+    ) {
+      let picksText = "No picks saved";
+      let picksReturned = 0;
+      try {
+        const { listPicks, resolvePick } = await import("@/lib/sports/picks-ledger");
+        const rows = await listPicks({ limit: 8 });
+        if (rows.length > 0) {
+          const resolvedRows = rows
+            .slice(0, 8)
+            .map((row) => resolvePick(row, "PUBLIC") as Record<string, unknown>);
+          const compactRows = resolvedRows.map((row) => {
+            const display = readString(row.display) || "Pick";
+            const marketType = readString(row.market_type) || "MARKET";
+            const side = readString(row.side) || "SIDE";
+            const line = row.line != null ? String(row.line) : "-";
+            const eventStatus = readString(row.event_status) || "SCHEDULED";
+            const gradingStatus = readString(row.grading_status) || "PENDING";
+            return `${display} | ${marketType} ${side} ${line} | ${eventStatus} | ${gradingStatus}`;
+          });
+          if (compactRows.length > 0) {
+            picksReturned = compactRows.length;
+            picksText = compactRows.join("\n");
+          }
+        }
+        addGoGetterSourceAttempt({
+          sourceName: "picks_ledger_lookup",
+          sourceType: "internal_db",
+          status: "succeeded",
+          recordsReturned: picksReturned,
+          usable: true,
+        });
+      } catch (error) {
+        console.error("[sports_picks_ledger_lookup] failed:", error);
+        addGoGetterSourceAttempt({
+          sourceName: "picks_ledger_lookup",
+          sourceType: "internal_db",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "PICKS_LEDGER_LOOKUP_FAILED",
+          errorMessage: error instanceof Error ? error.message : "Picks ledger lookup failed",
+        });
+      }
+
+      if (picksReturned === 0) {
+        picksText = "No picks saved";
+      }
+      const picksPolicy = finalizeGoGetter(picksText);
+      if (!picksPolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${picksPolicy.reason}).`,
+            },
+          ],
+          {
+            provider: "system",
+            model: "picks_ledger",
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
+
+      return buildEventStreamResponse(
+        [{ type: "text", text: picksText }],
+        {
+          provider: "system",
+          model: "picks_ledger",
+          reason: "sports_picks_ledger_lookup",
+        },
+      );
+    }
 
     // ── Grounded UI context (thread or candidate selection) ──
     let groundedUiContext: Record<string, unknown> | null = null;
@@ -2201,7 +4165,7 @@ MODE OVERRIDE:
       rosterDigest: stringifyWorkspaceContextValue(rosterDigest ?? uiContext?.rosterDigest, 12_000),
       selectedCandidateContext: stringifyWorkspaceContextValue(selectedCandidateContext, 6_000),
       selectedMarginContext: stringifyWorkspaceContextValue(selectedMarginContext, 6_000),
-      activeObject: normalizeActiveObject(activeObject),
+      activeObject: normalizedActiveObject,
       localContext: stringifyWorkspaceContextValue(localContext, 6_000),
     });
 
@@ -2209,6 +4173,44 @@ MODE OVERRIDE:
 
 [System note: GOVERNANCE & WORKSPACE CONTEXT]
 ${workspaceContext}`;
+
+    if (goGetterDecision.mode === "sports_intelligence" && activeMode === "sports") {
+      const sportsSentenceLimit = sportsRouteDecision?.maxSentences || 3;
+      const sportsFallback = sportsRouteDecision?.allowedFailure || "Market lookup unavailable";
+      systemPrompt = `${systemPrompt}
+
+[System note: DRIP PRODUCT INTENT - SPORTS ROUTE]
+- Output direct product UI text with zero introductions or conclusions.
+- Never output disclaimers, maturity labels, audit labels, or source-status language.
+- Never say limitation phrases like "I don't have that information in my current context."
+- Default response ceiling: ${sportsSentenceLimit} sentences.
+- If no usable signal exists after research, return exactly "${sportsFallback}".`;
+      if (isSportsMarketLookupIntent) {
+        systemPrompt = `${systemPrompt}
+- This is a market lookup request. Use live grounded market/web data first.
+- Do NOT answer from screenshots, workspace slate, schedule rail, or stale cached sports context.
+- If live grounding fails, return exactly "Market lookup unavailable".`;
+      }
+      if (sportsCodeExecutionRequested) {
+        systemPrompt = `${systemPrompt}
+- This request expects executable Python output. Emit runnable Python with deterministic JSON output.
+- If performing HTTP in Python, always use timeout <= 8 seconds and catch exceptions.
+- On HTTP failure, return the route fallback state and avoid hanging execution loops.`;
+      }
+    } else if (goGetterDecision.mode === "general_answer") {
+      systemPrompt = `${systemPrompt}
+
+[System note: DRIP PRODUCT INTENT - GENERAL ROUTE]
+- Answer directly with factual text.
+- Zero conversational padding.
+- Never reference tab limitations or loaded-record boundaries unless explicitly asked.`;
+    } else if (goGetterDecision.mode === "workflow_execution") {
+      systemPrompt = `${systemPrompt}
+
+[System note: DRIP PRODUCT INTENT - WORKFLOW ROUTE]
+- Produce the requested artifact or structured output directly.
+- Do not add persona framing or helper preambles.`;
+    }
 
     // ── Build user prompt with optional candidate grounding ─────
     let fullPrompt = prompt;
@@ -2263,15 +4265,59 @@ Rule: If the user asks to "draft a reply", "update status", or references "this 
     }
     
     // ── GaC: Direct Git-governance injection via Octokit ──
-    if (activeMode === "ayaops" || activeMode === "code") {
-      const ledgerPath = activeMode === "code" ? "docs/ledger/code-engineering.json" : "docs/ledger/recruiter-voice.json";
-      const constitution = await getCachedConstitution(undefined, undefined, ledgerPath);
-      fullPrompt = `${fullPrompt}
+    if (activeMode === "ayaops" || activeMode === "code" || activeMode === "sports") {
+      const governanceBlocks: string[] = [];
 
-[System note: LIVE ARCHITECTURE LEDGER - VER: ${constitution.version}
-The following governance rules are injected deterministically from the repository HEAD commit via the Git-as-Governance engine. Your response MUST comply with every "accepted" verdict below.
-${JSON.stringify(constitution.rules, null, 2)}
-CRITICAL: These are laws, not suggestions. Treat each rule with the same strictness as returning valid JSON.]`;
+      if (activeMode === "ayaops") {
+        const recruiterConstitution = await getCachedConstitution(
+          undefined,
+          undefined,
+          "docs/ledger/recruiter-voice.json",
+        );
+        governanceBlocks.push(
+          `[Recruiter Voice Ledger - VER: ${recruiterConstitution.version}]
+${JSON.stringify(recruiterConstitution.rules, null, 2)}`,
+        );
+      }
+
+      if (activeMode === "code") {
+        const codeConstitution = await getCachedConstitution(
+          undefined,
+          undefined,
+          "docs/ledger/code-engineering.json",
+        );
+        governanceBlocks.push(
+          `[Code Engineering Ledger - VER: ${codeConstitution.version}]
+${JSON.stringify(codeConstitution.rules, null, 2)}`,
+        );
+
+        const activeRulesForCode =
+          activeRulesConstitution ||
+          (await getCachedConstitution(undefined, undefined, ACTIVE_RULES_LEDGER_PATH));
+        governanceBlocks.push(
+          `[Active Rules Ledger - VER: ${activeRulesForCode.version}]
+${JSON.stringify(activeRulesForCode.rules, null, 2)}`,
+        );
+      }
+
+      if (activeMode === "sports") {
+        const activeRulesForSports =
+          activeRulesConstitution ||
+          (await getCachedConstitution(undefined, undefined, ACTIVE_RULES_LEDGER_PATH));
+        governanceBlocks.push(
+          `[Active Rules Ledger - VER: ${activeRulesForSports.version}]
+${JSON.stringify(activeRulesForSports.rules, null, 2)}`,
+        );
+      }
+
+      if (governanceBlocks.length > 0) {
+        fullPrompt = `${fullPrompt}
+
+[System note: LIVE ARCHITECTURE LEDGER
+The following governance rules are injected deterministically from the Git-as-Governance engine. You MUST comply with every accepted verdict below.
+${governanceBlocks.join("\n\n")}
+CRITICAL: These are laws, not suggestions. No local prompt default, output-style note, or fallback rule may override them.]`;
+      }
     }
 
     // ── Supplemental: dynamic Spanner verdicts from client state (code mode only) ──
@@ -2292,6 +4338,54 @@ ${JSON.stringify(dynamicVerdictItems.map((item) => ({
   status: item.status,
 })), null, 2)}
 Rule: These supplement the Live Architecture Ledger above. Use as additional context for repo conventions.]`;
+      }
+    }
+
+    if (activeMode === "sports") {
+      const activeRailDate = readString(sportsRailContext?.activeDateKey || null);
+      const activeRailLeague = readString(sportsRailContext?.activeLeague || null);
+      const railSelectionSource = sportsRailContext?.dateSelectionSource || "auto";
+      const scopedSportsBoardItems = sportsBoardItems;
+      if (scopedSportsBoardItems.length > 0) {
+        const liveCount = scopedSportsBoardItems.filter(
+          (item) => item.status.toUpperCase() === "LIVE",
+        ).length;
+        const scheduledCount = scopedSportsBoardItems.filter(
+          (item) => item.status.toUpperCase() === "SCHEDULED",
+        ).length;
+
+        fullPrompt = `${fullPrompt}
+
+[System note: WORKSPACE SPORTS BOARD (authoritative current slate)
+Active rail date: ${activeRailDate || "unknown"}
+Active rail league: ${activeRailLeague || "unknown"}
+Date source: ${railSelectionSource}
+Live games: ${liveCount}
+Scheduled games: ${scheduledCount}
+${JSON.stringify(
+  scopedSportsBoardItems.map((item) => ({
+    game_id: item.game_id,
+    date_key: item.date_key,
+    matchup: `${item.away} at ${item.home}`,
+    league: item.league,
+    status: item.status,
+    start_time: item.start_time,
+    venue: item.venue,
+    score:
+      item.home_score != null && item.away_score != null
+        ? `${item.away_score}-${item.home_score}`
+        : null,
+    spread: item.spread,
+    total: item.total,
+  })),
+  null,
+  2,
+)}
+Hard scope rules:
+- For "today", "sharp bets", and "recap" requests, prioritize these games and leagues first.
+- Never answer from any slate date older than the active rail date unless Date source is "user".
+- Do not drift to unrelated events not represented in this board unless the user explicitly asks for them.
+- Lead with actionable picks and line context, not generic commentary.]`;
       }
     }
 
@@ -2501,7 +4595,9 @@ Weekly gross: ${selectedMargin.weekly_gross ?? "unknown"}
 Base pay: ${selectedMargin.base_pay_rate ?? "unknown"}
 Weekly stipends: ${selectedMargin.weekly_stipends ?? "unknown"}
 Weekly hours: ${selectedMargin.weekly_hours ?? "unknown"}
-Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"}-${selectedMargin.shift_end || "--"}]`
+Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"}-${selectedMargin.shift_end || "--"}
+Package URL: ${selectedMargin.pay_package_url || "unavailable"}
+Job URL: ${selectedMargin.job_url || "unavailable"}]`
           : `${fullPrompt}
 
 [Selected margin approval context]
@@ -2515,7 +4611,11 @@ Target margin: ${selectedMargin.target_margin_pct ?? "unknown"}
 Base pay: ${selectedMargin.base_pay_rate ?? "unknown"}
 Weekly stipends: ${selectedMargin.weekly_stipends ?? "unknown"}
 Weekly hours: ${selectedMargin.weekly_hours ?? "unknown"}
-Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"}-${selectedMargin.shift_end || "--"}]`;
+Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"}-${selectedMargin.shift_end || "--"}
+Package URL: ${selectedMargin.pay_package_url || "unavailable"}
+Margin URL: ${selectedMargin.margin_url || "unavailable"}
+Job URL: ${selectedMargin.job_url || "unavailable"}
+Candidate URL: ${selectedMargin.candidate_nova_url || selectedMargin.candidate_hub_url || "unavailable"}]`;
       }
     }
 
@@ -2549,6 +4649,32 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
         candidate_id: selectedContextCandidateInput,
         new_status: "offer",
       });
+      addGoGetterSourceAttempt({
+        sourceName: "update_candidate_status",
+        sourceType: "manual_tool",
+        status: updateExecution.error ? "failed" : "succeeded",
+        recordsReturned: updateExecution.error ? 0 : 1,
+        usable: !updateExecution.error,
+        errorCode: updateExecution.error ? "TOOL_EXECUTION_FAILED" : undefined,
+        errorMessage: updateExecution.error || undefined,
+      });
+      const offerPolicy = finalizeGoGetter("offer status write attempted");
+      if (!offerPolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${offerPolicy.reason}).`,
+            },
+          ],
+          {
+            provider: route.provider,
+            model: resolveGeminiModelId(route.model),
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
 
       const encoder = new TextEncoder();
       const directStream = new ReadableStream({
@@ -2690,24 +4816,137 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
 
     if (
       activeMode === "ayaops" &&
+      selectedMargin &&
+      isMarginApprovalDraftIntent(prompt)
+    ) {
+      addGoGetterSourceAttempt({
+        sourceName: "selected_margin_context",
+        sourceType: "loaded_record",
+        status: "succeeded",
+        recordsReturned: 1,
+        usable: true,
+      });
+      const draft = renderMarginApprovalDraftFromSelectedContext(selectedMargin, prompt);
+      if (!draft) {
+        addGoGetterSourceAttempt({
+          sourceName: "margin_approval_template",
+          sourceType: "generated_artifact",
+          status: "failed",
+          recordsReturned: 0,
+          usable: false,
+          errorCode: "MARGIN_APPROVAL_TEMPLATE_UNAVAILABLE",
+          errorMessage: "Margin approval template unavailable.",
+        });
+        finalizeGoGetter("template unavailable");
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "MARGIN_APPROVAL_TEMPLATE_UNAVAILABLE",
+              message: "Margin approval template is unavailable. Please retry.",
+            },
+          ],
+          {
+            provider: route.provider,
+            model: resolveGeminiModelId(route.model),
+            reason: "margin_approval_template_unavailable",
+          },
+        );
+      }
+
+      const draftText = [
+        "Pre-filled internal margin approval draft:",
+        "",
+        `To: ${draft.to}`,
+        ...(draft.cc ? [`CC: ${draft.cc}`] : []),
+        `Subject: ${draft.subject}`,
+        "",
+        "```text",
+        draft.body,
+        "```",
+      ].join("\n");
+      addGoGetterSourceAttempt({
+        sourceName: "margin_approval_template",
+        sourceType: "generated_artifact",
+        status: "succeeded",
+        recordsReturned: 1,
+        usable: true,
+      });
+      const draftPolicy = finalizeGoGetter(draftText);
+      if (!draftPolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${draftPolicy.reason}).`,
+            },
+          ],
+          {
+            provider: route.provider,
+            model: resolveGeminiModelId(route.model),
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
+
+      return buildEventStreamResponse(
+        [
+          { type: "text", text: draftText },
+        ],
+        {
+          provider: route.provider,
+          model: resolveGeminiModelId(route.model),
+          reason: "margins_specialized_margin_approval_draft",
+        },
+      );
+    }
+
+    if (
+      activeMode === "ayaops" &&
       selectedIsPayPackage &&
       isPayPackageSaveIntent(prompt) &&
       !autoMarginPayload
     ) {
+      addGoGetterSourceAttempt({
+        sourceName: "selected_pay_package_context",
+        sourceType: "loaded_record",
+        status: "succeeded",
+        recordsReturned: 1,
+        usable: true,
+      });
       const role = selectedMargin?.specialty || selectedMargin?.profession || "selected role";
       const facility = selectedMargin?.facility_name || "selected facility";
       const gross =
         typeof selectedMargin?.weekly_gross === "number"
           ? formatCurrency(selectedMargin.weekly_gross)
           : "the listed weekly gross";
+      const saveMessage =
+        `This pay package is already saved in Packages: ${role} at ${facility}, ${gross}/wk. ` +
+        "Nothing new was written from that message. To use it, create an offer from the selected package or tell me the candidate name to attach it to.";
+      const savePolicy = finalizeGoGetter(saveMessage);
+      if (!savePolicy.ok) {
+        return buildEventStreamResponse(
+          [
+            {
+              type: "error",
+              code: "GO_GETTER_POLICY_BLOCK",
+              message: `Policy gate blocked response (${savePolicy.reason}).`,
+            },
+          ],
+          {
+            provider: route.provider,
+            model: resolveGeminiModelId(route.model),
+            reason: "go_getter_policy_block",
+          },
+        );
+      }
 
       return buildEventStreamResponse(
         [
           {
             type: "text",
-            text:
-              `This pay package is already saved in Packages: ${role} at ${facility}, ${gross}/wk. ` +
-              "Nothing new was written from that message. To use it, create an offer from the selected package or tell me the candidate name to attach it to.",
+            text: saveMessage,
           },
         ],
         { provider: route.provider, model: resolveGeminiModelId(route.model), reason: "selected_pay_package_already_saved" },
@@ -2715,6 +4954,16 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
     }
 
     if (activeMode === "ayaops" && hasRingCentralPayloadHint && !autoRingCentralPayload) {
+      addGoGetterSourceAttempt({
+        sourceName: "ringcentral_payload_parse",
+        sourceType: "manual_tool",
+        status: "failed",
+        recordsReturned: 0,
+        usable: false,
+        errorCode: "INVALID_RINGCENTRAL_PAYLOAD",
+        errorMessage: "Unable to parse RingCentral payload JSON.",
+      });
+      finalizeGoGetter("ringcentral payload parse failed");
       const encoder = new TextEncoder();
       const earlyStream = new ReadableStream({
         start(controller) {
@@ -2763,6 +5012,16 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
     }
 
     if (activeMode === "ayaops" && hasMarginPayloadHint && !autoMarginPayload) {
+      addGoGetterSourceAttempt({
+        sourceName: "margin_payload_parse",
+        sourceType: "manual_tool",
+        status: "failed",
+        recordsReturned: 0,
+        usable: false,
+        errorCode: "INVALID_MARGIN_PAYLOAD",
+        errorMessage: "Unable to parse margin payload JSON.",
+      });
+      finalizeGoGetter("margin payload parse failed");
       const encoder = new TextEncoder();
       const earlyStream = new ReadableStream({
         start(controller) {
@@ -2816,6 +5075,16 @@ Shift: ${selectedMargin.shift_type || "--"} ${selectedMargin.shift_start || "--"
       hasNovaPayloadHint &&
       !autoNovaProfilePayload
     ) {
+      addGoGetterSourceAttempt({
+        sourceName: "nova_payload_parse",
+        sourceType: "manual_tool",
+        status: "failed",
+        recordsReturned: 0,
+        usable: false,
+        errorCode: "INVALID_PROFILE_PAYLOAD",
+        errorMessage: "Unable to parse Nova profile payload JSON.",
+      });
+      finalizeGoGetter("nova payload parse failed");
       const encoder = new TextEncoder();
       const earlyStream = new ReadableStream({
         start(controller) {
@@ -3199,10 +5468,12 @@ Return only operational summary: save status, link status, and next best action.
     currentParts.push({ text: fullPrompt });
 
     if (hasInlineImage) {
-      const match = image.match(/^data:(image\/\w+);base64,(.+)$/);
-      if (match) {
+      for (const mediaPart of inlineMedia.parts) {
         currentParts.push({
-          inlineData: { mimeType: match[1], data: match[2] },
+          inlineData: {
+            mimeType: mediaPart.mimeType,
+            data: mediaPart.data,
+          },
         });
       }
     }
@@ -3220,7 +5491,7 @@ Return only operational summary: save status, link status, and next best action.
       /\b(sandbox|preview|ship it|review before|dry run)\b/i.test(fullPrompt);
 
     // Build tools
-    let tools: Array<Record<string, object>>;
+    let rawTools: Array<Record<string, unknown>>;
     if (activeMode === "ayaops") {
       // AyaOps reads are URL-grounded via Vertex AI Search.
       // Mutations remain explicit DB write tools.
@@ -3232,7 +5503,7 @@ Return only operational summary: save status, link status, and next best action.
           ? [...AYAOPS_WRITE_TOOL_DECLARATIONS, ...SANDBOX_TOOL_DECLARATIONS]
           : AYAOPS_WRITE_TOOL_DECLARATIONS),
       ];
-      tools = [
+      rawTools = [
         {
           retrieval: {
             vertexAiSearch: {
@@ -3245,14 +5516,14 @@ Return only operational summary: save status, link status, and next best action.
         },
       ];
       if (allowExternalGroundingInAyaops) {
-        tools.push({ googleSearch: {} });
+        rawTools.push({ googleSearch: {} });
       }
     } else if (hasImage || isInternalRecord) {
-      tools = [];
+      rawTools = [];
     } else if (activeMode === "code") {
-      tools = [{ googleSearch: {} }, { codeExecution: {} }];
+      rawTools = [{ googleSearch: {} }, { codeExecution: {} }];
     } else if (activeMode === "healthcare" && RAG_CORPUS) {
-      tools = [
+      rawTools = [
         { googleSearch: {} },
         { retrieval: { vertexRagStore: {
           ragResources: [{ ragCorpus: RAG_CORPUS }],
@@ -3260,13 +5531,22 @@ Return only operational summary: save status, link status, and next best action.
         }}},
       ];
     } else {
-      tools = [{ googleSearch: {} }];
-      if (activeMode === "sports") {
-        tools.push({ functionDeclarations: [ACCESS_HUB_DECLARATION] });
+      rawTools = [{ googleSearch: {} }];
+      if (activeMode === "sports" && sportsCodeExecutionRequested) {
+        rawTools.push({ codeExecution: {} });
+      }
+      if (activeMode === "sports" && !isSportsMarketLookupIntent) {
+        rawTools.push({ functionDeclarations: [ACCESS_HUB_DECLARATION] });
       }
       if (activeMode === "worldcup") {
-        tools.push({ functionDeclarations: SANDBOX_TOOL_DECLARATIONS });
+        rawTools.push({ functionDeclarations: SANDBOX_TOOL_DECLARATIONS });
       }
+    }
+    const tools = sanitizeGeminiTools(rawTools);
+    if (tools.length !== rawTools.length) {
+      console.warn(
+        `[chat_tools] sanitized invalid tool entries mode=${activeMode} raw=${rawTools.length} sanitized=${tools.length}`,
+      );
     }
 
     const declaredToolNames =
@@ -3321,6 +5601,16 @@ Return only operational summary: save status, link status, and next best action.
         matched_verb: toolPolicy.matchedVerb,
         required_tool_kind: toolPolicy.requiredToolKind,
       })}`);
+      addGoGetterSourceAttempt({
+        sourceName: "tool_policy_gate",
+        sourceType: "manual_tool",
+        status: "failed",
+        recordsReturned: 0,
+        usable: false,
+        errorCode: "TOOL_UNAVAILABLE",
+        errorMessage: typeof payload.message === "string" ? payload.message : "Tool unavailable for intent.",
+      });
+      finalizeGoGetter(typeof payload.message === "string" ? payload.message : "Tool unavailable for intent.");
 
       const encoder = new TextEncoder();
       const earlyStream = new ReadableStream({
@@ -3352,10 +5642,45 @@ Return only operational summary: save status, link status, and next best action.
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const proThinkingConfig = route.model === "pro" ? { thinkingConfig: GEMINI_THINKING_HIGH } : {};
+    const proThinkingConfig = route.model === "pro" ? GEMINI_THINKING_HIGH : {};
+
     const config: any = cachedContentName
       ? { cachedContent: cachedContentName, temperature: 1.0 }
       : { tools, temperature: 1.0, systemInstruction: systemPrompt, ...proThinkingConfig };
+
+    if (
+      (goGetterDecision.mode === "active_research" ||
+        goGetterDecision.mode === "sports_intelligence") &&
+      goGetterLedger.attemptedSourceCount === 0
+    ) {
+      addGoGetterSourceAttempt({
+        sourceName: "model_stream_dispatch",
+        sourceType:
+          activeMode === "sports"
+            ? (isSportsMarketLookupIntent ? "odds_feed" : "sports_feed")
+            : "public_web",
+        status: "attempted",
+        recordsReturned: 0,
+        usable: false,
+      });
+    }
+    const streamPolicy = finalizeGoGetter("model stream dispatch");
+    if (!streamPolicy.ok) {
+      return buildEventStreamResponse(
+        [
+          {
+            type: "error",
+            code: "GO_GETTER_POLICY_BLOCK",
+            message: `Policy gate blocked response (${streamPolicy.reason}).`,
+          },
+        ],
+        {
+          provider: route.provider,
+          model: geminiModel,
+          reason: "go_getter_policy_block",
+        },
+      );
+    }
 
     const responseStream = await ai.models.generateContentStream({
       model: geminiModel,
@@ -3365,8 +5690,36 @@ Return only operational summary: save status, link status, and next best action.
 
     const stream = new ReadableStream({
       async start(controller) {
+        const encoder = new TextEncoder();
+        let streamClosed = false;
+        let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+        const enqueueEvent = (payload: Record<string, unknown>) => {
+          if (streamClosed) return;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        };
+        const clearKeepalive = () => {
+          if (!keepaliveTimer) return;
+          clearInterval(keepaliveTimer);
+          keepaliveTimer = null;
+        };
+        keepaliveTimer = setInterval(() => {
+          try {
+            enqueueEvent({
+              type: "meta",
+              status: "keepalive",
+              ts: new Date().toISOString(),
+            });
+          } catch {
+            clearKeepalive();
+          }
+        }, 10_000);
+        enqueueEvent({
+          type: "meta",
+          status: "connected",
+          route: route.reason,
+          mode: activeMode,
+        });
         try {
-          const encoder = new TextEncoder();
           let hasSentGrounding = false;
 
           // ── Function-calling loop (ayaops DB tools) ──────────
@@ -3398,6 +5751,7 @@ Return only operational summary: save status, link status, and next best action.
               for await (const chunk of stream) {
                 const chunkParts = chunk.candidates?.[0]?.content?.parts;
                 if (chunkParts) parts.push(...chunkParts);
+                
                 const meta = chunk.candidates?.[0]?.groundingMetadata;
                 if (meta) {
                   const payload = extractGroundingPayload(meta);
@@ -3407,6 +5761,18 @@ Return only operational summary: save status, link status, and next best action.
                       citationByUri.set(citation.uri, citation);
                     }
                   }
+                }
+
+                // Rule: Audit safety and grounding for every chunk [Ver: d391f9b]
+                try {
+                  const resp = await chunk.response;
+                  await logComplianceAudit(`ayaops-round-${round}`, resp, { 
+                    mode: activeMode, 
+                    model: geminiModel,
+                    chunk_index: parts.length 
+                  });
+                } catch (e) {
+                  // Ignore errors in intermediate chunks if the full response isn't ready
                 }
               }
 
@@ -3657,6 +6023,17 @@ Return only operational summary: save status, link status, and next best action.
                     }
                   }
 
+                  // Rule: Telemetry for all enterprise tool calls [Ver: e41a992]
+                  const toolDuration = Date.now() - toolStartTime;
+                  await logToolExecution({
+                    operationId: `${uiContext?.threadId || "no-thread"}-round-${round}`,
+                    toolName: name,
+                    args: toolArgs,
+                    outcome: toolResult.error ? "failed" : "ok",
+                    latencyMs: toolDuration,
+                    error: toolResult.error,
+                  });
+
                   // ── Tool status: emit AFTER execution ──
                   emit({
                     type: "tool_status",
@@ -3689,6 +6066,17 @@ Return only operational summary: save status, link status, and next best action.
                           code: errorCode,
                         },
                       });
+
+                      // ── Self-Correction Guardrail ──────────────────
+                      // If the tool failed due to a missing candidate, but we have UI context,
+                      // we inject the correct identity for the next round.
+                      if (errorCode === "CANDIDATE_NOT_FOUND" && groundedUiContext?.candidate_id) {
+                        console.log(`[ayaops_recovery] Triggering ID recovery for ${name}`);
+                        toolResult.result = {
+                          ...(toolResult.result && typeof toolResult.result === "object" ? toolResult.result : {}),
+                          correction_hint: `The candidate was not found by that identifier. CRITICAL: Use candidate_id="${groundedUiContext.candidate_id}" instead.`,
+                        };
+                      }
                     } else {
                       const resultObj =
                         toolResult.result && typeof toolResult.result === "object"
@@ -3941,8 +6329,8 @@ Return only operational summary: save status, link status, and next best action.
                     status: fallbackError ? "failed" : "ok",
                     latency_ms: Date.now() - fallbackStart,
                     label: fallbackError
-                      ? `${TOOL_LABELS_DONE.access_hub || "Record loaded"} failed`
-                      : TOOL_LABELS_DONE.access_hub || "Record loaded",
+                      ? `${TOOL_LABELS_DONE.access_hub || "Resolved"} failed`
+                      : TOOL_LABELS_DONE.access_hub || "Resolved",
                   });
 
                   if (!fallbackError && fallbackResult) {
@@ -4043,6 +6431,8 @@ Return only operational summary: save status, link status, and next best action.
               });
             }
 
+            streamClosed = true;
+            clearKeepalive();
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
             return;
@@ -4051,6 +6441,13 @@ Return only operational summary: save status, link status, and next best action.
           // ── Standard streaming (non-ayaops) ──────────────────
           let sandboxTaskCreated = false;
           let standardTextEmitted = false;
+          let standardTextBuffer = "";
+          let sawExecutableCode = false;
+          let sawCodeExecutionResult = false;
+          const sportsFallbackText = sportsRouteDecision?.allowedFailure || "Market lookup unavailable";
+          const requireLiveGroundingForMarketLookup =
+            activeMode === "sports" && sportsRouteDecision?.route === "market_lookup";
+          let pendingMarketTextBuffer = "";
           for await (const chunk of responseStream) {
             if (!hasSentGrounding && chunk.candidates?.[0]?.groundingMetadata) {
               hasSentGrounding = true;
@@ -4062,6 +6459,17 @@ Return only operational summary: save status, link status, and next best action.
                   `data: ${JSON.stringify({ type: "grounding", queries, citations })}\n\n`
                 )
               );
+
+              if (requireLiveGroundingForMarketLookup && pendingMarketTextBuffer) {
+                standardTextEmitted = true;
+                standardTextBuffer += pendingMarketTextBuffer;
+                controller.enqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({ type: "text", text: pendingMarketTextBuffer })}\n\n`,
+                  ),
+                );
+                pendingMarketTextBuffer = "";
+              }
             }
 
             const parts = chunk.candidates?.[0]?.content?.parts;
@@ -4087,6 +6495,7 @@ Return only operational summary: save status, link status, and next best action.
                   }
                 }
                 if (part.executableCode) {
+                  sawExecutableCode = true;
                   controller.enqueue(
                     encoder.encode(
                       `data: ${JSON.stringify({
@@ -4098,26 +6507,146 @@ Return only operational summary: save status, link status, and next best action.
                   );
                 }
                 if (part.codeExecutionResult) {
+                  sawCodeExecutionResult = true;
+                  const codeOutput = part.codeExecutionResult.output || "";
                   controller.enqueue(
                     encoder.encode(
                       `data: ${JSON.stringify({
                         type: "codeExecutionResult",
                         outcome: part.codeExecutionResult.outcome || "UNKNOWN",
-                        output: part.codeExecutionResult.output || "",
+                        output: codeOutput,
                       })}\n\n`
                     )
                   );
+                  const parsedLiveArtifact = parseLiveArtifactFromCodeOutput(codeOutput);
+                  if (parsedLiveArtifact) {
+                    let liveArtifact = parsedLiveArtifact;
+                    const hasArtifactId = Boolean(
+                      readString(liveArtifact.artifact_id || liveArtifact.id),
+                    );
+                    if (!hasArtifactId) {
+                      try {
+                        liveArtifact = await persistLiveScoreArtifactIfNeeded({
+                          artifact: liveArtifact,
+                          actorId: await getLiveArtifactActorId(),
+                        });
+                      } catch (error) {
+                        console.warn(
+                          `[live_artifact] persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+                        );
+                      }
+                    }
+                    controller.enqueue(
+                      encoder.encode(
+                        `data: ${JSON.stringify({
+                          type: "live_artifact",
+                          artifact: liveArtifact,
+                        })}\n\n`,
+                      ),
+                    );
+                  }
                 }
               }
             }
 
             if (chunk.text && !sandboxTaskCreated) {
+              let textChunk = chunk.text;
+              if (goGetterDecision.mode === "sports_intelligence" && activeMode === "sports") {
+                textChunk = scrubSportsChunkText(textChunk);
+              } else if (goGetterDecision.mode === "general_answer") {
+                textChunk = sanitizeProductResponseText({
+                  responseText: textChunk,
+                  mode: "general_answer",
+                });
+              } else if (activeMode === "sports") {
+                textChunk = scrubSportsChunkText(textChunk);
+              }
+              if (!textChunk) continue;
+              if (requireLiveGroundingForMarketLookup && !hasSentGrounding) {
+                pendingMarketTextBuffer += textChunk;
+                continue;
+              }
               standardTextEmitted = true;
+              standardTextBuffer += textChunk;
               controller.enqueue(
                 encoder.encode(
-                  `data: ${JSON.stringify({ type: "text", text: chunk.text })}\n\n`
+                  `data: ${JSON.stringify({ type: "text", text: textChunk })}\n\n`
                 )
               );
+            }
+          }
+
+          if (sawExecutableCode && !sawCodeExecutionResult && !sandboxTaskCreated) {
+            const codeFallback =
+              activeMode === "sports" ? "Live feed unavailable" : "Execution unavailable";
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "text", text: codeFallback })}\n\n`,
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "error",
+                  code: "CODE_EXECUTION_NO_RESULT",
+                  message:
+                    "Python execution was started but no execution result was returned before stream completion.",
+                })}\n\n`,
+              ),
+            );
+            standardTextEmitted = true;
+            standardTextBuffer = codeFallback;
+          }
+
+          if (requireLiveGroundingForMarketLookup && !hasSentGrounding) {
+            if (standardTextEmitted) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: "replace_text", text: "Market lookup unavailable" })}\n\n`,
+                ),
+              );
+            } else {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: "text", text: "Market lookup unavailable" })}\n\n`,
+                ),
+              );
+              standardTextEmitted = true;
+            }
+            standardTextBuffer = "Market lookup unavailable";
+          }
+
+          if (
+            !sandboxTaskCreated &&
+            standardTextEmitted &&
+            goGetterDecision.mode === "sports_intelligence" &&
+            activeMode === "sports"
+          ) {
+            let finalizedSportsText = sanitizeProductResponseText({
+              responseText: standardTextBuffer,
+              mode: "sports_intelligence",
+              maxSentences: sportsRouteDecision?.maxSentences || 3,
+              fallback: sportsFallbackText,
+              allowBullets: sportsOutputAllowsBullets,
+            });
+            finalizedSportsText = enforceSportsBoardTruth({
+              responseText: finalizedSportsText,
+              boardItems: sportsBoardItems,
+            });
+            if (
+              requireLiveGroundingForMarketLookup &&
+              finalizedSportsText !== "Market lookup unavailable" &&
+              !hasMarketPriceSignal(finalizedSportsText)
+            ) {
+              finalizedSportsText = "Market lookup unavailable";
+            }
+            if (finalizedSportsText && finalizedSportsText !== standardTextBuffer.trim()) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: "replace_text", text: finalizedSportsText })}\n\n`,
+                ),
+              );
+              standardTextBuffer = finalizedSportsText;
             }
           }
 
@@ -4128,10 +6657,63 @@ Return only operational summary: save status, link status, and next best action.
               ),
             );
           }
+          if (!sandboxTaskCreated && !standardTextEmitted) {
+            if (goGetterDecision.mode === "sports_intelligence") {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: "text", text: sportsFallbackText })}\n\n`,
+                ),
+              );
+              standardTextEmitted = true;
+            }
+          }
+          if (!sandboxTaskCreated && !standardTextEmitted) {
+            const emptyStreamMessage =
+              hasSentGrounding
+                ? "Source retrieval completed, but the model returned an empty draft. Retry once and I will continue from the same context."
+                : "The response stream completed without output. Retry once to continue.";
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "text", text: emptyStreamMessage })}\n\n`,
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "error",
+                  code: "EMPTY_STREAM_NO_TEXT",
+                  message: emptyStreamMessage,
+                })}\n\n`,
+              ),
+            );
+          }
+          streamClosed = true;
+          clearKeepalive();
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         } catch (err) {
-          controller.error(err);
+          console.error("[chat_stream] aborted:", err);
+          const message =
+            err instanceof Error && err.message
+              ? err.message
+              : "Stream interrupted before completion. Please retry.";
+          try {
+            clearKeepalive();
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "error",
+                  code: "STREAM_ABORTED",
+                  message,
+                })}\n\n`,
+              ),
+            );
+            streamClosed = true;
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          } catch {
+            controller.error(err);
+          }
         }
       },
     });
@@ -4144,6 +6726,8 @@ Return only operational summary: save status, link status, and next best action.
         "X-Model-Provider": route.provider,
         "X-Model-Id": geminiModel,
         "X-Route-Reason": route.reason,
+        "X-Go-Getter-Mode": goGetterDecision.mode,
+        "X-Go-Getter-Route": goGetterDecision.route,
       },
     });
   } catch (error) {
